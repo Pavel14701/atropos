@@ -1,76 +1,75 @@
-# ATROPOS
-## Фреймворк убийства гипотез в количественных исследованиях
+# Atropos
 
-> **Атропос** (Ἄτροπος) — мойра, перерезающая нить жизни. Каждая гипотеза
-> входит в пайплайн живой и выходит ровно с одним вердиктом:
-> `SURVIVED` · `KILLED` · `INCONCLUSIVE`.
+Atropos is a hypothesis-killing framework for quantitative research: a
+candidate signal enters a 7-stage adversarial pipeline — null controls,
+specification curve, robustness battery, walk-forward, Monte Carlo risk,
+predictive evaluation, cross-sectional tests — and leaves with exactly
+one verdict. The goal is not to confirm your idea but to kill it
+cheaply: thresholds are frozen in a preregistration before the data is
+touched, and every verdict is written down. Verdicts: `SURVIVES`,
+`SURVIVES_WITH_WARNINGS`, `REPACKAGING`, `ARTIFACT`, `DEAD`,
+`NO_OOS_EDGE`, `COST_DEATH`, `RISK`, `CS_NO_EDGE`; stages report
+`PASS`/`WARN`/`FAIL`/`SKIPPED`/`INCONCLUSIVE`. Survival is not the end:
+`atropos.track_record.live_verdict` judges live PnL against the prereg.
 
-> Проверь могилы → прогони pipeline → один прогон → один вердикт → graveyard или prereg.
+## Install
 
-> Актив-агностичен: акции, FX, фьючерсы, крипто — любой класс, где есть
-> серия или панель доходностей. Издержки, календарь и периодичность —
-> параметры, не код.
+Python 3.11+; numpy/pandas/scipy only. `uv sync` — or `pip install -e .`
 
-## Пакет `atropos`
+## First verdict in five minutes
 
-14 модулей (Python 3.11+, numpy/pandas/scipy), каждый — самодостаточный
-инструмент убийства; демо: `python -m atropos.<модуль>`.
+A "fresh" signal that is really just observed momentum plus noise —
+killed at stage 1 (run from the repo root with `uv run python`):
 
-| Модуль | Что делает |
-|---|---|
-| `prereg_generator` | Пререгистрация из dict: валидация + замороженный markdown |
-| `power_calculator` | Мощность теста, detectable effect, t-статистика partial R² |
-| `evaluation_metrics` | Sharpe (bootstrap CI), max drawdown, Calmar, deflated Sharpe, profit factor |
-| `bootstrap_ci` | Percentile / block / stationary bootstrap CI |
-| `cost_model` | Издержки: net-доходности, turnover, breakeven bps, COST-DEATH тест |
-| `null_control_suite` | 6 нулевых контролов: permutation, placebo, momentum, known features, subperiods, calendar |
-| `incremental_regression` | Incremental test + specification curve (HC0/Newey-West) |
-| `robustness_battery` | Батарея из 7 тестов: пороги, окна, subperiods, placebo lag, LOO, declustering, monotonicity |
-| `walkforward_framework` | Walk-forward с антиподглядыванием (no-peeking) и purge/embargo на стыке train/test |
-| `monte_carlo` | GBM-пути, block-bootstrap распределения Sharpe и maxDD |
-| `predictive_model_eval` | Purged K-fold CV, walk-forward OOS, стабильность важностей; встроенные модели: OLS, kNN, Nadaraya-Watson + подключаемые фабрики (sklearn-обёртки без новой зависимости) |
-| `cross_sectional` | Кросс-секция: IC по датам, квантильные long-short спреды net-of-cost, монотонность по квантилям |
-| `track_record` | Прод-трек-рекорд против пререга: Lo (2002) SE, z-тест живого Sharpe + DD-барьер → LIVE_OK / LIVE_KILLED / INCONCLUSIVE |
-| `ensemble_pipeline` | Весь конвейер одним вызовом: до 7 стадий, вердикт по первой же смерти |
+```python
+import numpy as np
+import pandas as pd
+from atropos import run_full_pipeline
 
-## Инструментарий
+rng = np.random.default_rng(4)
+n_obs = 900
+mom = np.zeros(n_obs)
+for pos in range(1, n_obs):
+    mom[pos] = 0.5 * mom[pos - 1] + rng.standard_normal()
+mom /= mom.std()
 
-- **uv** — менеджер пакетов и окружение: `uv sync`, все команды через `uv run`
-- **ruff** — жёсткий линтинг: 78 колонок, докстринги (pydocstyle/google),
-  запрет неоднозначных имён (E741), ускорение конструкций (PERF); полный
-  набор — в `pyproject.toml`
-- **mypy --strict** — строгая типизация всего кода и тестов
-- **pytest** — тест на каждый модуль + AST-тест конвенций
-  (`tests/test_conventions.py`: запрет однобуквенных идентификаторов,
-  кроме `_`)
-- **Запрет однобуквенных переменных** — ruff ловит `l/I/O`, AST-тест — все остальные
+signal = mom + 0.4 * rng.standard_normal(n_obs)  # "new alpha"
+returns = 0.6 * mom + 0.55 * rng.standard_normal(n_obs)
+features = pd.DataFrame({"mom_noisy": mom + 0.1 * rng.standard_normal(n_obs)})
 
-```bash
-uv sync                                        # окружение
-uv run ruff check . && uv run ruff format --check .   # стиль
-uv run mypy                                    # типы (strict)
-uv run pytest                                  # тесты
-uv run python -m atropos.ensemble_pipeline     # демо полного конвейера
+res = run_full_pipeline(
+    {"signal": signal, "returns": returns, "features": features}
+)
+print(res["overall_verdict"], "-", res["kill_reason"])
+# REPACKAGING - the new signal adds nothing beyond known momentum / known features
 ```
 
-## Документы
+Fuller walkthrough (prereg first, two worlds, verdict dissection):
+`notebooks/01-quickstart.ipynb`.
 
-| Файл | Что внутри |
-|---|---|
-| FRAMEWORK.md | Философия + Pipeline 7 этапов + 6 законов + таксономия смерти (18 терминов) |
-| TEMPLATES.md | 5 шаблонов: prereg, скрин, батарея робастности, post-mortem, брифинг агента |
-| CASES_AND_FLAGS.md | 8+ красных флагов + 5 case studies (глубокий разбор) + чек-лист агента (7 пунктов) |
-| METHODOLOGY.md | Разворачивание фреймворка с нуля в любом проекте |
-| skills/ | 6 исполняемых протоколов-скиллов пайплайна |
+## Demos
 
-## Правило
+```bash
+uv run python -m atropos.ensemble_pipeline   # 10 cases, verdict matrix
+uv run python -m atropos.track_record        # live PnL vs prereg
+```
 
-**Любая гипотеза** → открой FRAMEWORK.md → проверь graveyard → прогони pipeline (до 7 стадий: контролы → спек-кривая → батарея → walk-forward → risk/cost-конверт net-of-cost → модельный OOS → кросс-секция) → один прогон → один вердикт → graveyard или prereg. Ноль параметров после данных. Ноль календарей в скоринге. Ноль «может быть пригодится». Вердикты включают `COST_DEATH` (edge съеден издержками: gross проходит, net — нет) и `CS_NO_EDGE` (кросс-секционный спред не выживает). **SURVIVED — не конец**: выживший в проде добирает трек-рекорд и проходит `live_verdict` — живой Sharpe на `kill_z` сигм ниже прeregовского или пробой DD-пола → `LIVE_KILLED`.
+Every module ships a runnable demo: `uv run python -m atropos.<module>`.
 
-## Полигон обкатки
+## Read next
 
-Крипто-марафон: deterministic-trading-engine · 16 раундов · ~89 направлений ·
-130+ могил · 6 законов. Крипто — полигон, не граница применимости: методы
-(Fama–MacBeth, Newey–West, purged CV, deflated Sharpe) — из классической
-финанс-литературы. При переносе на другой класс активов перенастраиваются
-параметры, не код: издержки, торговый календарь, корп. действия, шортабельность.
+1. `docs/how-to/` — step-by-step guides.
+2. `GLOSSARY.md` — prereg, kill criteria, COD, graveyard.
+3. `FRAMEWORK.md` §1-3 — philosophy, pipeline, six laws (in Russian;
+   code and demos are English).
+
+## For AI agents
+
+`atropos agent-setup` installs the agent context (AGENTS.md + skills);
+`atropos agent-context` prints it; `atropos agent-doctor` verifies it.
+
+## Contributing
+
+Gates: `ruff`, `mypy --strict`, AST convention tests,
+`uv run python -m pytest` — see `CONTRIBUTING.md`; developer rulebook:
+`contributor/AGENTS.md`. License: MIT (`LICENSE`).
