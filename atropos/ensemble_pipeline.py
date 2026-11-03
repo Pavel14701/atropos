@@ -39,9 +39,10 @@ Decision tree (first FAIL decides):
 * stage 2 curve death                              -> ``REPACKAGING``
 * stage 3 DEAD                                     -> ``DEAD``
 * stage 4 walk-forward FAIL                        -> ``NO_OOS_EDGE``
-* stage 5 Sharpe floor / drawdown tail breach      -> ``RISK``
-* stage 5 net-of-cost Sharpe floor breach (the gross
-  envelope passes, the net one does not)           -> ``COST_DEATH``
+* stage 5 drawdown-tail breach, or a Sharpe-floor
+  breach that persists gross of costs              -> ``RISK``
+* stage 5 net-of-cost Sharpe floor breach ONLY (the
+  gross envelope passes, drawdown tail intact)     -> ``COST_DEATH``
 * stage 6 OOS evaluation fail                      -> ``NO_OOS_EDGE``
 * stage 7 cross-sectional tests fail               -> ``CS_NO_EDGE``
 * all stages pass, no warnings                     -> ``SURVIVES``
@@ -57,10 +58,20 @@ momentum factors; fallback: trailing sums of past returns), optional
 they may be supplied alone (stages 1-6 are then SKIPPED: panel-only mode)
 or together with the series inputs.
 
-Run ``python -m atropos.ensemble_pipeline`` for the four synthetic
-verification cases: a genuine edge must SURVIVE; a momentum echo must die
-as REPACKAGING; a genuine cross-sectional panel must SURVIVE; a genuine
-edge under prohibitive costs must die as COST_DEATH.
+Run ``python -m atropos.ensemble_pipeline`` for the ten synthetic
+verification cases: a genuine edge must SURVIVE; a SLOW genuine edge
+(smoothed driver) must SURVIVE - the battery passes slow-robust edges;
+a momentum echo must die as REPACKAGING; an edge concentrated in the
+first third of the sample must die as ARTIFACT; a genuine edge behind
+an unreachable entry threshold must die as DEAD; a genuine edge under
+prohibitive costs must die as COST_DEATH; a genuine edge under a strict
+drawdown mandate must die as RISK; a genuine cross-sectional panel must
+SURVIVE; a thin panel must SURVIVE_WITH_WARNINGS; a pure-noise panel
+must die as CS_NO_EDGE.  NO_OOS_EDGE is the one verdict without a demo
+case: no honest series construction reaches it in the current tree
+(the stage-1 subperiod-concentration control pre-empts time-decayed
+edges) - the blocker is pinned and analysed in
+tests/test_ensemble_pipeline.py.
 """
 
 from __future__ import annotations
@@ -102,7 +113,7 @@ from atropos.predictive_model_eval import (
 from atropos.robustness_battery import battery_overall, run_battery
 from atropos.walkforward_framework import check_no_peeking, walkforward
 
-__all__ = ["DEFAULT_CONFIG", "run_all_examples", "run_full_pipeline"]
+__all__ = ["DEFAULT_CONFIG", "run_full_pipeline"]
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "n_perm_draws": 200,  # permutation / placebo draws (stage 1)
@@ -232,7 +243,12 @@ def _align_inputs(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
                 "data must contain 'returns' and 'signal' series "
                 "(or 'panel_signal' and 'panel_returns' DataFrames)"
             )
-        # panel-only mode: no single-series stages
+        # panel-only mode: no single-series stages.  The >= 300 floor
+        # below deliberately does NOT apply here: it guards the series
+        # stages (battery / walk-forward / block bootstrap need that many
+        # rows of a single history), while panel evidence scales with
+        # dates x assets and stage 7 enforces its own per-date
+        # ``min_assets`` floor instead.
         return {
             "returns": None,
             "signal": None,
@@ -354,7 +370,14 @@ def _stage_1_null_controls(
         if isinstance(idx, pd.DatetimeIndex)
         else np.arange(n_obs) // 250
     )
-    year_dummies = pd.get_dummies(years).to_numpy(dtype=float)
+    # drop_first avoids the dummy trap: calendar_control's design already
+    # carries an intercept, so a FULL one-hot year set is exactly
+    # collinear with it (rank-deficient -> INCONCLUSIVE).  Dropping one
+    # category spans the same column space and leaves the signal's
+    # t-stat identical.
+    year_dummies = pd.get_dummies(years, drop_first=True).to_numpy(
+        dtype=float
+    )
     results["calendar_control"] = calendar_control(ret, sig, year_dummies)
 
     failed = [
@@ -366,10 +389,21 @@ def _stage_1_null_controls(
         name in failed
         for name in ("momentum_control", "known_features_control")
     )
-    status = "FAIL" if failed else "PASS"
+    # rank-deficient controls (signal exactly collinear with a control)
+    # are neither a pass nor a kill: they could not be tested
+    inconclusive = [
+        name
+        for name, result in results.items()
+        if result["verdict"] == "INCONCLUSIVE"
+    ]
+    status = "FAIL" if failed else ("WARN" if inconclusive else "PASS")
     summary = f"{len(results) - len(failed)}/6 controls passed"
     if failed:
         summary += f"; failed: {', '.join(failed)}"
+    if inconclusive:
+        summary += (
+            f"; inconclusive (collinear, untested): {', '.join(inconclusive)}"
+        )
     return {
         "stage": 1,
         "name": _STAGE_NAMES[1],
@@ -385,8 +419,10 @@ def _stage_2_specification_curve(
 ) -> dict[str, Any]:
     """Specification curve: 5 transforms x {none, known-features} controls.
 
-    ``_cfg`` (the merged config) is accepted for signature symmetry with
-    the other stage functions; stage 2 exposes no configurable knobs.
+    ``_cfg`` (the merged config) is accepted for call-site symmetry with
+    the other stage functions; the stage is intentionally not
+    configurable - the 5 x 2 specification lattice is fixed by design so
+    that every candidate faces exactly the same curve.
     """
     table = specification_curve(
         al["returns"], [al["features"]], al["signal"], robust=True
@@ -433,7 +469,9 @@ def _stage_3_robustness_battery(
         al["returns"],
         {
             "threshold": threshold,
-            "window": int(bcfg.get("window", 20)),
+            "window": int(
+                bcfg.get("window", DEFAULT_CONFIG["battery"]["window"])
+            ),
             "n_boot": int(bcfg.get("n_boot", 1000)),
             "block": int(bcfg.get("block", 20)),
             "seed": int(cfg["seed"]),
@@ -533,10 +571,24 @@ def _stage_5_monte_carlo(
     """Bootstrap Sharpe / max-drawdown envelope of the threshold rule.
 
     The envelope is computed on returns NET of proportional transaction
-    costs (``cost.cost_bps`` one-way per unit turnover).  When the net
-    Sharpe floor is breached but the gross envelope clears it, the stage is
-    flagged ``cost_breach`` and the overall verdict becomes ``COST_DEATH``
-    instead of ``RISK``.
+    costs (``cost.cost_bps`` one-way per unit turnover).  Verdict matrix
+    (first match wins; ``cost_breach`` is set only on the last row):
+
+    * drawdown tail breached (``mDD p5 < worst_allowed_mdd_p5``)
+      -> ``RISK``
+    * gross Sharpe floor also breached (no edge even before costs)
+      -> ``RISK``
+    * net Sharpe floor breached while the gross envelope clears it
+      -> ``COST_DEATH`` (``cost_breach=True``)
+
+    So a drawdown breach always dominates: ``COST_DEATH`` requires the
+    drawdown tail to be intact and the gross envelope to pass.
+
+    Entry-day exclusion: ``strat[0] = 0`` by construction (no position
+    is held on the entry day) and it carries no turnover charge, so
+    every per-period statistic of this stage - the Sharpe /
+    drawdown envelope AND ``cost_drag_mean`` - is computed on the
+    post-entry body ``net[1:]``: the entry day is excluded from both.
     """
     mc = cfg["mc"]
     cost_cfg = cfg["cost"]
@@ -545,8 +597,10 @@ def _stage_5_monte_carlo(
     net = apply_proportional_costs(strat, pos, cost_bps)
     turn = annual_turnover(pos)
     breakeven = float(breakeven_cost_bps(strat, pos)["breakeven_cost_bps"])
-    cost_drag = float(np.mean(strat - net))
     body = net[1:]
+    cost_drag = (
+        float(np.mean((strat - net)[1:])) if net.size > 1 else float("nan")
+    )
     sd = float(np.std(body, ddof=1))
     if not np.isfinite(sd) or sd <= 0:
         return {
@@ -575,9 +629,12 @@ def _stage_5_monte_carlo(
         seed=int(cfg["seed"]) + 52,
     )
     sr_p5, mdd_p5 = sr_d["sr_p5"], mdd_d["mdd_p5"]
-    reasons: list[str] = []
-    cost_breach = False
-    if not np.isfinite(sr_p5) or sr_p5 <= float(mc["min_sr_p5"]):
+    sr_floor = float(mc["min_sr_p5"])
+    mdd_limit = float(mc["worst_allowed_mdd_p5"])
+    sr_fail = not np.isfinite(sr_p5) or sr_p5 <= sr_floor
+    mdd_fail = not np.isfinite(mdd_p5) or mdd_p5 < mdd_limit
+    gross_sr_p5: float | None = None
+    if sr_fail:
         # attribute the breach: costs or genuine lack of edge?
         gross_d = sharpe_distribution(
             strat[1:],
@@ -585,23 +642,27 @@ def _stage_5_monte_carlo(
             block=int(mc["block"]),
             seed=int(cfg["seed"]) + 51,
         )
-        if np.isfinite(gross_d["sr_p5"]) and gross_d["sr_p5"] > float(
-            mc["min_sr_p5"]
-        ):
-            cost_breach = True
+        gross_sr_p5 = float(gross_d["sr_p5"])
+    gross_pass = (
+        gross_sr_p5 is not None
+        and np.isfinite(gross_sr_p5)
+        and gross_sr_p5 > sr_floor
+    )
+    # verdict matrix (see docstring): a drawdown breach always yields RISK,
+    # COST_DEATH needs net fail + gross pass + intact drawdown tail
+    cost_breach = sr_fail and not mdd_fail and gross_pass
+    reasons: list[str] = []
+    if sr_fail:
+        if cost_breach:
             reasons.append(
-                f"net SR p5={sr_p5:.2f} <= floor {mc['min_sr_p5']:.2f} "
-                f"while gross p5={gross_d['sr_p5']:.2f} "
+                f"net SR p5={sr_p5:.2f} <= floor {sr_floor:.2f} "
+                f"while gross p5={gross_sr_p5:.2f} "
                 f"(cost {cost_bps:.0f}bps vs breakeven {breakeven:.0f}bps)"
             )
         else:
-            reasons.append(
-                f"SR p5={sr_p5:.2f} <= floor {mc['min_sr_p5']:.2f}"
-            )
-    if not np.isfinite(mdd_p5) or mdd_p5 < float(mc["worst_allowed_mdd_p5"]):
-        reasons.append(
-            f"mDD p5={mdd_p5:.1%} < limit {mc['worst_allowed_mdd_p5']:.1%}"
-        )
+            reasons.append(f"SR p5={sr_p5:.2f} <= floor {sr_floor:.2f}")
+    if mdd_fail:
+        reasons.append(f"mDD p5={mdd_p5:.1%} < limit {mdd_limit:.1%}")
     warns: list[str] = []
     max_turn = cost_cfg.get("max_turnover_annual")
     if max_turn is not None and turn["annual_turnover"] > float(max_turn):
@@ -744,6 +805,11 @@ def _stage_6_predictive_eval(
             f"sign consistency FAIL (acc={sc['directional_accuracy']:.3f})"
         )
     warns: list[str] = []
+    if sc["verdict"] == "INCONCLUSIVE":
+        warns.append(
+            "sign consistency INCONCLUSIVE "
+            f"({sc.get('reason', 'degenerate outcomes')})"
+        )
     if wfe["verdict"] == "DEGRADED":
         warns.append(
             f"rolling walk-forward DEGRADED (pnl_t={wfe['pnl_t']:.2f})"
@@ -813,7 +879,14 @@ def _stage_7_cross_sectional(
         min_assets=int(cs_cfg.get("min_assets", 5)),
     )
     ic_res, spread_res, mono_res = cs["ic"], cs["spread"], cs["monotonicity"]
-    status = "PASS" if cs["overall_verdict"] == "PASS" else "FAIL"
+    # INCONCLUSIVE (too few effective dates / degenerate stats) must not
+    # kill the candidate the way a FAIL does: it means "could not test",
+    # which surfaces as a warning on an otherwise surviving run
+    status = (
+        "PASS"
+        if cs["overall_verdict"] == "PASS"
+        else ("WARN" if cs["overall_verdict"] == "INCONCLUSIVE" else "FAIL")
+    )
     summary = (
         f"{cs['overall_verdict']}: ic mean={ic_res['mean_ic']:+.3f} "
         f"(t={ic_res['ic_tstat']:.1f}) | "
@@ -833,9 +906,59 @@ def _stage_7_cross_sectional(
 # ----------------------------------------------------------------------------
 # orchestrator
 # ----------------------------------------------------------------------------
+def _stage_by_id(
+    stages: list[dict[str, Any]], stage_id: int
+) -> dict[str, Any]:
+    """Return the result dict of the stage with id ``stage_id``.
+
+    Lets cross-stage dependencies (the stage-3 threshold feeding stage 5,
+    the stage-5 returns / mdd feeding stage 6, the kill attribution in
+    ``_finish``) be resolved by stable stage id instead of positional
+    indices into the ``stages`` list.
+    """
+    for stage in stages:
+        if stage["stage"] == stage_id:
+            return stage
+    raise KeyError(f"stage {stage_id} has not run yet")
+
+
+def _json_safe_config(cfg: dict[str, Any]) -> dict[str, Any]:
+    """JSON-serializable copy of the merged config.
+
+    Callable values (a custom ``model`` factory, callable ``model_params``
+    entries) are replaced with the ``"<callable>"`` placeholder; the
+    pipeline itself keeps using the real objects.
+    """
+    return {key: (_json_safe_value(value)) for key, value in cfg.items()}
+
+
+def _json_safe_value(value: Any) -> Any:
+    """Recursively replace callables with a serializable placeholder.
+
+    Tuples become lists and sets become sorted lists (entries are
+    assumed to be mutually sortable), so containers ``json.dumps``
+    cannot handle - a bare ``set`` - or would only convert at dump
+    time - a tuple that still hides a callable inside - leave this
+    function already JSON-serializable.
+    """
+    if callable(value):
+        return "<callable>"
+    if isinstance(value, dict):
+        return {
+            inner_key: _json_safe_value(inner)
+            for inner_key, inner in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_value(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        return sorted(_json_safe_value(item) for item in value)
+    return value
+
+
 # PLR0911 waived: one return per pipeline-stage verdict (stages 1-7, the
 # panel-only branch, and the all-survived return), mirroring the
-# kill-on-first-FAIL decision tree.
+# kill-on-first-FAIL decision tree.  Intentionally NOT refactored into a
+# class: the flat return-per-verdict shape is the decision tree.
 def run_full_pipeline(  # noqa: PLR0911, PLR0915
     data: dict[str, Any], hypothesis_config: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -857,7 +980,11 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0915
 
     Returns one dict: ``{hypothesis, n_obs, date_range, overall_verdict,
     killed_by_stage, kill_reason, stages (list of per-stage dicts),
-    config, runtime_seconds}``.  Stages after the killer are ``SKIPPED``.
+    config, runtime_seconds}``.  Stages after the killer are ``SKIPPED``
+    (with a kill-context summary); in a series-only survival stage 7 is
+    ``SKIPPED`` as an optional stage (no panel data).  The returned
+    ``config`` is a JSON-serializable copy: a callable ``model`` shows up
+    as ``"<callable>"`` while the pipeline itself runs the real factory.
     """
     t0 = time.time()
     cfg = _merge_config(hypothesis_config)
@@ -870,9 +997,11 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0915
 
     def _finish(killed_stage: int | None) -> dict[str, Any]:
         if killed_stage is not None:
-            repack = killed_stage == 1 and stages[0].get("repackaging")
+            repack = killed_stage == 1 and bool(
+                _stage_by_id(stages, 1).get("repackaging")
+            )
             cost_kill = killed_stage == 5 and bool(
-                stages[4].get("results", {}).get("cost_breach")
+                _stage_by_id(stages, 5).get("results", {}).get("cost_breach")
             )
             if repack:
                 verdict = "REPACKAGING"
@@ -890,13 +1019,21 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0915
             has_warn = any(stage["status"] == "WARN" for stage in stages)
             verdict = "SURVIVES_WITH_WARNINGS" if has_warn else "SURVIVES"
             reason = None
+        # context-dependent skip summary: after a kill the remaining
+        # stages are moot; a survivor simply lacked panel data for the
+        # optional stage 7
+        skip_summary = (
+            "not run: candidate killed earlier"
+            if killed_stage is not None
+            else "not run: optional stage (no panel data)"
+        )
         next_stage = len(stages) + 1
         stages.extend(
             {
                 "stage": skipped,
                 "name": _STAGE_NAMES[skipped],
                 "status": "SKIPPED",
-                "summary": "not run: candidate killed earlier",
+                "summary": skip_summary,
                 "results": {},
             }
             for skipped in range(next_stage, 8)
@@ -914,7 +1051,7 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0915
             "killed_by_stage": killed_stage,
             "kill_reason": reason,
             "stages": stages,
-            "config": cfg,
+            "config": _json_safe_config(cfg),
             "runtime_seconds": round(time.time() - t0, 2),
         }
 
@@ -952,7 +1089,6 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0915
     stages.append(s3)
     if s3["status"] == "FAIL":
         return _finish(3)
-    threshold = float(s3["results"]["threshold_used"])
 
     # stage 4 -------------------------------------------------------------
     s4 = _stage_4_walkforward(al, cfg)
@@ -960,13 +1096,17 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0915
     if s4["status"] == "FAIL":
         return _finish(4)
 
-    # stage 5 -------------------------------------------------------------
-    s5 = _stage_5_monte_carlo(al, cfg, threshold)
+    # stage 5 (threshold dependency: the battery's stage-3 threshold) ------
+    battery_threshold = float(
+        _stage_by_id(stages, 3)["results"]["threshold_used"]
+    )
+    s5 = _stage_5_monte_carlo(al, cfg, battery_threshold)
     stages.append(s5)
     if s5["status"] == "FAIL":
         return _finish(5)
-    strat_returns = s5["results"]["strategy_returns"]
-    mdd_p50 = float(s5["results"]["mdd_distribution"]["mdd_p50"])
+    stage_five_results = _stage_by_id(stages, 5)["results"]
+    strat_returns = stage_five_results["strategy_returns"]
+    mdd_p50 = float(stage_five_results["mdd_distribution"]["mdd_p50"])
 
     # stage 6 -------------------------------------------------------------
     s6 = _stage_6_predictive_eval(al, cfg, strat_returns, mdd_p50)
@@ -993,6 +1133,16 @@ def _print_report(res: dict[str, Any], title: str) -> None:
     print("=" * 78)
     if res["hypothesis"]:
         print(f"hypothesis : {res['hypothesis']}")
+    config = res["config"]
+    cost_cfg = config.get("cost", {})
+    mc_cfg = config.get("mc", {})
+    print(
+        f"config    : seed={config.get('seed')} "
+        f"model={config.get('model')} "
+        f"cost_bps={cost_cfg.get('cost_bps')} "
+        f"n_perm_draws={config.get('n_perm_draws')} "
+        f"mc.n_sim={mc_cfg.get('n_sim')}"
+    )
     print(
         f"n_obs={res['n_obs']}  "
         f"range={res['date_range'][0]} .. {res['date_range'][1]}"
@@ -1020,20 +1170,90 @@ def _print_report(res: dict[str, Any], title: str) -> None:
 # ----------------------------------------------------------------------------
 # synthetic verification cases
 # ----------------------------------------------------------------------------
+# SLOW-class smoothing window (rows) for kind="slow_genuine_edge"; see
+# _make_synthetic for why this is 8 and not the ~20 a first instinct
+# suggests (subperiod evidence concentration of the squared state).
+_SLOW_SMOOTHING_WINDOW = 8
+# concentrated-edge world: the driver edge lives only in the first
+# _CONCENTRATED_EDGE_FRACTION of the sample, at _CONCENTRATED_EDGE_STRENGTH
+_CONCENTRATED_EDGE_FRACTION = 0.35
+_CONCENTRATED_EDGE_STRENGTH = 2.0
+
+
+def _smoothed_state(values: np.ndarray, window: int) -> np.ndarray:
+    """Trailing mean of ``values`` (expanding head), rescaled to unit std."""
+    smoothed = (
+        pd.Series(values)
+        .rolling(window, min_periods=1)
+        .mean()
+        .to_numpy(dtype=float)
+    )
+    spread = float(np.std(smoothed))
+    if not spread > 0.0:
+        raise ValueError("smoothed state has zero variance")
+    return smoothed / spread
+
+
 def _make_synthetic(
     kind: str, n_obs: int = 900, seed: int = 7
 ) -> dict[str, Any]:
     """Synthetic market world: latent momentum factor + hidden driver.
 
     Latent states are AR processes - persistent enough to survive the
-    battery's one-period lag and its window smoothing (base window 10 ->
-    5/10/15), but with memory short enough that run starts still carry edge
-    and the lag-10 placebo is dead.  A candidate signal must survive the
-    one-period position lag, which kills any non-persistent "edge".
-    ``fwd = 1.0*driver + 0.6*mom + 0.55*eps``.
+    battery's one-period lag, with memory short enough that run starts
+    still carry edge.  A candidate signal must survive the one-period
+    position lag, which kills any non-persistent "edge".  Returns are
+    ``fwd = edge_term + 0.6*mom + 0.55*eps``; the two latent states are
+    independent of each other by construction (separate Gaussian shocks).
 
-    ``kind='genuine_edge'``  - signal = hidden driver + 30% momentum bleed.
-    ``kind='momentum_echo'`` - signal = momentum + noise (no new information).
+    Two CLASSES of genuine edge (the fast/slow review contract):
+
+    * ``kind='genuine_edge'`` (FAST class) - signal = hidden driver +
+      30% momentum bleed; returns load on the raw AR(0.5) driver
+      (lag-1 autocorr ~0.5, dead by lag 10).  The driver's memory is
+      SHORTER than the battery's smoothing windows (5/10/15), so
+      window-smoothing the signal inverts its alignment with the
+      next-period return (a smoothed high reads as "the state was high
+      over the whole window" -> mean-reversion anti-signal).  The
+      battery correctly kills this class on a minority of data seeds -
+      pinned, never loosened, in tests/test_pipeline_sweep.py.
+    * ``kind='slow_genuine_edge'`` (SLOW class) - the same driver is
+      averaged into a slow state (trailing mean over
+      ``_SLOW_SMOOTHING_WINDOW`` rows, unit variance; lag-1 autocorr
+      ~0.95); signal = slow state + 30% momentum bleed; returns load
+      on the slow state.  The signal's information is spread over a
+      multi-row window, so the battery's smoothing OVERLAPS the
+      information window instead of washing past it: the edge
+      attenuates but never inverts, and the battery correctly lets
+      the slow class through on every swept seed.  The window is
+      deliberately modest: per-day evidence is ~ slow**2, and a
+      ~20-row window concentrates that evidence into subperiod
+      chunks (max_share above the stage-1 cap -> ARTIFACT kill on
+      ~4/10 swept seeds, measured), so the window sits where the
+      squared-state memory stays inside one subperiod third while
+      the level memory still dwarfs the battery's smoothing scale.
+
+    Two kill worlds:
+
+    * ``kind='momentum_echo'`` - signal = momentum + noise (no new
+      information) -> stage-1 REPACKAGING kill.
+    * ``kind='concentrated_edge'`` - a genuine driver edge that only
+      ever existed in the first ``_CONCENTRATED_EDGE_FRACTION`` of the
+      sample (full-sample regressions stay significant); the evidence
+      concentrates in one subperiod -> stage-1 subperiod control FAIL
+      -> ARTIFACT (concentration, not repackaging).
+
+    Known features are built from PAST information only (no lookahead):
+
+    * ``mom_noisy`` - a noisy contemporaneous observation of latent
+      momentum (NOT a 7-day sum, hence the honest name);
+    * ``mom12`` - momentum lagged 12 periods, shifted with a 12-row NaN
+      head (NOT ``np.roll``, which would wrap future values around to
+      the front - a lookahead); ``_align_inputs`` drops the NaN rows.
+
+    No ``mom7`` / ``mom30`` factors are supplied: the pipeline falls back
+    to its own trailing sums of past returns, so alignment drops ~30
+    leading rows and the usable ``n_obs`` shrinks accordingly.
     """
     rng = np.random.default_rng(seed)
     mom = np.zeros(n_obs)
@@ -1045,36 +1265,61 @@ def _make_synthetic(
     driver_shocks = rng.standard_normal(n_obs)
     for pos in range(1, n_obs):
         driver[pos] = 0.5 * driver[pos - 1] + driver_shocks[pos]
-    driver /= float(np.std(driver))  # orthogonal to mom by construction
+    driver /= float(np.std(driver))  # independent of mom by construction
 
     if kind == "genuine_edge":
         signal = driver + 0.3 * mom
+        edge_term = 1.0 * driver
         hyp = (
             "persistent order-flow state z predicts next-period return, "
             "incrementally to 7d/30d momentum (signal carries z plus a "
             "momentum bleed)"
         )
+    elif kind == "slow_genuine_edge":
+        slow = _smoothed_state(driver, _SLOW_SMOOTHING_WINDOW)
+        signal = slow + 0.3 * mom
+        edge_term = 1.0 * slow
+        hyp = (
+            "slow order-flow state (multi-period average of the hidden "
+            "driver) predicts next-period return: robust to the "
+            "battery's window smoothing, unlike the fast class"
+        )
     elif kind == "momentum_echo":
         signal = mom + 0.4 * rng.standard_normal(n_obs)
+        edge_term = 1.0 * driver
         hyp = (
             "claim: a fresh order-flow signal - but it is just observed "
             "momentum plus noise (echo of a known factor)"
         )
+    elif kind == "concentrated_edge":
+        signal = driver + 0.3 * mom
+        loading = np.zeros(n_obs)
+        edge_rows = int(_CONCENTRATED_EDGE_FRACTION * n_obs)
+        loading[:edge_rows] = _CONCENTRATED_EDGE_STRENGTH
+        edge_term = loading * driver
+        hyp = (
+            "claim: a persistent edge - but it only ever existed in the "
+            "first third of the sample (in-sample concentration)"
+        )
     else:
         raise ValueError(f"unknown kind {kind!r}")
 
-    fwd = 1.0 * driver + 0.6 * mom + 0.55 * rng.standard_normal(n_obs)
-    mom7 = mom + 0.10 * rng.standard_normal(n_obs)  # observed 7d momentum
-    mom30 = np.roll(mom, 12) + 0.10 * rng.standard_normal(
-        n_obs
-    )  # observed 30d factor
+    fwd = edge_term + 0.6 * mom + 0.55 * rng.standard_normal(n_obs)
+    # observed feature: noisy read of latent momentum (past-only: mom is
+    # the state at t, observable when the signal is built)
+    mom_noisy = mom + 0.10 * rng.standard_normal(n_obs)
+    # observed feature: momentum lagged 12 periods - head padded with NaN
+    # so nothing from the future leaks in (np.roll would wrap it around)
+    mom12 = np.concatenate([np.full(12, np.nan), mom[:-12]]) + 0.10 * (
+        rng.standard_normal(n_obs)
+    )
     idx = pd.date_range("2022-01-03", periods=n_obs, freq="B")
     return {
         "returns": pd.Series(fwd, index=idx),
         "signal": pd.Series(signal, index=idx),
-        "features": pd.DataFrame({"mom7": mom7, "mom30": mom30}, index=idx),
-        "mom7": pd.Series(mom7, index=idx),
-        "mom30": pd.Series(mom30, index=idx),
+        "features": pd.DataFrame(
+            {"mom_noisy": mom_noisy, "mom12": mom12}, index=idx
+        ),
         "hypothesis": hyp,
     }
 
@@ -1135,72 +1380,38 @@ def _make_panel(
     }
 
 
-def run_all_examples() -> None:
-    """Verify the four canonical cases of the 7-stage kill chain."""
-    print()
-    res_a = run_full_pipeline(_make_synthetic("genuine_edge", seed=4))
-    _print_report(res_a, "CASE A: genuine edge (must SURVIVE, net of 10bps)")
+def _verdict_matches(verdict: str, expected: str) -> bool:
+    """Check a demo verdict against its expected label.
 
-    print()
-    res_b = run_full_pipeline(_make_synthetic("momentum_echo", seed=4))
-    _print_report(res_b, "CASE B: momentum echo (must die as REPACKAGING)")
+    ``"SURVIVES*"`` matches both plain ``SURVIVES`` and
+    ``SURVIVES_WITH_WARNINGS``; any other expected label is an exact
+    equality.
+    """
+    if expected == "SURVIVES*":
+        return verdict.startswith("SURVIVES")
+    return verdict == expected
 
-    print()
-    res_c = run_full_pipeline(_make_panel("genuine_edge", seed=13))
-    _print_report(
-        res_c, "CASE C: cross-sectional edge, panel-only (must SURVIVE)"
-    )
 
-    print()
-    thin_edge = _make_synthetic("genuine_edge", seed=4)
-    # realistic return amplitude: the same statistical edge, but daily
-    # returns of ~2bp scale - the cost drag now dominates the gross edge
-    thin_edge["returns"] = thin_edge["returns"] * 0.02
-    thin_edge["hypothesis"] = (
-        "genuine edge, but thin returns (~2bp daily): "
-        "300bps one-way costs must eat it (COST-DEATH)"
-    )
-    res_d = run_full_pipeline(thin_edge, {"cost": {"cost_bps": 300.0}})
-    _print_report(
-        res_d,
-        "CASE D: genuine edge, thin returns + prohibitive costs "
-        "(must die COST_DEATH)",
-    )
+def _verify_demo_cases(
+    cases: list[dict[str, Any]], results: list[dict[str, Any]]
+) -> None:
+    """Assert the demo contract: verdicts, kill stages, kill causes.
 
-    print()
-    print("=" * 78)
-    print("VERIFICATION")
-    print("=" * 78)
-    ok_a = res_a["overall_verdict"].startswith("SURVIVES")
-    ok_b = res_b["overall_verdict"] == "REPACKAGING"
-    ok_c = res_c["overall_verdict"].startswith("SURVIVES")
-    ok_d = res_d["overall_verdict"] == "COST_DEATH"
-    checks = (
+    Layer-0 self-check of the demo: every case's overall verdict must
+    match its expected label, the canonical kills must land at the right
+    stage with the right cause, and the achieved verdict-matrix coverage
+    is printed (8/9 - NO_OOS_EDGE is pinned as unbuildable in
+    tests/test_ensemble_pipeline.py).
+    """
+    checks = [
         (
-            "case A genuine edge  ",
-            res_a["overall_verdict"],
-            "SURVIVES*",
-            ok_a,
-        ),
-        (
-            "case B momentum echo ",
-            res_b["overall_verdict"],
-            "REPACKAGING",
-            ok_b,
-        ),
-        (
-            "case C cs panel edge ",
-            res_c["overall_verdict"],
-            "SURVIVES*",
-            ok_c,
-        ),
-        (
-            "case D cost death    ",
-            res_d["overall_verdict"],
-            "COST_DEATH",
-            ok_d,
-        ),
-    )
+            case["label"],
+            result["overall_verdict"],
+            case["expect"],
+            _verdict_matches(result["overall_verdict"], case["expect"]),
+        )
+        for case, result in zip(cases, results, strict=True)
+    ]
     for label, got, expected, ok in checks:
         print(
             f"{label} -> {got:<24} "
@@ -1208,7 +1419,211 @@ def run_all_examples() -> None:
         )
     if not all(ok for *_, ok in checks):
         raise AssertionError("ensemble_pipeline verification failed")
+    (res_a, res_b, res_c, res_d, res_e, res_f, res_g, res_h, res_i, res_j) = (
+        results
+    )
+    # canonical kills land at the right stages with the right causes
+    assert res_a["killed_by_stage"] is None
+    assert res_b["killed_by_stage"] == 1
+    assert res_b["stages"][0]["repackaging"] is True
+    assert res_c["killed_by_stage"] is None
+    assert res_c["stages"][6]["status"] == "PASS"
+    assert res_d["killed_by_stage"] == 5
+    assert res_d["stages"][4]["results"]["cost_breach"] is True
+    assert res_e["killed_by_stage"] == 7
+    assert res_e["stages"][6]["status"] == "FAIL"
+    assert res_f["killed_by_stage"] == 5
+    assert res_f["stages"][4]["status"] == "FAIL"
+    assert res_f["stages"][4]["results"]["cost_breach"] is False
+    assert "mDD" in res_f["stages"][4]["summary"]
+    # the slow class survives with the battery stage passing it through
+    assert res_g["killed_by_stage"] is None
+    assert res_g["stages"][2]["status"] in {"PASS", "WARN"}
+    # thin panel: INCONCLUSIVE is a warning, not a kill
+    assert res_h["killed_by_stage"] is None
+    assert res_h["stages"][6]["status"] == "WARN"
+    assert res_h["stages"][6]["summary"].startswith("INCONCLUSIVE")
+    # unreachable threshold: the rule never trades -> DEAD at stage 3
+    assert res_i["killed_by_stage"] == 3
+    assert res_i["stages"][2]["status"] == "FAIL"
+    battery_table = res_i["stages"][2]["results"]["battery_table"]
+    overall_note = str(
+        battery_table.loc[battery_table["test"] == "OVERALL", "note"].iloc[0]
+    )
+    assert "no active days" in overall_note
+    # concentrated edge: stage-1 concentration kill, NOT repackaging
+    assert res_j["killed_by_stage"] == 1
+    assert res_j["stages"][0]["repackaging"] is False
+    assert (
+        res_j["stages"][0]["results"]["subperiod_stability"]["verdict"]
+        == "FAIL"
+    )
+    covered = {
+        "SURVIVES",
+        "SURVIVES_WITH_WARNINGS",
+        "REPACKAGING",
+        "ARTIFACT",
+        "DEAD",
+        "COST_DEATH",
+        "RISK",
+        "CS_NO_EDGE",
+    }
+    print(
+        f"verdict matrix coverage: {len(covered)}/9 "
+        "(missing NO_OOS_EDGE: no honest series construction in the "
+        "current tree - xfail pin in tests/test_ensemble_pipeline.py)"
+    )
     print("all verification checks passed")
+
+
+def run_all_examples() -> None:
+    """Verify the ten cases of the 7-stage kill chain.
+
+    Cases A-D are the four canonical verdicts (survive, repackaging,
+    panel survive, cost death); E-F pin the panel kill and the
+    risk-mandate kill; G-J complete the verdict matrix (slow-class
+    survive, thin-panel warnings, unreachable-threshold DEAD,
+    concentration ARTIFACT).  NO_OOS_EDGE is the one verdict without a
+    demo case: no honest series construction reaches it in the current
+    tree (the stage-1 subperiod-concentration control pre-empts
+    time-decayed edges before the walk-forward ever runs) - the
+    blocker is pinned and analysed in tests/test_ensemble_pipeline.py.
+    """
+
+    def thin_edge_data() -> dict[str, Any]:
+        # realistic return amplitude: the same statistical edge, but
+        # daily returns of ~2bp scale - the cost drag now dominates the
+        # gross edge (breakeven ~75bps here, so 140bps one-way is
+        # prohibitive while the net path stays inside the -60%
+        # drawdown tail: a pure COST_DEATH, not a risk breach)
+        thin = _make_synthetic("genuine_edge", seed=4)
+        thin["returns"] = thin["returns"] * 0.02
+        thin["hypothesis"] = (
+            "genuine edge, but thin returns (~2bp daily): "
+            "140bps one-way costs must eat it (COST-DEATH)"
+        )
+        return thin
+
+    cases: list[dict[str, Any]] = [
+        {
+            "label": "case A genuine edge  ",
+            "title": "CASE A: genuine edge (must SURVIVE, net of 10bps)",
+            "data": _make_synthetic("genuine_edge", seed=4),
+            "config": None,
+            "expect": "SURVIVES*",
+        },
+        {
+            "label": "case B momentum echo ",
+            "title": "CASE B: momentum echo (must die as REPACKAGING)",
+            "data": _make_synthetic("momentum_echo", seed=4),
+            "config": None,
+            "expect": "REPACKAGING",
+        },
+        {
+            "label": "case C cs panel edge ",
+            "title": (
+                "CASE C: cross-sectional edge, panel-only (must SURVIVE)"
+            ),
+            "data": _make_panel("genuine_edge", seed=13),
+            "config": None,
+            "expect": "SURVIVES*",
+        },
+        {
+            "label": "case D cost death    ",
+            "title": (
+                "CASE D: genuine edge, thin returns + prohibitive costs "
+                "(must die COST_DEATH)"
+            ),
+            "data": thin_edge_data(),
+            "config": {"cost": {"cost_bps": 140.0}},
+            "expect": "COST_DEATH",
+        },
+        {
+            "label": "case E cs noise panel",
+            "title": (
+                "CASE E: cross-sectional noise panel (must die CS_NO_EDGE)"
+            ),
+            "data": _make_panel("cs_noise", seed=13),
+            "config": None,
+            "expect": "CS_NO_EDGE",
+        },
+        {
+            "label": "case F drawdown risk ",
+            "title": (
+                "CASE F: genuine edge under a strict drawdown mandate "
+                "(must die RISK)"
+            ),
+            # a strict risk mandate on the SAME genuine edge as case A:
+            # both Sharpe floors pass comfortably (net SR p5 ~ 3.8 at the
+            # mild default 10bps cost, gross likewise), but the bootstrap
+            # mDD p5 sits near -16% on the 20%-vol scaling - a mandate
+            # tolerating only a 5% drawdown-tail breach is breached while
+            # the edge is real: RISK, not COST_DEATH, not a Sharpe kill.
+            "data": _make_synthetic("genuine_edge", seed=4),
+            "config": {"mc": {"worst_allowed_mdd_p5": -0.05}},
+            "expect": "RISK",
+        },
+        {
+            "label": "case G slow edge     ",
+            "title": (
+                "CASE G: slow genuine edge (must SURVIVE: the battery "
+                "passes the slow-robust class)"
+            ),
+            "data": _make_synthetic("slow_genuine_edge", seed=4),
+            "config": None,
+            "expect": "SURVIVES*",
+        },
+        {
+            "label": "case H thin panel    ",
+            "title": (
+                "CASE H: thin cross-sectional panel "
+                "(must SURVIVE_WITH_WARNINGS)"
+            ),
+            # 15 dates < stage 7's min_dates: the cross-sectional killers
+            # cannot be evaluated -> INCONCLUSIVE -> WARN, and the run
+            # survives WITH WARNINGS (missing data is not a kill)
+            "data": _make_panel("genuine_edge", n_dates=15, seed=13),
+            "config": None,
+            "expect": "SURVIVES_WITH_WARNINGS",
+        },
+        {
+            "label": "case I dead threshold",
+            "title": (
+                "CASE I: genuine edge, unreachable entry threshold "
+                "(must die DEAD)"
+            ),
+            # honest DEAD by configuration: threshold 10.0 lies above
+            # every draw of the signal (std ~1), so the long/flat rule
+            # never trades - "no active days" DEAD at stage 3.  The
+            # stage-1/2 controls are cost/rule-blind and still pass:
+            # the edge is real, the RULE is untradeable.
+            "data": _make_synthetic("genuine_edge", seed=4),
+            "config": {"battery": {"threshold": 10.0}},
+            "expect": "DEAD",
+        },
+        {
+            "label": "case J concentration",
+            "title": (
+                "CASE J: edge concentrated in the first third "
+                "(must die ARTIFACT)"
+            ),
+            "data": _make_synthetic("concentrated_edge", seed=4),
+            "config": None,
+            "expect": "ARTIFACT",
+        },
+    ]
+    results: list[dict[str, Any]] = []
+    for case in cases:
+        print()
+        result = run_full_pipeline(case["data"], case["config"])
+        _print_report(result, case["title"])
+        results.append(result)
+
+    print()
+    print("=" * 78)
+    print("VERIFICATION")
+    print("=" * 78)
+    _verify_demo_cases(cases, results)
 
 
 if __name__ == "__main__":
