@@ -1,7 +1,14 @@
+---
+name: 14-incremental-test
+description: Решающий инкрементальный тест: t собственного коэффициента поверх замороженных контролов (этап 4/7).
+when_to_use: Обязательный старт скрина вместе с nulls; после сырого t >= 2 из 13-signal-test.
+version: 1.0.0
+---
+
 # SKILL 4: INCREMENTAL TEST — решающий тест (Stage 4 of 7, THE DECISIVE KILLER)
 
 > Самостоятельный протокол: агенту нужен только этот файл + данные.
-> Таксономия: `../FRAMEWORK.md` §3 ЗАКОН 2, §4 (INCREMENTAL-DEATH); разбор: `../CASES_AND_FLAGS.md` CASE 1 (CVD).
+> Таксономия: FRAMEWORK.md (корень репо) §3 ЗАКОН 2, §4 (INCREMENTAL-DEATH); разбор: CASES_AND_FLAGS.md (корень репо) CASE 1 (CVD).
 
 ## PURPOSE (цель)
 
@@ -13,7 +20,7 @@
 
 ## INPUTS (входы)
 
-1. Сырой сигнал с t ≥ 2 из skill_3 (сырая красота НЕ обязательство выживания).
+1. Сырой сигнал с t ≥ 2 из 13-signal-test (сырая красота НЕ обязательство выживания).
 2. Панель: forward_return + сигнал + полный столбец контролов.
 
 ## PROCEDURE (порядок)
@@ -25,7 +32,7 @@
      retest_delay;
    - уровень волы: iv_pct / rv_pct;
    - |BTC-move| (конфаунд conditioning-читов);
-   - year dummies (календарный контроль — см. skill_6).
+   - year dummies (календарный контроль — см. 16-walkforward-calendar).
 2. **REGRESSION.** `forward_return ~ known_controls + new_signal`,
    SE: HC0 / Newey-West (лаг ≥ L) / кластеризация по датам-месяцам.
    Pooled с instrument fixed effects ИЛИ per-instrument — одно, из пререга.
@@ -53,7 +60,7 @@
 ## PASS CRITERIA (критерии прохода)
 
 t(new_signal) ≥ 2 после ПОЛНОГО замороженного списка контролов И ΔR² ≥
-порога пререга (эталон PREREG_OFI §7: ΔR² ≥ 0.003). → Дальше skill_5
+порога пререга (эталон PREREG_OFI §7: ΔR² ≥ 0.003). → Дальше 15-robustness-battery
 (батарея робастности). Проходившие: POC-avoidance — t −16.55 ПОСЛЕ
 OB-контролов, ортогонален OB (|ρ| ≤ 0.143) — первый кандидат 9 раундов,
 прошедший инкрементальный тест.

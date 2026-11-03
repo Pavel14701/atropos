@@ -1,0 +1,89 @@
+# Atropos agent-context manifest — inventory of the package default
+# layer shipped inside atropos/agent/.  Parsed by `atropos agent-doctor`
+# to verify the wheel carries every bundled context file and skill.
+
+[agent]
+name = "atropos-agent-context"
+version = "0.1.0"          # must match the VERSION file
+schema = 1
+description = "Default agent context: user workflow + 9 skills"
+
+[[files]]
+path = "AGENTS.md"
+description = "User workflow: graveyard check -> preregister -> run pipeline -> interpret -> tombstone"
+
+[[files]]
+path = "CLAUDE.md"
+description = "Claude-specific notes: read AGENTS.md first, verdict from report only"
+
+[[files]]
+path = "VERSION"
+description = "Agent-context layer version (0.1.0)"
+
+# --- core agent skills (01-03) ---------------------------------------
+
+[[skills]]
+name = "01-preregister"
+path = "skills/01-preregister.md"
+description = "Freeze a hypothesis with generate_prereg/validate_prereg before touching data"
+when_to_use = "Before first data access for a new hypothesis; when reopening a buried family"
+version = "0.1.0"
+
+[[skills]]
+name = "02-run-pipeline"
+path = "skills/02-run-pipeline.md"
+description = "Run run_full_pipeline once and act on one of the 9 verdicts"
+when_to_use = "After the prereg is committed and the data snapshot is loaded"
+version = "0.1.0"
+
+[[skills]]
+name = "03-read-graveyard"
+path = "skills/03-read-graveyard.md"
+description = "Graveyard check by prediction+kill-criterion; resurrection conditions"
+when_to_use = "Before proposing any hypothesis; when in doubt it was tested"
+version = "0.1.0"
+
+# --- stage protocols 1-7, migrated from the root skills/ directory ---
+# Renamed skill_N_* -> 1N-*: 01-03 core, 11-16 pipeline stages.
+
+[[skills]]
+name = "11-premise-check"
+path = "skills/11-premise-check.md"
+description = "Premise check before any strategy code (stage 1/7)"
+when_to_use = "Before any strategy line on a new crypto hypothesis; porting an academic effect"
+version = "1.0.0"
+
+[[skills]]
+name = "12-null-control"
+path = "skills/12-null-control.md"
+description = "Six null controls and placebo design (stage 2/7)"
+when_to_use = "At the start of a screen together with the incremental test"
+version = "1.0.0"
+
+[[skills]]
+name = "13-signal-test"
+path = "skills/13-signal-test.md"
+description = "Raw signal test: EV, clustered t, direction, per-year table (stage 3/7)"
+when_to_use = "After premise check; together with nulls at screen start"
+version = "1.0.0"
+
+[[skills]]
+name = "14-incremental-test"
+path = "skills/14-incremental-test.md"
+description = "The decisive incremental test over frozen controls (stage 4/7)"
+when_to_use = "Mandatory screen start together with nulls; after raw t >= 2"
+version = "1.0.0"
+
+[[skills]]
+name = "15-robustness-battery"
+path = "skills/15-robustness-battery.md"
+description = "7-test robustness battery (stage 5/7)"
+when_to_use = "Only after the incremental test passes"
+version = "1.0.0"
+
+[[skills]]
+name = "16-walkforward-calendar"
+path = "skills/16-walkforward-calendar.md"
+description = "Walk-forward on frozen thresholds + calendar control (stages 6-7/7)"
+when_to_use = "Last, after the robustness battery passes"
+version = "1.0.0"

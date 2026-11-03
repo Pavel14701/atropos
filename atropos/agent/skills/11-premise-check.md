@@ -1,7 +1,14 @@
+---
+name: 11-premise-check
+description: Проверка предпосылки до стратегии: могильник, триггер, знак, данные, инструмент, cost-линия (этап 1/7).
+when_to_use: До любой строки стратегии по новой крипто-гипотезе; при переносе академического эффекта из акций.
+version: 1.0.0
+---
+
 # SKILL 1: PREMISE CHECK — протокол проверки предпосылки (Stage 1 of 7)
 
 > Самостоятельный протокол: агенту нужен только этот файл + данные.
-> Таксономия смертей: `../FRAMEWORK.md` §4; надгробия: `C:\Users\Pashtet\Desktop\projects\deterministic-trading-engine\docs\THEORY_GRAVEYARD.md`.
+> Таксономия смертей: FRAMEWORK.md (корень репо) §4; надгробия: `C:\Users\Pashtet\Desktop\projects\deterministic-trading-engine\docs\THEORY_GRAVEYARD.md`.
 
 ## PURPOSE (цель)
 
@@ -55,7 +62,7 @@
 Триггер наступает с измеримой частотой; бесплатная история ≥ минимального
 окна; инструмент торгуется; могилы нет или есть раскрытый новый механизм;
 знак не инвертирован; амплитуда выше cost-линии.
-→ Дальше: skill_4 (инкременталь — старт скрина) + skill_2 (nulls).
+→ Дальше: 14-incremental-test (инкременталь — старт скрина) + 12-null-control (nulls).
 
 ## REAL EXAMPLE (пример из кладбища)
 
