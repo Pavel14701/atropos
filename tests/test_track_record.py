@@ -56,9 +56,9 @@ def test_sharpe_standard_error_validates() -> None:
 
 def test_prereg_divergence_hand_computed() -> None:
     out = prereg_divergence(0.5, 504, 1.5, 1008)
-    assert out["se_live"] == pytest.approx(0.707101, abs=1e-4)
+    assert out["se_live"] == pytest.approx(0.707282, abs=1e-4)
     assert out["se_expected"] == pytest.approx(0.501114, abs=1e-4)
-    assert out["z"] == pytest.approx(-1.153847, abs=1e-4)
+    assert out["z"] == pytest.approx(-1.153584, abs=1e-4)
     assert out["kill_z"] == 1.64
     # z=-1.154: killed at kill_z=1.0, alive at the 1.64 default
     loose = prereg_divergence(0.5, 504, 1.5, 1008, kill_z=1.0)

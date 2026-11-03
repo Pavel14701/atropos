@@ -90,6 +90,9 @@ def _annualized_sharpe(values: np.ndarray, periods: int) -> float:
 def _max_drawdown(values: np.ndarray) -> float:
     """Max peak-to-trough drawdown of a return series (negative).
 
+    The initial unit of capital is the first peak, so a loss in the
+    very first period counts as a drawdown.
+
     Args:
         values: cleaned return series.
 
@@ -100,7 +103,7 @@ def _max_drawdown(values: np.ndarray) -> float:
     """
     if values.size == 0:
         return 0.0
-    equity = np.cumprod(1.0 + values)
+    equity = np.cumprod(np.concatenate(([1.0], 1.0 + values)))
     if equity[-1] <= 0.0:
         return -1.0
     peak = np.maximum.accumulate(equity)
