@@ -17,6 +17,8 @@ dev = [
     "ruff>=0.8",
     "pandas-stubs>=2.2",
     "scipy-stubs>=1.17.1.5",
+    "hypothesis>=6.170.14",
+    "pytest-randomly>=5.0.0",
 ]
 
 [build-system]
@@ -119,3 +121,6 @@ disallow_untyped_calls = false
 testpaths = ["tests"]
 addopts = "-q --strict-markers"
 xfail_strict = true
+markers = [
+    "slow: statistical calibration tests (hundreds of seeded runs, ~30s)",
+]
