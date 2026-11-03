@@ -11,7 +11,7 @@ or project directories.
 from __future__ import annotations
 
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import TYPE_CHECKING
 
 import pytest
@@ -417,11 +417,18 @@ def test_orphan_skill_append_resolves_append_only(
 # platform default directories and layer building
 # ---------------------------------------------------------------------------
 def test_default_user_dir_windows(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Windows: %APPDATA%/atropos/agent; unset -> ~/AppData/Roaming."""
+    """Windows: %APPDATA%/atropos/agent; unset -> ~/AppData/Roaming.
+
+    The APPDATA branch is compared via ``PureWindowsPath`` so the
+    Windows-path semantics hold on any host: a plain ``Path`` on posix
+    does not treat backslashes as separators, which made the original
+    literal-path assertion pass only when the suite ran on Windows.
+    """
     monkeypatch.setattr("atropos.agent._resolution._is_windows", lambda: True)
     monkeypatch.setenv("APPDATA", r"C:\Users\toothcake\AppData\Roaming")
-    assert default_user_dir() == Path(
-        r"C:\Users\toothcake\AppData\Roaming\atropos\agent"
+    assert (
+        PureWindowsPath(str(default_user_dir())).as_posix()
+        == "C:/Users/toothcake/AppData/Roaming/atropos/agent"
     )
     monkeypatch.delenv("APPDATA", raising=False)
     expected = Path.home() / "AppData" / "Roaming" / "atropos" / "agent"
