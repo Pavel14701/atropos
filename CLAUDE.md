@@ -1,5 +1,5 @@
 # CLAUDE.md — Инструкции для Claude
-# Hypothesis-Killing Framework — Claude-Specific Instructions
+# Atropos — Hypothesis-Killing Framework — Claude-Specific Instructions
 
 Claude-специализация `AGENTS.md` (Claude Code, ZCode и совместимые CLI-агенты). Базовые правила — в `AGENTS.md`; здесь только отличия и привязка правил к конкретным инструментам (tools). Плейсхолдеры `[PLACEHOLDER]` заполнить значениями проекта.
 
@@ -34,9 +34,10 @@ Claude-специализация `AGENTS.md` (Claude Code, ZCode и совме�
 
 - Создание и правка файлов — только Write/Edit; не собирать файлы через heredoc в Bash.
 - Чтение — Read (не `cat`, `head`, `tail`); поиск — Grep/Glob: сначала поиск, затем точечное чтение.
-- Все команды — в окружении `[VENV]` проекта (`source .venv/bin/activate` или `[ACTIVATE_CMD]`); глобальный интерпретатор не используется.
-- Тесты: Bash `python -m pytest tests/ -q` перед каждым коммитом; код гипотезы без теста не мержится.
-- Стиль: Bash `ruff check .` и `ruff format .`; конфигурация в `pyproject.toml`; ноль предупреждений.
+- Все команды — через uv в окружении проекта (`uv sync`, `uv run <cmd>`); глобальный интерпретатор не используется.
+- Тесты: Bash `uv run pytest -q` перед каждым коммитом; код гипотезы без теста не мержится.
+- Стиль: Bash `uv run ruff check .` и `uv run ruff format .`; 78 колонок, докстринги, perflint, E741; конфигурация в `pyproject.toml`; ноль предупреждений.
+- Типы: Bash `uv run mypy` — режим strict, весь код и тесты; однобуквенные идентификаторы запрещены (AST-тест `tests/test_conventions.py`, кроме `_`).
 - Запуск теста гипотезы: Bash `python hypotheses/code/H-NNNN_<slug>.py`; вывод в stdout строго: `H-NNNN: metric=[VALUE] threshold=[THRESHOLD] verdict=[KILLED|SURVIVED|INCONCLUSIVE]`.
 - Падает pytest — чинить код теста; ослаблять kill-критерий запрещено (закон 4).
 - Снимки `[DATA_DIR]/snapshots/` неизменяемы: новая выгрузка = новый снимок, перезапись запрещена.
@@ -45,9 +46,10 @@ Claude-специализация `AGENTS.md` (Claude Code, ZCode и совме�
 Типовая последовательность одной сессии (standard session):
 
 ```bash
-python -m pytest tests/ -q       # 1. база зелёная
-ruff check . && ruff format .    # 2. стиль чист
-# 3. Write prereg → commit → выгрузка данных → запуск теста → Write tombstone → строка INDEX.csv → commit
+uv run pytest -q                        # 1. база зелёная
+uv run ruff check . && uv run ruff format --check .   # 2. стиль чист
+uv run mypy                             # 3. типы (strict)
+# 4. Write prereg → commit → выгрузка данных → запуск теста → Write tombstone → строка INDEX.csv → commit
 ```
 
 ## 6. Ключевые файлы (Key Files)

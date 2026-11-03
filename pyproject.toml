@@ -1,0 +1,121 @@
+[project]
+name = "atropos"
+version = "1.0.0"
+description = "Atropos — hypothesis-killing framework: preregistration, null controls, incremental tests, robustness batteries, walk-forward and Monte Carlo verdicts."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "scipy>=1.12",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "mypy>=1.13",
+    "ruff>=0.8",
+    "pandas-stubs>=2.2",
+    "scipy-stubs>=1.17.1.5",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["atropos"]
+
+# ---------------------------------------------------------------------------
+# Ruff — hard linting
+# ---------------------------------------------------------------------------
+# line-length 78 everywhere (code AND docstrings).  Rule families beyond the
+# defaults, per project policy:
+#   D     — docstrings required and checked (pydocstyle)
+#   PERF  — faster equivalent constructs (perflint: "ускорение конструкций")
+#   E741  — ambiguous single-letter names; the full single-letter ban is
+#           enforced by tests/test_conventions.py (AST check)
+[tool.ruff]
+line-length = 78
+target-version = "py311"
+src = ["atropos", "tests"]
+exclude = ["skills", "docs"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors: E501 line>78, E741 ambiguous names
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # import order
+    "N",    # pep8-naming
+    "D",    # pydocstyle — docstrings
+    "UP",   # pyupgrade — modern syntax
+    "A",    # builtins must not be shadowed
+    "B",    # bugbear — likely bugs
+    "C4",   # cleaner/faster comprehensions
+    "PERF", # perflint — faster constructs
+    "RET",  # sane return statements
+    "SIM",  # simplify
+    "ARG",  # no unused arguments
+    "ICN",  # import conventions (numpy as np, pandas as pd)
+    "PIE",  # misc lint (useless constructs)
+    "PGH",  # pygrep-hooks (no eval, specific ignores)
+    "PL",   # pylint: errors, refactors, warnings
+    "RUF",  # ruff-specific rules
+]
+ignore = [
+    # D: the codebase puts the summary on the FIRST docstring line (D212);
+    # D213 wants it on the second line — contradictory pair, keep D212.
+    "D213",
+    # D401 non-imperative mood: false-positives on statistical prose
+    # ("True for a finite float", "5% tail of ...").
+    "D401",
+    # PLR2004 magic values in comparisons: thresholds like 0.05, 1.96, 2.0
+    # ARE the domain vocabulary of a hypothesis-testing library.
+    "PLR2004",
+    # PLR0913 too-many-arguments: pipeline entry points take stage configs
+    # by design; splitting them would hurt readability more than help.
+    "PLR0913",
+    # Formatter-managed conflicts (ruff format + linter disagree).
+    "ISC001",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests: named test functions ARE the documentation; asserts are the tool.
+"tests/**" = [
+    "D101", # missing docstring in test class
+    "D102", # missing docstring in test method
+    "D103", # missing docstring in test function
+    "PLR0915", # long scenario-building tests are fine
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.flake8-import-conventions.aliases]
+numpy = "np"
+pandas = "pd"
+
+# ---------------------------------------------------------------------------
+# Mypy — strict
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+warn_redundant_casts = true
+files = ["atropos", "tests"]
+
+# SciPy ships partial type information; a few public helpers are untyped.
+# Narrow, documented concessions for scipy only — the rest stays strict.
+[[tool.mypy.overrides]]
+module = "scipy.*"
+disallow_untyped_calls = false
+
+# ---------------------------------------------------------------------------
+# Pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+xfail_strict = true

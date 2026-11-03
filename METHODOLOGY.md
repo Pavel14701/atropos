@@ -1,5 +1,5 @@
 # Методика разворачивания фреймворка убийства гипотез
-# Hypothesis-Killing Framework — Deployment Methodology
+# Atropos — Hypothesis-Killing Framework — Deployment Methodology
 
 Переносимый (portable) документ: как развернуть фреймворк «убийства гипотез» (hypothesis killing) в любом проекте, работающем с гипотезами и данными. Документ самодостаточен — аналитик или ИИ-агент без контекста разворачивает всё с нуля только по нему. Значения конкретного проекта обозначены плейсхолдерами: `[PROJECT_ROOT]`, `[DATA_DIR]` и т.п.
 
@@ -37,7 +37,7 @@
 │   └── DATA_DICTIONARY.md                 # словарь данных
 ├── tests/                                 # pytest-тесты кода гипотез
 ├── scripts/                               # линтеры и утилиты реестра
-├── pyproject.toml                         # зависимости, конфиг ruff
+├── pyproject.toml                         # зависимости (uv), конфиг ruff/mypy/pytest
 └── AGENTS.md, CLAUDE.md                   # инструкции агентов (шаблоны в комплекте)
 ```
 
@@ -45,22 +45,27 @@
 
 ## 3. Окружение Python (Python Environment)
 
+Менеджер пакетов — **uv** (быстрый, воспроизводимый, lock-файл в коммите):
+
 ```bash
 cd [PROJECT_ROOT]
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install pandas numpy scipy pytest ruff
-pip freeze > requirements.txt
+uv python pin 3.12                # зафиксировать версию интерпретатора
+uv init --package                 # создаст pyproject.toml со структурой пакета
+uv add numpy pandas scipy         # рантайм-зависимости
+uv add --dev pytest ruff mypy     # инструменты разработки
+uv sync                           # создать .venv и поставить всё по uv.lock
 ```
 
-Минимальный стек: `pandas` (данные), `numpy` (вычисления), `scipy` (статистика), `pytest` (тесты), `ruff` (стиль). Расширять только по необходимости; версии фиксировать.
+Все команды дальше — через `uv run` (например `uv run pytest`), активация окружения не нужна.
+
+Минимальный стек: `numpy` (вычисления), `pandas` (данные), `scipy` (статистика), `pytest` (тесты), `ruff` (стиль: 78 колонок, докстринги, perflint, E741 — конфигурация в `pyproject.toml`), `mypy` (типы: режим strict). Расширять только по необходимости; версии фиксируются в `uv.lock` автоматически.
 
 ## 4. Пошаговое разворачивание (Step-by-Step Deployment)
 
 | Шаг | Действие | Результат |
 |-----|----------|-----------|
 | 1 | Создать структуру каталогов (раздел 2) | Пустой скелет закоммичен в git |
-| 2 | Настроить окружение Python (раздел 3) | `requirements.txt` закоммичен |
+| 2 | Настроить окружение Python (раздел 3) | `pyproject.toml` + `uv.lock` закоммичены |
 | 3 | Зафиксировать первый снимок данных и словарь | `[DATA_DIR]/snapshots/[SNAPSHOT_DATE]/` готов |
 | 4 | Написать `docs/HYPOTHESIS_KILLING_FRAMEWORK.md` | 7 стадий, 6 законов, форматы prereg и tombstone |
 | 5 | Заполнить `AGENTS.md` и `CLAUDE.md` (заменить плейсхолдеры) | Инструкции агентов без незаменённых `[PLACEHOLDER]` |
@@ -73,17 +78,19 @@ pip freeze > requirements.txt
 
 Обязательные проверки на каждый pull request — транслируются в любой CI (GitHub Actions, GitLab CI, Jenkins и т.д.):
 
-1. `ruff check .` и `ruff format --check .` — стиль кода, ноль предупреждений.
-2. `pytest tests/ -q` — юнит-тесты; код гипотезы без теста CI не пропускает.
-3. Линтер пререгистраций `scripts/lint_preregistrations.py` (около 20 строк на Python): каждый `preregistrations/H-*.md` обязан содержать ID, фальсифицируемое предсказание (falsifiable prediction), числовой kill-критерий, снимок, seed, автора, дату.
-4. Сверка `hypotheses/INDEX.csv` с каталогом graveyard: у каждой гипотезы с tombstone есть строка реестра.
+1. `uv run ruff check .` и `uv run ruff format --check .` — стиль кода (78 колонок, докстринги, perflint, E741), ноль предупреждений.
+2. `uv run mypy` — строгая типизация (strict), ноль ошибок.
+3. `uv run pytest -q` — юнит-тесты; код гипотезы без теста CI не пропускает.
+4. Линтер пререгистраций `scripts/lint_preregistrations.py` (около 20 строк на Python): каждый `preregistrations/H-*.md` обязан содержать ID, фальсифицируемое предсказание (falsifiable prediction), числовой kill-критерий, снимок, seed, автора, дату.
+5. Сверка `hypotheses/INDEX.csv` с каталогом graveyard: у каждой гипотезы с tombstone есть строка реестра.
 
 Пример для GitHub Actions (сокращённо):
 
 ```yaml
-- run: ruff check .
-- run: ruff format --check .
-- run: pytest tests/ -q
+- run: uv run ruff check .
+- run: uv run ruff format --check .
+- run: uv run mypy
+- run: uv run pytest -q
 - run: python scripts/lint_preregistrations.py
 ```
 
@@ -124,7 +131,7 @@ pip freeze > requirements.txt
 ## 9. Критерии готовности (Definition of Done)
 
 - [ ] Структура каталогов из раздела 2 существует и закоммичена.
-- [ ] `pytest` и `ruff` проходят локально и в CI.
+- [ ] `pytest`, `ruff` и `mypy` проходят локально и в CI.
 - [ ] Линтер пререгистраций работает и ловит пустые kill-критерии.
 - [ ] Пилотная `H-0001` прошла полный цикл и лежит на кладбище.
 - [ ] `AGENTS.md` и `CLAUDE.md` заполнены — ни одного незаменённого `[PLACEHOLDER]`.
