@@ -1,6 +1,10 @@
 # AGENTS.md — Универсальные инструкции агента
 # Atropos — Hypothesis-Killing Framework — Universal Agent Instructions
 
+> **Context beacon.** This is the DEVELOPER context of Atropos
+> (pytest/ruff/mypy/conventions). For USING the framework with an AI
+> agent, see `atropos/agent/` (pip-installed) or run `atropos agent-context`.
+
 Документ для любого ИИ-агента и любого аналитика: Claude, Cursor, Windsurf, Copilot, Codex, GPT-агенты, кастомные скрипты. Инструментонезависим: никакой специфики конкретного агента здесь нет. Перед использованием заполните плейсхолдеры `[PLACEHOLDER]` значениями проекта. Ключевые термины продублированы на английском.
 
 ---
