@@ -141,12 +141,13 @@ def test_profit_factor_and_win_rate_on_known_trades() -> None:
 
 def test_turnover_on_known_position_series() -> None:
     out = turnover([0.0, 1.0, 1.0, -1.0, 0.0])
-    # diffs are |1| + |0| + |2| + |1| = 4 over 4 rebalances
+    # diffs are |1| + |0| + |2| + |1| = 4 across 3 actual changes
     assert out["turnover_per_period"] == pytest.approx(1.0)
     assert out["rt_per_year"] == pytest.approx(252.0)
-    assert out["n_rebalances"] == 4
+    assert out["n_rebalances"] == 3
     constant = turnover([1.0] * 10)
     assert constant["turnover_per_period"] == 0.0
     assert constant["rt_per_year"] == 0.0
+    assert constant["n_rebalances"] == 0
     short = turnover([1.0])
     assert math.isnan(short["turnover_per_period"])

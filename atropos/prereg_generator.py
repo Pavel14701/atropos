@@ -214,8 +214,10 @@ def _criteria_rows(criteria: Any) -> list[tuple[str, str, str]]:
             )
         else:
             op_match = _OP_NUMBER_RE.search(crit)
-            any_match = op_match if op_match is not None else (
-                _NUMBER_RE.search(crit)
+            any_match = (
+                op_match
+                if op_match is not None
+                else (_NUMBER_RE.search(crit))
             )
             # validate_prereg guarantees a number in string criteria.
             assert any_match is not None

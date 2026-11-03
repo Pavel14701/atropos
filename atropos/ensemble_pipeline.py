@@ -392,10 +392,19 @@ def _stage_2_specification_curve(
         al["returns"], [al["features"]], al["signal"], robust=True
     )
     cs = curve_summary(table)
-    status = "PASS" if cs["verdict"] == "SURVIVES" else "FAIL"
+    # the lenient curve verdict is not enough: at least one CONTROLLED
+    # spec must survive, otherwise the curve is kept alive by
+    # uncontrolled specs only (repackaging of known information)
+    status = (
+        "PASS"
+        if cs["verdict"] == "SURVIVES"
+        and int(cs["n_surviving_controlled"]) >= 1
+        else "FAIL"
+    )
     summary = (
         f"{cs['verdict']}: max|t|={cs['max_abs_t']:.2f} across "
         f"{cs['n_specs']} specs ({cs['n_surviving']} with |t|>=2, "
+        f"{cs['n_surviving_controlled']} controlled, "
         f"sign_consistent={cs['sign_consistent']})"
     )
     return {

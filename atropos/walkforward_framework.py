@@ -21,8 +21,9 @@ predicts the next slice, and stacks the out-of-sample PnL:
   ``ValueError``, because calendar dummies let a "signal" memorize
   regimes.
 * **Threshold frozen on train** - use :func:`frozen_threshold` inside
-  ``fit_fn``: the threshold is selected on the train slice and stored in
-  the model; the test slice is scored against it untouched.
+  a custom ``fit_fn``: the threshold is selected on the train slice and
+  stored in the model; the test slice is scored against it untouched
+  (the default OLS fit is threshold-free).
 
 Returned dict: ``{wf_t, wf_direction_consistency, wf_shrink_ratio,
 verdict, n_folds, in_sample_t, folds, warnings, mode}``.
@@ -49,8 +50,12 @@ import pandas as pd
 
 __all__ = ["check_no_peeking", "frozen_threshold", "walkforward"]
 
+# Calendar terms are matched as whole tokens (with optional plural), so
+# ordinary feature names containing them as substrings - "window" (dow),
+# "update" (date) - do not trigger false positives.
 _ALWAYS_BAD_RE = re.compile(
-    r"(?i)(year|month|week|date|quarter|holiday|day|dow|doy)"
+    r"(?i)(?:^|[^a-z])(?:year|month|week|date|quarter|holiday|day|dow|doy)"
+    r"s?(?:[^a-z]|$)"
 )
 _MONTH_DOW_RE = re.compile(
     r"(?i)(?:^|[^a-z])(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|"
@@ -116,11 +121,13 @@ def frozen_threshold(
 def _default_fit(
     train_df: pd.DataFrame, outcome_col: str = "outcome"
 ) -> dict[str, Any]:
-    """Default fit: OLS on numeric columns plus a frozen entry threshold.
+    """Default fit: OLS on every numeric non-outcome column.
 
-    Regresses the outcome on every numeric non-outcome column and adds
-    the entry threshold frozen by :func:`frozen_threshold` on the first
-    feature column.
+    The default model is a plain linear score consumed by
+    :func:`_default_predict`.  The long/flat entry-threshold machinery
+    (:func:`frozen_threshold`) belongs to custom ``fit_fn`` /
+    ``predict_fn`` pairs, not to the default path - the walk-forward PnL
+    contract is ``sign(forecast) * realized``, a long/short rule.
     """
     cols = [
         col
@@ -135,8 +142,7 @@ def _default_fit(
     outcome = train_df[outcome_col].to_numpy(dtype=float)
     design = np.column_stack([np.ones(len(outcome)), features])
     beta, _, _, _ = np.linalg.lstsq(design, outcome, rcond=None)
-    thr = frozen_threshold(train_df, cols[0], outcome_col)
-    return {"cols": list(cols), "beta": beta, "entry_threshold": thr}
+    return {"cols": list(cols), "beta": beta}
 
 
 def _default_predict(

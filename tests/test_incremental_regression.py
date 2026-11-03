@@ -195,3 +195,21 @@ def test_winsorization_strength_changes_the_estimate() -> None:
     assert np.isfinite(tight)
     assert np.isfinite(loose)
     assert abs(tight - loose) > 0.5
+
+
+def test_curve_summary_counts_controlled_survivors() -> None:
+    rng = np.random.default_rng(21)
+    n_days = 600
+    control = rng.standard_normal(n_days)
+    # the "signal" carries no information beyond the known control
+    echo = control + 0.2 * rng.standard_normal(n_days)
+    fwd = control + rng.standard_normal(n_days)
+    table = specification_curve(
+        fwd, [pd.DataFrame({"control": control})], echo
+    )
+    summary = curve_summary(table)
+    # lenient verdict survives on uncontrolled specs alone ...
+    assert summary["verdict"] == "SURVIVES"
+    assert summary["n_surviving"] >= 1
+    # ... but the controlled-survivor counter exposes the repackaging
+    assert summary["n_surviving_controlled"] == 0

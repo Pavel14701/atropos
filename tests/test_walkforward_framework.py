@@ -248,3 +248,19 @@ def test_overlapping_test_slices_produce_warning() -> None:
     data = _edge_frame(360, 85, 0.5)
     result = walkforward(data, train_window=150, test_window=50, step=10)
     assert any("overlap" in warning for warning in result["warnings"])
+
+
+def test_calendar_guard_matches_whole_tokens_not_substrings() -> None:
+    data = _edge_frame(360, 91, 0.5)
+    # "window" contains "dow", "update" contains "date" - benign names
+    for benign in ("window", "update"):
+        framed = data.rename(columns={"signal": benign})
+        result = walkforward(
+            framed, train_window=180, test_window=60, step=60
+        )
+        assert result["n_folds"] == 3
+    # genuine calendar dummies (incl. plurals) are still forbidden
+    for banned in ("year", "month", "dow", "doy", "days", "dates"):
+        framed = data.rename(columns={"signal": banned})
+        with pytest.raises(ValueError, match="calendar terms forbidden"):
+            walkforward(framed, train_window=180, test_window=60, step=60)

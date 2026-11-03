@@ -1,9 +1,18 @@
 """Incremental (HC0-robust) regression: is a new signal anything NEW?
 
-The kill rule: if the new signal's |t| drops below 2 once ANY reasonable
-specification is estimated - different control sets, rank / z-score /
-winsorized / demeaned transforms - the signal is a REPACKAGING of what the
-model already knows and the hypothesis dies.
+Two kill rules, deliberately different in strictness:
+
+* :func:`incremental_test` is the STRICT gate: one canonical controlled
+  spec - if the new signal's |t| < 2 once the known controls are in the
+  model, the signal is a REPACKAGING of what the model already knows and
+  the hypothesis dies.
+* :func:`specification_curve` / :func:`curve_summary` are the BREADTH
+  diagnostic: the curve spans control sets x rank / z-score / winsorized
+  / demeaned transforms, and the signal dies only if NO spec in the grid
+  reaches |t| >= 2.  ``n_surviving_controlled`` counts the specs that
+  survive WITH controls - a curve kept alive purely by uncontrolled
+  specs is a repackaging flag even when the lenient verdict says
+  SURVIVES.
 
 Functions
 ---------
@@ -339,9 +348,14 @@ def specification_curve(
 def curve_summary(spec_table: pd.DataFrame) -> dict[str, Any]:
     """Overall SURVIVES / REPACKAGING-DEATH call for a specification curve.
 
-    The rule: if NO reasonable spec pushes ``|t_new| >= 2``, the signal
-    is a repackaging of known information -> death.  A spec curve where
-    every spec flips sign is also reported via ``sign_consistent``.
+    The rule (lenient by design - the strict gate is
+    :func:`incremental_test`): if NO reasonable spec pushes
+    ``|t_new| >= 2``, the signal is a repackaging of known information ->
+    death.  ``n_surviving_controlled`` additionally counts the specs that
+    survive WITH known controls in the model; 0 surviving controlled
+    specs means the curve is kept alive by uncontrolled specs only - a
+    repackaging flag even when the verdict says SURVIVES.  A spec curve
+    where specs flip sign is reported via ``sign_consistent``.
 
     Example::
 
@@ -350,11 +364,23 @@ def curve_summary(spec_table: pd.DataFrame) -> dict[str, Any]:
         'SURVIVES'
     """
     t_vals = spec_table["t_new"].to_numpy(dtype=float)
-    t_vals = t_vals[np.isfinite(t_vals)]
+    finite = np.isfinite(t_vals)
+    t_vals = t_vals[finite]
     n_specs = int(t_vals.size)
     max_abs_t = float(np.max(np.abs(t_vals))) if n_specs else float("nan")
     min_abs_t = float(np.min(np.abs(t_vals))) if n_specs else float("nan")
     n_surviving = int(np.sum(np.abs(t_vals) >= _T_RULE)) if n_specs else 0
+    controls_col = (
+        spec_table["controls"].to_numpy()
+        if "controls" in spec_table.columns
+        else np.full(len(spec_table), "none", dtype=object)
+    )
+    controlled = (
+        (controls_col != "none")
+        & finite
+        & (np.abs(spec_table["t_new"].to_numpy(dtype=float)) >= _T_RULE)
+    )
+    n_surviving_controlled = int(np.sum(controlled))
     sign_consistent = bool(
         n_specs > 0 and np.all(np.sign(t_vals) == np.sign(t_vals[0]))
     )
@@ -363,6 +389,7 @@ def curve_summary(spec_table: pd.DataFrame) -> dict[str, Any]:
         "verdict": verdict,
         "n_specs": n_specs,
         "n_surviving": n_surviving,
+        "n_surviving_controlled": n_surviving_controlled,
         "max_abs_t": max_abs_t,
         "min_abs_t": min_abs_t,
         "sign_consistent": sign_consistent,

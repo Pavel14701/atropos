@@ -464,7 +464,7 @@ def turnover(positions: Any, periods: int = 252) -> dict[str, Any]:
         return {
             "rt_per_year": float("nan"),
             "turnover_per_period": float("nan"),
-            "n_rebalances": max(n_obs - 1, 0),
+            "n_rebalances": 0,
             "periods": int(periods),
         }
     diffs = np.abs(np.diff(pos))
@@ -472,7 +472,8 @@ def turnover(positions: Any, periods: int = 252) -> dict[str, Any]:
     return {
         "rt_per_year": tvr * float(periods),
         "turnover_per_period": tvr,
-        "n_rebalances": int(diffs.size),
+        # actual position CHANGES, not the raw number of diff steps
+        "n_rebalances": int(np.count_nonzero(diffs > 1e-12)),
         "periods": int(periods),
     }
 
