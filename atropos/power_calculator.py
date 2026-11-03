@@ -10,6 +10,13 @@ Model: testing ONE new coefficient in a linear regression with
 t distribution with noncentrality ``ncp = sqrt(f2 * n_obs)``,
 ``f2 = R2 / (1 - R2)`` (Cohen, 1988).
 
+Conservative assumption (worst case): this noncentrality is exact only
+when the other regressors explain none of the outcome variance
+(R2_other = 0).  With informative controls the true power is HIGHER
+and the truly detectable effect SMALLER than reported here, so
+preregistration thresholds derived from this module are conservative,
+never optimistic.
+
 Design rule of thumb: at N = 2000 a partial R-squared of about 0.002
 yields |t| ~ 2; R-squared of 0.003 yields |t| ~ 2.4 (see
 :func:`check_design_rule`, which validates this both analytically and by
@@ -20,7 +27,7 @@ Usage::
     from atropos.power_calculator import detectable_effect, power_for_effect
 
     n_needed = power_for_effect(partial_r2=0.003, n_predictors=25)  # ~2600
-    min_r2 = detectable_effect(n_obs=2000, n_predictors=25)         # ~0.0023
+    min_r2 = detectable_effect(n_obs=2000, n_predictors=25)         # ~0.0039
 
 Run ``python -m atropos.power_calculator`` for a synthetic demo.
 """
@@ -31,6 +38,8 @@ from typing import Any
 
 import numpy as np
 from scipy import stats as _st
+
+from atropos._utils import validate_int, validate_number
 
 __all__ = [
     "check_design_rule",
@@ -46,27 +55,44 @@ _MAX_N = 50_000_000
 def _power_at(
     partial_r2: float, n_obs: int, n_predictors: int, alpha: float
 ) -> float:
-    """Two-sided power of the t-test at sample size ``n_obs``."""
+    """Two-sided power of the t-test at sample size ``n_obs``.
+
+    ``scipy.stats.nct`` returns NaN on part of the (df, ncp) plane
+    (mid-range noncentrality, roughly ncp in 9..15 at small/medium df).
+    Treating that NaN as "power below target" silently inflated
+    ``detectable_effect`` up to 138x and broke its monotonicity in N.
+    In the NaN region the noncentral t is already indistinguishable
+    from N(ncp, 1), so the power falls back to the normal limit --
+    exact as df grows, and the working nct regions are untouched.
+    """
     df = int(n_obs) - int(n_predictors) - 1
     if df < 1:
         return 0.0
     f2 = partial_r2 / (1.0 - partial_r2)
     ncp = float(np.sqrt(f2 * n_obs))
     t_crit = float(_st.t.ppf(1.0 - alpha / 2.0, df))
-    return float(_st.nct.sf(t_crit, df, ncp) + _st.nct.cdf(-t_crit, df, ncp))
+    power = float(_st.nct.sf(t_crit, df, ncp) + _st.nct.cdf(-t_crit, df, ncp))
+    if np.isnan(power):
+        power = float(_st.norm.sf(t_crit - ncp) + _st.norm.cdf(-t_crit - ncp))
+    return power
 
 
 def _validate(
     partial_r2: float, n_predictors: int, alpha: float, power: float
 ) -> None:
-    """Raise ``ValueError`` unless the design parameters are in range."""
-    if not (0.0 < partial_r2 < 1.0):
+    """Raise ``ValueError`` unless the design parameters are in range.
+
+    Numeric coercion goes through ``validate_number`` /
+    ``validate_int``, so non-numeric input (``object()``) and
+    non-integer predictor counts fail as ``ValueError`` naming the
+    parameter, never as a bare ``TypeError`` from the comparison.
+    """
+    if not (0.0 < validate_number("partial_r2", partial_r2) < 1.0):
         raise ValueError(f"partial_r2 must be in (0, 1), got {partial_r2}")
-    if int(n_predictors) < 1:
-        raise ValueError(f"n_predictors must be >= 1, got {n_predictors}")
-    if not (0.0 < alpha < 1.0):
+    validate_int("n_predictors", n_predictors, minimum=0)
+    if not (0.0 < validate_number("alpha", alpha) < 1.0):
         raise ValueError(f"alpha must be in (0, 1), got {alpha}")
-    if not (0.0 < power < 1.0):
+    if not (0.0 < validate_number("power", power) < 1.0):
         raise ValueError(f"power must be in (0, 1), got {power}")
 
 
@@ -81,6 +107,11 @@ def power_for_effect(
     The ``power`` target (default 0.80) is the probability of rejecting
     the null at significance ``alpha``.
 
+    Conservative assumption: the noncentrality treats the other
+    ``n_predictors`` regressors as explaining none of the outcome
+    (R2_other = 0) - the worst case.  A real design with informative
+    controls needs at most this many observations, usually fewer.
+
     Example::
 
         >>> n_needed = power_for_effect(0.003, n_predictors=25)
@@ -89,7 +120,7 @@ def power_for_effect(
         True
     """
     _validate(partial_r2, n_predictors, alpha, power)
-    n_pred = int(n_predictors)
+    n_pred = int(n_predictors)  # integrality already proven by _validate
     lo = n_pred + 2
     if _power_at(partial_r2, lo, n_pred, alpha) >= power:
         return lo
@@ -121,26 +152,45 @@ def detectable_effect(
     The target ``power`` (default 0.80) is the rejection probability at
     sample size ``n_obs``.
 
+    Conservative assumption: the noncentrality treats the other
+    ``n_predictors`` regressors as explaining none of the outcome
+    (R2_other = 0) - the worst case.  With informative controls the
+    truly detectable effect is smaller than the value returned here,
+    so this is a safe preregistration threshold, never an optimistic
+    one.
+
     Example::
 
         >>> r2 = detectable_effect(n_obs=2000, n_predictors=25)
         ... # doctest: +SKIP
         >>> 0.001 < r2 < 0.005                        # doctest: +SKIP
         True
+
+    Raises:
+        ValueError: if ``n_predictors`` is not an integer >= 0 (a
+            negative control count would inflate the degrees of
+            freedom into nonsense), ``n_obs`` is not an integer or
+            ``n_obs <= n_predictors + 1``, or ``alpha`` / ``power``
+            outside (0, 1).
     """
-    n_obs = int(n_obs)
-    n_pred = int(n_predictors)
+    n_obs = validate_int("n_obs", n_obs)
+    n_pred = validate_int("n_predictors", n_predictors, minimum=0)
     if n_obs <= n_pred + 1:
         raise ValueError(
             f"n must exceed n_predictors + 1 (got n={n_obs}, k={n_pred})"
         )
-    if not (0.0 < alpha < 1.0) or not (0.0 < power < 1.0):
+    if not (0.0 < validate_number("alpha", alpha) < 1.0) or not (
+        0.0 < validate_number("power", power) < 1.0
+    ):
         raise ValueError("alpha and power must be in (0, 1)")
     lo, hi = 1e-9, 0.9999
     if _power_at(lo, n_obs, n_pred, alpha) >= power:
         return lo
     if _power_at(hi, n_obs, n_pred, alpha) < power:
-        return float("nan")  # unreachable at any effect size
+        # Not reachable for realistic alpha/df: the noncentral-t power
+        # saturates below 1 only for tiny df combined with an extreme
+        # alpha (e.g. 0.001), whose heavy tails can still fall short.
+        return float("nan")
     for _ in range(80):
         mid = float(np.sqrt(lo * hi))  # geometric bisection (monotone r2)
         if _power_at(mid, n_obs, n_pred, alpha) >= power:
@@ -182,10 +232,11 @@ def simulate_power(
 ) -> float:
     """Empirical rejection frequency of the t-test via Monte Carlo.
 
-    Regressions are simulated with orthonormal N(0,1) regressors so that
-    the planted coefficient implies exactly ``partial_r2``.  Useful to
-    validate the analytic power formula.  Keep ``n_sims`` moderate
-    (500-2000).
+    Regressors are iid N(0,1) draws, NOT orthonormal: the design matrix
+    is random, so the sample R-squared of the new predictor fluctuates
+    around the planted population value ``partial_r2`` from draw to
+    draw.  Useful to validate the analytic power formula.  Keep
+    ``n_sims`` moderate (500-2000).
 
     Example::
 
@@ -195,8 +246,8 @@ def simulate_power(
         True
     """
     _validate(partial_r2, n_predictors, alpha, 0.5)
-    n_obs = int(n_obs)
-    n_pred = int(n_predictors)
+    n_obs = validate_int("n_obs", n_obs)
+    n_pred = int(n_predictors)  # integrality already proven by _validate
     df = n_obs - n_pred - 1
     if df <= 0:
         raise ValueError("n must exceed n_predictors + 1")
@@ -229,6 +280,17 @@ def check_design_rule(
 ) -> dict[str, Any]:
     """Validate the working rule "N=2000 sees t~2 at partial R2~0.003".
 
+    Distinguishes two claims that are easy to conflate:
+      * Point estimate: if the OBSERVED partial R-squared equals the
+        design value, the fitted coefficient shows |t| =
+        ``t_analytic`` (~2.4 at the defaults).
+      * Power: if the TRUE partial R-squared is only large enough that
+        the expected |t| sits at the critical value, the test rejects
+        merely ~50% of the time - sampling noise pushes the estimate
+        below threshold the other half.  80% power requires a larger
+        effect or larger N: see :func:`detectable_effect` and
+        :func:`power_for_effect`.
+
     Returns analytic |t|, the exact partial R2 needed for |t| = 2 at
     this N, and the empirical power from :func:`simulate_power`.
 
@@ -238,8 +300,8 @@ def check_design_rule(
         >>> out["t_analytic"] > 2                      # doctest: +SKIP
         True
     """
-    n_obs = int(n_obs)
-    n_pred = int(n_predictors)
+    n_obs = validate_int("n_obs", n_obs)
+    n_pred = validate_int("n_predictors", n_predictors, minimum=0)
     df = n_obs - n_pred - 1
     t_analytic = t_stat_for_partial_r2(partial_r2, n_obs, n_pred)
     r2_for_t2 = 4.0 / (4.0 + df)  # solve t^2 = R2*df/(1-R2) at t = 2
@@ -265,7 +327,13 @@ def check_design_rule(
 
 
 def run_all_examples() -> None:
-    """Demo every calculator on the canonical N=2000 / R2=0.003 design."""
+    """Demo every calculator on the canonical N=2000 / R2=0.003 design.
+
+    The demo doubles as the layer-0 verification test: every printed
+    value is asserted (documented design points, round-trip consistency
+    between the two entry points, and monotonicity), so a regression
+    crashes the demo instead of printing a wrong number quietly.
+    """
     print("=" * 72)
     print("power_calculator demo")
     print("=" * 72)
@@ -275,22 +343,48 @@ def run_all_examples() -> None:
         f"power_for_effect(R2=0.003, k=25, power=0.80)  "
         f"-> N required = {n_needed}"
     )
+    # documented design point: R2=0.003 at k=25 needs roughly N ~ 2600
+    assert 2400 <= n_needed <= 2800
 
     min_r2 = detectable_effect(2000, n_predictors=25)
     print(
         f"detectable_effect(N=2000, k=25, power=0.80)   "
         f"-> min partial R2 = {min_r2:.5f}"
     )
+    assert abs(min_r2 - 0.0039) < 0.0005  # seeded-free bisection: 0.00391
+    # round-trip consistency: the effect detectable at N=2000 must
+    # require roughly N=2000 observations again
+    assert 1900 <= power_for_effect(min_r2, n_predictors=25) <= 2100
+    assert 1900 <= power_for_effect(0.0039, n_predictors=25) <= 2100
+    # monotonicity: more observations see smaller effects, and stronger
+    # effects need fewer observations
+    assert (
+        detectable_effect(1000, n_predictors=25)
+        > detectable_effect(2000, n_predictors=25)
+        > detectable_effect(4000, n_predictors=25)
+    )
+    assert power_for_effect(0.005, n_predictors=25) < power_for_effect(
+        0.003, n_predictors=25
+    )
 
     t_val = t_stat_for_partial_r2(0.003, n_obs=2000, n_predictors=25)
     print(
         f"t_stat_for_partial_r2(0.003, N=2000, k=25)    -> |t| = {t_val:.3f}"
     )
+    assert 2.3 < t_val < 2.6  # exact formula: sqrt(.003 * 1974 / .997)
 
     rule = check_design_rule(n_sims=300)
     print("\ncheck_design_rule():")
     for key, val in rule.items():
         print(f"  {key}: {val}")
+    assert rule["t_analytic"] == t_val  # same closed form, same inputs
+    assert abs(rule["r2_needed_for_t_equals_2"] - 4.0 / (4.0 + 1974)) < (
+        1e-12
+    )
+    # empirical_power is a seeded MC estimate (seed=0, ~0.67): the
+    # range below is seed-specific, the finiteness property is not
+    assert np.isfinite(rule["empirical_power"])
+    assert 0.5 <= rule["empirical_power"] <= 0.85
 
 
 if __name__ == "__main__":

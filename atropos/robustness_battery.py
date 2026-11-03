@@ -20,10 +20,31 @@ All confidence intervals use a circular moving-block bootstrap
 autocorrelation.
 
 Overall verdict:
-* ``DEAD``    - any test is catastrophic (CI excludes zero with the
-  OPPOSITE sign to the baseline effect),
+* ``DEAD``    - the baseline row itself FAILs (its CI includes zero,
+  or the rule never trades: no edge survived to attack), or any
+  test is catastrophic,
 * ``ROBUST``  - at least 5 of 7 tests pass,
 * ``FRAGILE`` - otherwise.
+
+``catastrophic`` semantics differ per test because the attacks
+estimate different quantities -- each attack must die on whatever is
+worst for that specific attack:
+
+* tests 1/2/3/6 - threshold-scaled / window-smoothed / subperiod /
+  declustered mean return: a block-bootstrap CI excluding zero with
+  the OPPOSITE sign to the baseline effect;
+* test 4 (leave-one-out, no CI) - removing ONE active day flips the
+  mean to the opposite baseline sign with ``|mu|/se > 2``;
+* test 5 (placebo lag) - the placebo CI excludes zero WITH the
+  baseline sign and ``|mu_placebo| >= |mu_baseline|`` (the "edge"
+  survives a causally impossible lag);
+* test 7 (sign monotonicity) - per-pair Spearman ``rho <= -0.15``
+  with ``p < 0.01`` over ``>= 100`` pairs; the 3-point bucket
+  Spearman alone never declares catastrophic.
+
+Row verdicts are PASS / FAIL, except ``placebo_lag`` which returns
+INCONCLUSIVE when its CI is degenerate (too few usable rows) -- an
+untestable placebo is never a silent PASS.
 
 Usage::
 
@@ -44,6 +65,8 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+from atropos._utils import align_inputs, block_indices
+
 __all__ = ["battery_overall", "run_battery"]
 
 _REQUIRED = ("threshold", "window")
@@ -51,66 +74,8 @@ _MIN_PASS_ROBUST = 5
 
 
 # ----------------------------------------------------------------------------
-# helpers (self-contained: duplicated so the module imports alone)
+# helpers
 # ----------------------------------------------------------------------------
-def _frameify(source: Any, tag: str) -> pd.DataFrame:
-    if isinstance(source, pd.Series):
-        return source.to_frame(name=tag)
-    if isinstance(source, pd.DataFrame):
-        return source.add_prefix(tag + "::")
-    arr = np.asarray(source, dtype=float)
-    if arr.ndim == 1:
-        return pd.DataFrame({tag: arr})
-    if arr.ndim != 2:
-        raise ValueError(
-            f"input {tag!r} must be 1-D or 2-D, got ndim={arr.ndim}"
-        )
-    return pd.DataFrame(
-        arr, columns=[f"{tag}::{col}" for col in range(arr.shape[1])]
-    )
-
-
-def _align(*arrays: Any) -> list[np.ndarray]:
-    """Align pandas inputs by index, numpy by position; drop NaN rows.
-
-    Mixing pandas and numpy inputs is allowed: numpy arrays inherit the
-    index of the first pandas input when lengths match (positional
-    alignment).
-    """
-    frames = [_frameify(item, f"v{slot}") for slot, item in enumerate(arrays)]
-    ref_index = None
-    for item in arrays:
-        if isinstance(item, (pd.Series, pd.DataFrame)) and not isinstance(
-            item.index, pd.RangeIndex
-        ):
-            ref_index = item.index
-            break
-    if ref_index is not None:
-        # frames is built 1:1 from arrays, so the strict zip is safe
-        for slot, (item, frame) in enumerate(
-            zip(arrays, frames, strict=True)
-        ):
-            if not isinstance(item, (pd.Series, pd.DataFrame)):
-                if len(frame) == len(ref_index):
-                    frame.index = ref_index
-                else:
-                    raise ValueError(
-                        f"input {slot} (numpy, len={len(frame)}) cannot"
-                        " be aligned with the pandas index"
-                        f" (len={len(ref_index)}); pass pandas inputs or"
-                        " equal-length arrays"
-                    )
-    comb = pd.concat(frames, axis=1, join="inner").dropna()
-    out: list[np.ndarray] = []
-    pos = 0
-    for frame in frames:
-        width = frame.shape[1]
-        block = comb.iloc[:, pos : pos + width].to_numpy(dtype=float)
-        out.append(block.reshape(-1) if width == 1 else block)
-        pos += width
-    return out
-
-
 def _pos_from_signal(signal: np.ndarray, threshold: float) -> np.ndarray:
     with np.errstate(invalid="ignore"):
         return (signal > threshold).astype(float)  # NaN -> False -> flat
@@ -138,12 +103,10 @@ def _boot_ci_mean(
     n_obs = int(vals.size)
     if n_obs < 10:
         return float("nan"), float("nan"), float("nan")
-    block = int(min(max(block, 1), n_obs))
-    n_blocks = int(np.ceil(n_obs / block))
     rng = np.random.default_rng(seed)
-    starts = rng.integers(0, n_obs, size=(int(n_boot), n_blocks))
-    idx = (starts[:, :, None] + np.arange(block)) % n_obs
-    idx = idx.reshape(int(n_boot), n_blocks * block)[:, :n_obs]
+    # shared helper; the single rng.integers draw reproduces the
+    # historical inline indices exactly for a fixed seed
+    idx = block_indices(n_obs, int(n_boot), block, rng)
     means = vals[idx].mean(axis=1)
     tail = (1.0 - ci_level) / 2.0
     lo = float(np.quantile(means, tail))
@@ -194,10 +157,19 @@ def _ci_sign(eff: dict[str, Any]) -> int:
 
 
 def _roll_mean(values: np.ndarray, window: int) -> np.ndarray:
-    window = int(window)
+    """Trailing mean with an expanding head, same length as input.
+
+    ``window`` is defensively clamped to ``values.size``: the head
+    divides ``csum[1:window]`` (length ``<= values.size``) by
+    ``arange(1, window)`` (length ``window - 1``), so an oversized
+    window would crash with a broadcast error instead of degrading
+    to the expanding mean.
+    """
     values = np.asarray(values, dtype=float)
-    if window <= 1:
+    window = int(window)
+    if values.size == 0 or window <= 1:
         return values.copy()
+    window = int(min(window, values.size))
     csum = np.cumsum(np.concatenate([[0.0], values]))
     head = csum[1:window] / np.arange(1, window)  # expanding means first
     tail = (csum[window:] - csum[:-window]) / window  # trailing windows
@@ -226,7 +198,17 @@ def run_battery(  # noqa: PLR0912, PLR0915  # one branch per test
     Each row: ``{test, stat, t_stat, ci_low, ci_high, verdict,
     catastrophic, note}``.  ``stat`` is the mean daily strategy return.
     The final row ``OVERALL`` carries the ROBUST / FRAGILE / DEAD
-    verdict in ``verdict``.
+    verdict in ``verdict``: DEAD when the baseline row itself FAILs
+    (or the rule never trades -- no edge survived to attack) or any
+    test is catastrophic, ROBUST when at least 5 of the 7 attacks
+    pass, FRAGILE otherwise.
+
+    Raises:
+        ValueError: if ``base_params`` misses a required key,
+            ``threshold`` is not finite, ``window < 1``, fewer than
+            60 aligned observations remain, or ``window >= n_obs``
+            (``window`` doubles as the placebo lag, and a lag covering
+            the whole sample would make the placebo trivially pass).
 
     Example::
 
@@ -253,11 +235,20 @@ def run_battery(  # noqa: PLR0912, PLR0915  # one branch per test
     ci_level = float(base_params.get("ci_level", 0.95))
     seed0 = int(base_params.get("seed", 0))
 
-    sig, outcome = _align(signal_series, outcome_series)
+    sig, outcome = align_inputs(signal_series, outcome_series)
     n_obs = int(sig.size)
     if n_obs < 60:
         raise ValueError(
             f"need at least 60 aligned observations, got {n_obs}"
+        )
+    if window >= n_obs:
+        # gate before any computation: an oversized base window also
+        # breaks test 2's derived windows, and window == the placebo
+        # lag >= n_obs would leave the placebo sample all-NaN
+        raise ValueError(
+            f"window must satisfy 1 <= window < n_obs, got"
+            f" window={window}, n_obs={n_obs}; window doubles as the"
+            " placebo lag and a lag >= n_obs leaves nothing testable"
         )
 
     rows: list[dict[str, Any]] = []
@@ -293,11 +284,23 @@ def run_battery(  # noqa: PLR0912, PLR0915  # one branch per test
     )
     if not np.isfinite(base["mu"]):
         raise ValueError("baseline strategy return is not computable")
+    # bs is the baseline sign every attack is compared against: +1
+    # long-biased edge, -1 short-biased.  np.sign(mu) == 0 (flat or
+    # never-traded baseline) falls back to +1 only so sign
+    # comparisons stay defined; with the DEAD-on-failed-baseline rule
+    # such a run is already DEAD, so the fallback can never rescue a
+    # dead strategy into ROBUST.
     bs = np.sign(base["mu"]) if np.sign(base["mu"]) != 0 else 1.0
+    # early kill: zero active days means the rule never traded on its
+    # own threshold -- there is no edge to attack, so the verdict is
+    # DEAD no matter what the seven tests report (they still run and
+    # are kept in the table for diagnostics)
+    no_active_days = int(base["n_active"]) == 0
+    baseline_failed = no_active_days or not _excl0(base)
     add(
         "baseline",
         base,
-        "PASS" if _excl0(base) else "FAIL",
+        "FAIL" if baseline_failed else "PASS",
         False,
         "long/flat on signal > threshold, 1-period lag",
     )
@@ -334,12 +337,18 @@ def run_battery(  # noqa: PLR0912, PLR0915  # one branch per test
     )
 
     # --- 2. window sensitivity ----------------------------------------
-    windows = sorted(
-        {max(1, round(window * mult)) for mult in (0.5, 1.0, 1.5)}
-    )
+    # derived windows (1.5x) can overshoot a short sample; clamp them
+    # to n_obs so _roll_mean degrades to an expanding mean instead of
+    # crashing, and record the clamp in the row note
+    window_pairs = [
+        (min(raw_window, n_obs), raw_window)
+        for raw_window in sorted(
+            {max(1, round(window * mult)) for mult in (0.5, 1.0, 1.5)}
+        )
+    ]
     sign_ok, excl_cnt, cat, parts = True, 0, False, []
-    for win_len in windows:
-        sig_smooth = _roll_mean(sig, win_len)
+    for eff_window, raw_window in window_pairs:
+        sig_smooth = _roll_mean(sig, eff_window)
         eff = _effect(
             sig_smooth,
             outcome,
@@ -347,9 +356,15 @@ def run_battery(  # noqa: PLR0912, PLR0915  # one branch per test
             n_boot=n_boot,
             block=block,
             ci_level=ci_level,
-            seed=seed0 + win_len,
+            seed=seed0 + eff_window,
         )
-        parts.append(f"w={win_len}: mu={eff['mu']:+.5f}")
+        if eff_window == raw_window:
+            parts.append(f"w={eff_window}: mu={eff['mu']:+.5f}")
+        else:
+            parts.append(
+                f"w={eff_window} (clamped from {raw_window}):"
+                f" mu={eff['mu']:+.5f}"
+            )
         if np.sign(eff["mu"]) != bs:
             sign_ok = False
         if _excl0(eff):
@@ -448,12 +463,22 @@ def run_battery(  # noqa: PLR0912, PLR0915  # one branch per test
     cat = bool(
         excl and _ci_sign(eff_p) == bs and abs(eff_p["mu"]) >= abs(base["mu"])
     )
-    verdict = "FAIL" if excl else "PASS"
-    note = f"signal lagged by {window}; placebo mu={eff_p['mu']:+.5f} " + (
-        "CI excludes 0" if excl else "CI includes 0"
-    )
-    if not np.isfinite(eff_p["ci_low"]):
-        verdict, note = "PASS", note + " (degenerate CI)"
+    if not (np.isfinite(eff_p["ci_low"]) and np.isfinite(eff_p["ci_high"])):
+        # fail-closed: a degenerate placebo CI means the placebo is
+        # untestable, NOT that the strategy passed it -- a silent PASS
+        # here would wave dead strategies through the battery
+        verdict = "INCONCLUSIVE"
+        note = (
+            f"signal lagged by {window}; degenerate placebo CI"
+            f" (mu={eff_p['mu']:+.5f}) - not testable"
+        )
+    else:
+        verdict = "FAIL" if excl else "PASS"
+        ci_state = "CI excludes 0" if excl else "CI includes 0"
+        note = (
+            f"signal lagged by {window}; placebo mu={eff_p['mu']:+.5f} "
+            f"{ci_state}"
+        )
     add(
         "placebo_lag",
         {
@@ -577,11 +602,27 @@ def run_battery(  # noqa: PLR0912, PLR0915  # one branch per test
     test_rows = [row for row in rows if row["test"] != "baseline"]
     n_pass = int(sum(row["verdict"] == "PASS" for row in test_rows))
     cat_any = bool(any(row["catastrophic"] for row in test_rows))
-    verdict = (
-        "DEAD"
-        if cat_any
-        else ("ROBUST" if n_pass >= _MIN_PASS_ROBUST else "FRAGILE")
-    )
+    if baseline_failed:
+        # the baseline FAILs (or never traded): without a surviving
+        # baseline edge the attack rows are diagnostics only -- the
+        # verdict must be DEAD even if the attacks happen to pass
+        verdict = "DEAD"
+        note = (
+            "no active days on the baseline threshold - nothing to test"
+            if no_active_days
+            else "baseline itself failed - nothing to test"
+        )
+    else:
+        verdict = (
+            "DEAD"
+            if cat_any
+            else ("ROBUST" if n_pass >= _MIN_PASS_ROBUST else "FRAGILE")
+        )
+        note = (
+            f"{n_pass}/7 tests passed; catastrophic={cat_any}; "
+            f"rules: DEAD if any catastrophic, "
+            f"ROBUST if >= {_MIN_PASS_ROBUST}/7"
+        )
     rows.append(
         {
             "test": "OVERALL",
@@ -591,11 +632,7 @@ def run_battery(  # noqa: PLR0912, PLR0915  # one branch per test
             "ci_high": float("nan"),
             "verdict": verdict,
             "catastrophic": cat_any,
-            "note": (
-                f"{n_pass}/7 tests passed; catastrophic={cat_any}; "
-                f"rules: DEAD if any catastrophic, "
-                f"ROBUST if >= {_MIN_PASS_ROBUST}/7"
-            ),
+            "note": note,
         }
     )
     return pd.DataFrame(rows)
@@ -621,7 +658,13 @@ def battery_overall(table: pd.DataFrame) -> str:
 # demo
 # ----------------------------------------------------------------------------
 def run_all_examples() -> None:
-    """Demo the battery on synthetic data with a planted, persistent edge."""
+    """Demo the battery: planted edge, never-trading rule, bad window.
+
+    Covers the default planted-edge config plus the two edge cases
+    the battery must handle explicitly: a rule that never trades is
+    DEAD (asserted), and ``window >= n_obs`` is rejected up front
+    with ValueError (caught and printed here).
+    """
     print("=" * 72)
     print("robustness_battery demo: planted AR(1) edge")
     print("=" * 72)
@@ -651,6 +694,57 @@ def run_all_examples() -> None:
             )
         )
     print("\nOVERALL:", battery_overall(table))
+    # layer-0 verification: the planted AR(1) edge on the default demo
+    # config must come back ROBUST (verified fact for this seeded
+    # config: 6/7 attacks pass, nothing catastrophic)
+    assert battery_overall(table) == "ROBUST", battery_overall(table)
+
+    print("\n" + "=" * 72)
+    print("edge case: rule that never trades -> DEAD, not ROBUST")
+    print("=" * 72)
+    rng_dead = np.random.default_rng(12)
+    dead_signal = rng_dead.standard_normal(300)
+    dead_outcome = rng_dead.standard_normal(300)
+    dead_table = run_battery(
+        dead_signal,
+        dead_outcome,
+        {
+            # far above any draw of the signal: zero active days
+            "threshold": 10.0,
+            "window": 20,
+            "n_boot": 200,
+            "block": 10,
+            "seed": 1,
+        },
+    )
+    dead_overall = battery_overall(dead_table)
+    print(
+        "OVERALL:",
+        dead_overall,
+        "| note:",
+        str(dead_table.loc[dead_table["test"] == "OVERALL", "note"].iloc[0]),
+    )
+    assert dead_overall == "DEAD", dead_overall
+
+    print("\n" + "=" * 72)
+    print("edge case: window >= n_obs is rejected before any compute")
+    print("=" * 72)
+    try:
+        run_battery(
+            dead_signal,
+            dead_outcome,
+            {
+                "threshold": 0.0,
+                "window": 300,  # == n_obs: placebo lag covers the sample
+                "n_boot": 200,
+                "block": 10,
+                "seed": 1,
+            },
+        )
+    except ValueError as exc:
+        print("rejected as expected:", exc)
+    else:
+        raise AssertionError("window >= n_obs must raise ValueError")
 
 
 if __name__ == "__main__":

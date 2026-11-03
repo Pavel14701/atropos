@@ -1,9 +1,17 @@
 """Preregistration generator for the hypothesis-killing pipeline.
 
-Turns a parameter dict into a frozen markdown prereg document.  Validates that
-all required fields are present and that every kill criterion carries a
-numeric threshold, so a hypothesis cannot be preregistered with a soft,
-movable kill switch.
+Turns a parameter dict into a frozen markdown prereg document.  Validates
+that all required fields are present and that every kill criterion is a
+hard directional rule - a comparison operator bound to a numeric
+threshold - so a hypothesis cannot be preregistered with a soft, movable
+kill switch.
+
+One deliberate exception to "hard directional": ``~`` remains an
+allowed ``comparison`` value (removing it would be a breaking change),
+but it is allowed only as an explicit diagnostic/approximate marker -
+a kill criterion written with ``~`` must be understood as approximate;
+prefer the directional operators (``<``, ``<=``, ``>``, ``>=``) for
+hard kills.
 
 Required input keys::
 
@@ -12,9 +20,13 @@ Required input keys::
       "hypothesis":    str,
       "construction":  str | list[str],    # how the signal is built
       "nulls":         str | list[str],    # null hypotheses to be rejected
-      "kill_criteria": list[dict | str],   # dicts need a numeric
-                                           # "threshold"; plain strings
-                                           # must contain a number
+      "kill_criteria": list[dict | str],   # dicts need "criterion", a
+                                           # numeric "threshold" AND a
+                                           # required "comparison" in
+                                           # < <= > >= == ~; plain
+                                           # strings must bind a
+                                           # comparison operator to a
+                                           # number ("IC < 0.05")
       "power_calc":    str | list | dict,  # power analysis summary
       "hash":          str,                # content hash of the frozen spec
     }
@@ -48,14 +60,17 @@ REQUIRED_FIELDS: tuple[str, ...] = (
     "hash",
 )
 
-_NUMBER_RE = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?")
 # The frozen threshold is the number a comparison operator points at,
-# not merely the first number in the sentence: "IC < 0.05 on 200 days"
-# must freeze 0.05, not 200.  "~" is excluded - it is the fuzzy default,
-# not a comparison.
+# not merely any number in the sentence: "IC < 0.05 on 200 days" must
+# freeze 0.05, not 200, and "wait 200 days" freezes nothing at all.
+# "~" is excluded - it is the fuzzy marker, not a comparison.
 _OP_NUMBER_RE = re.compile(
-    r"(?:<=|>=|==|<|>)\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)"
+    r"(<=|>=|==|<|>)\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)"
 )
+# "~" is allowed only as an explicit diagnostic/approximate marker; a
+# kill criterion written with "~" must be understood as approximate -
+# prefer directional operators for hard kills.  Kept allowed so existing
+# preregs do not break; see the module docstring.
 _ALLOWED_COMPARISONS = {"<", "<=", ">", ">=", "==", "~"}
 
 
@@ -90,22 +105,59 @@ def _scalar_field_problems(params: dict[str, Any]) -> list[str]:
 
 
 def _content_field_problems(params: dict[str, Any]) -> list[str]:
-    """Problems with the content fields construction/nulls/power_calc."""
+    """Problems with the content fields construction/nulls/power_calc.
+
+    Contract: ``construction`` and ``nulls`` must be a non-empty string
+    or a non-empty list of strings; ``power_calc`` may additionally be
+    a non-empty dict.  Anything else (None, int, dict in a string
+    field, non-string list items) is reported instead of being
+    silently stringified.
+    """
     problems: list[str] = []
     for field in ("construction", "nulls", "power_calc"):
         value = params[field]
+        expected = (
+            "a non-empty string, list of strings, or non-empty dict"
+            if field == "power_calc"
+            else "a non-empty string or list of strings"
+        )
         if isinstance(value, dict):
-            if not value:
+            if field != "power_calc":
+                problems.append(
+                    f"field '{field}' must be {expected}, got dict"
+                )
+            elif not value:
                 problems.append(f"field '{field}' must not be an empty dict")
-        elif not any(item.strip() for item in _as_list(value)):
+        elif isinstance(value, (list, tuple)):
+            bad_items = [item for item in value if not isinstance(item, str)]
+            if bad_items:
+                problems.append(
+                    f"field '{field}' list items must be strings, "
+                    f"got {type(bad_items[0]).__name__}"
+                )
+            elif not any(item.strip() for item in value):
+                problems.append(
+                    f"field '{field}' must be {expected}; the list "
+                    f"has no non-empty item"
+                )
+        elif not _nonempty_str(value):
             problems.append(
-                f"field '{field}' must be a non-empty string or list"
+                f"field '{field}' must be {expected}, "
+                f"got {type(value).__name__}"
             )
     return problems
 
 
 def _dict_criterion_problems(label: str, crit: dict[str, Any]) -> list[str]:
-    """Problems with one dict-form kill criterion."""
+    """Problems with one dict-form kill criterion.
+
+    ``comparison`` is required, not defaulted: a dict criterion without
+    an explicit direction would be a soft, movable kill switch.  The
+    accepted set includes ``~``, which is allowed only as an explicit
+    diagnostic/approximate marker - a kill criterion written with
+    ``~`` must be understood as approximate; prefer directional
+    operators for hard kills.
+    """
     problems: list[str] = []
     if not _nonempty_str(crit.get("criterion", "")):
         problems.append(f"{label}: missing non-empty 'criterion' text")
@@ -116,21 +168,33 @@ def _dict_criterion_problems(label: str, crit: dict[str, Any]) -> list[str]:
             f"{label}: 'threshold' must be a finite number, "
             f"got {crit['threshold']!r}"
         )
-    comparison = crit.get("comparison", "~")
-    if comparison not in _ALLOWED_COMPARISONS:
+    if "comparison" not in crit:
         problems.append(
-            f"{label}: comparison {comparison!r} not in "
+            f"{label}: missing required 'comparison' "
+            f"(one of {sorted(_ALLOWED_COMPARISONS)})"
+        )
+    elif crit["comparison"] not in _ALLOWED_COMPARISONS:
+        problems.append(
+            f"{label}: comparison {crit['comparison']!r} not in "
             f"{sorted(_ALLOWED_COMPARISONS)}"
         )
     return problems
 
 
 def _string_criterion_problems(label: str, crit: str) -> list[str]:
-    """Problems with one string-form kill criterion."""
+    """Problems with one string-form kill criterion.
+
+    A bare number is not enough: the string must bind a comparison
+    operator to a number ("IC < 0.05").  Otherwise soft phrases like
+    "wait 200 days" would slip through as kill criteria.
+    """
     if not crit.strip():
         return [f"{label}: empty string"]
-    if _NUMBER_RE.search(crit) is None:
-        return [f"{label}: no numeric threshold found in {crit!r}"]
+    if _OP_NUMBER_RE.search(crit) is None:
+        return [
+            f"{label}: no comparison operator bound to a numeric "
+            f"threshold found in {crit!r} (e.g. 'IC < 0.05')"
+        ]
     return []
 
 
@@ -162,16 +226,25 @@ def _kill_criteria_problems(kill_criteria: Any) -> list[str]:
     return problems
 
 
-def validate_prereg(params: dict[str, Any]) -> list[str]:
+def validate_prereg(params: Any) -> list[str]:
     """Return the list of validation problems; empty list means valid.
 
     Checks:
+      * ``params`` is a dict (anything else is reported as a problem),
       * all REQUIRED_FIELDS present,
       * name / hypothesis / hash are non-empty strings,
-      * construction / nulls / power_calc non-empty,
-      * every kill criterion carries a numeric threshold.  Dict form:
+      * construction / nulls are a non-empty string or list of
+        strings; power_calc may also be a non-empty dict,
+      * every kill criterion is a hard directional rule.  Dict form:
         ``{"criterion": str, "threshold": number, "comparison": one of
-        < <= > >= == ~}``; string form: must contain at least one number.
+        < <= > >= == ~}`` - ``comparison`` is REQUIRED, no default;
+        string form: a comparison operator bound to a number
+        (``"IC < 0.05"``), so bare numbers in prose ("wait 200 days")
+        are rejected.
+
+    ``~`` is allowed only as an explicit diagnostic/approximate marker;
+    a kill criterion written with ``~`` must be understood as
+    approximate - prefer directional operators for hard kills.
 
     Example::
 
@@ -181,9 +254,7 @@ def validate_prereg(params: dict[str, Any]) -> list[str]:
     """
     if not isinstance(params, dict):
         # Defensive runtime guard: callers may pass non-dict payloads.
-        return [  # type: ignore[unreachable]
-            f"params must be a dict, got {type(params).__name__}"
-        ]
+        return [f"params must be a dict, got {type(params).__name__}"]
 
     problems = [
         f"missing required field: {field}"
@@ -200,7 +271,12 @@ def validate_prereg(params: dict[str, Any]) -> list[str]:
 
 
 def _criteria_rows(criteria: Any) -> list[tuple[str, str, str]]:
-    """Extract ``(criterion, threshold, comparison)`` display rows."""
+    """Extract ``(criterion, threshold, comparison)`` display rows.
+
+    For string-form criteria the Rule column shows the operator that
+    was actually matched in the string (e.g. ``>=`` in "p >= 0.05"),
+    not a placeholder.
+    """
     items = [criteria] if isinstance(criteria, str) else list(criteria)
     rows: list[tuple[str, str, str]] = []
     for crit in items:
@@ -209,24 +285,20 @@ def _criteria_rows(criteria: Any) -> list[tuple[str, str, str]]:
                 (
                     str(crit.get("criterion", "")).strip(),
                     str(crit["threshold"]),
-                    str(crit.get("comparison", "~")),
+                    str(crit["comparison"]),
                 )
             )
         else:
             op_match = _OP_NUMBER_RE.search(crit)
-            any_match = (
-                op_match
-                if op_match is not None
-                else (_NUMBER_RE.search(crit))
-            )
-            # validate_prereg guarantees a number in string criteria.
-            assert any_match is not None
-            value = (
-                op_match.group(1)
-                if op_match is not None
-                else any_match.group(0)
-            )
-            rows.append((crit.strip(), value, "~"))
+            if op_match is None:
+                # validate_prereg guarantees operator+number in string
+                # criteria; fail loudly instead of rendering a bogus
+                # row if that contract is ever broken.
+                raise ValueError(
+                    f"string criterion lacks a comparison operator "
+                    f"bound to a number: {crit!r}"
+                )
+            rows.append((crit.strip(), op_match.group(2), op_match.group(1)))
     return rows
 
 
@@ -274,11 +346,23 @@ def _render_kill_criteria_section(criteria: Any) -> list[str]:
     return lines
 
 
+def _inline(text: Any) -> str:
+    """Stringify ``text`` with whitespace collapsed onto one line."""
+    return " ".join(str(text).split())
+
+
 def _render_power_section(power_calc: Any) -> list[str]:
-    """Render the ``## Power analysis`` markdown section."""
+    """Render the ``## Power analysis`` markdown section.
+
+    Values are stringified inline: a stray newline in a value must not
+    break out of the bullet list.
+    """
     lines = ["## Power analysis", ""]
     if isinstance(power_calc, dict):
-        lines.extend(f"- **{key}:** {val}" for key, val in power_calc.items())
+        lines.extend(
+            f"- **{_inline(key)}:** {_inline(val)}"
+            for key, val in power_calc.items()
+        )
     else:
         lines.extend(
             f"- {item.strip()}"
@@ -295,12 +379,9 @@ def _render_attestation_section() -> list[str]:
         "## Attestation",
         "",
         "This specification (construction, nulls, kill criteria, power) "
-        "was frozen",
-        "before any outcome data was evaluated against it. Post-hoc "
-        "changes invalidate",
-        "the preregistration; any deviation must be logged as a separate "
-        "amendment",
-        "with a new hash.",
+        "was frozen before any outcome data was evaluated against it. "
+        "Post-hoc changes invalidate the preregistration; any deviation "
+        "must be logged as a separate amendment with a new hash.",
     ]
 
 
@@ -308,7 +389,8 @@ def generate_prereg(params: dict[str, Any], date: str | None = None) -> str:
     """Render the preregistration as a markdown string.
 
     Raises ``ValueError`` listing all validation problems if ``params``
-    fails :func:`validate_prereg`.
+    fails :func:`validate_prereg`, or if ``date`` is given and is not an
+    ISO-formatted date (``YYYY-MM-DD``); ``date=None`` stamps today.
 
     Example::
 
@@ -329,7 +411,15 @@ def generate_prereg(params: dict[str, Any], date: str | None = None) -> str:
             "invalid prereg params:\n  - " + "\n  - ".join(problems)
         )
 
-    stamp = date or _dt.date.today().isoformat()
+    if date is None:
+        stamp = _dt.date.today().isoformat()
+    else:
+        try:
+            stamp = _dt.date.fromisoformat(date).isoformat()
+        except ValueError as exc:
+            raise ValueError(
+                f"date must be an ISO date (YYYY-MM-DD), got {date!r}"
+            ) from exc
 
     lines: list[str] = [
         f"# Preregistration: {params['name'].strip()}",
@@ -351,7 +441,14 @@ def generate_prereg(params: dict[str, Any], date: str | None = None) -> str:
 
 
 def run_all_examples() -> None:
-    """Demo: render a valid prereg and show a failing validation."""
+    """Demo: render a valid prereg and show a failing validation.
+
+    The demo doubles as the layer-0 verification test: the valid spec
+    must validate and render (with the kill-criteria table showing the
+    operators actually used), and the soft kill switches (non-numeric
+    threshold, "wait 200 days" prose, dict without a comparison) must
+    all be rejected - a regression crashes the demo, not a hypothesis.
+    """
     params = {
         "name": "demo_overnight_imbalance_edge",
         "hypothesis": (
@@ -399,7 +496,25 @@ def run_all_examples() -> None:
     print("=" * 72)
     print("prereg_generator demo: valid prereg")
     print("=" * 72)
-    print(generate_prereg(params))
+    # layer-0 verification: the valid spec validates and renders with
+    # the kill-criteria table binding the operators actually used
+    assert validate_prereg(params) == []
+    doc = generate_prereg(params)
+    print(doc)
+    assert "# Preregistration: demo_overnight_imbalance_edge" in doc
+    assert "## Attestation" in doc
+    assert (
+        "| 1 | \\|t\\| of new signal after momentum7 + momentum30"
+        " controls | < | 2.0 |" in doc
+    )
+    assert (
+        "| 2 | share of total PnL contributed by the best subperiod"
+        " | > | 0.6 |" in doc
+    )
+    assert (
+        "| 3 | event-day mean return not extreme vs 200 placebo draws"
+        " (p >= 0.05) | >= | 0.05 |" in doc
+    )
 
     bad = dict(params)
     bad["kill_criteria"] = [
@@ -415,11 +530,42 @@ def run_all_examples() -> None:
         "prereg_generator demo: invalid params (non-numeric kill threshold)"
     )
     print("=" * 72)
+    raised = False
     try:
         generate_prereg(bad)
     except ValueError as exc:
+        raised = True
         print("ValueError raised as expected:")
         print(exc)
+    assert raised, "a non-numeric kill threshold must raise ValueError"
+    assert any(
+        "must be a finite number" in problem
+        for problem in validate_prereg(bad)
+    )
+
+    # more soft kill switches that must be rejected: a bare number in
+    # prose freezes nothing, and a dict criterion without a comparison
+    # has no direction
+    soft = dict(params)
+    soft["kill_criteria"] = ["wait 200 days before final check"]
+    soft_problems = validate_prereg(soft)
+    # at least the soft criterion itself is reported (every other
+    # field is still the valid spec above); a precise count is brittle
+    # against future validation additions
+    assert len(soft_problems) >= 1, soft_problems
+    assert any(
+        "no comparison operator" in problem for problem in soft_problems
+    )
+
+    directionless = dict(params)
+    directionless["kill_criteria"] = [
+        {"criterion": "t-stat after controls", "threshold": 2.0}
+    ]
+    directionless_problems = validate_prereg(directionless)
+    assert directionless_problems, (
+        "dict criterion without 'comparison' must be rejected"
+    )
+    assert "missing required 'comparison'" in directionless_problems[0]
 
 
 if __name__ == "__main__":

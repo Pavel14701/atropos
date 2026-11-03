@@ -8,12 +8,15 @@ closed-form noncentral-t power, ``check_design_rule`` output, and the
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 import pytest
 from atropos.power_calculator import (
     check_design_rule,
     detectable_effect,
     power_for_effect,
+    run_all_examples,
     simulate_power,
     t_stat_for_partial_r2,
 )
@@ -104,8 +107,8 @@ def test_check_design_rule_reports_expected_fields() -> None:
 def test_invalid_designs_raise_value_error() -> None:
     with pytest.raises(ValueError, match=r"partial_r2 must be in \(0, 1\)"):
         power_for_effect(0.0, n_predictors=25)
-    with pytest.raises(ValueError, match="n_predictors must be >= 1"):
-        power_for_effect(0.3, n_predictors=0)
+    with pytest.raises(ValueError, match="n_predictors must be >= 0"):
+        power_for_effect(0.3, n_predictors=-1)
     with pytest.raises(ValueError, match="exceeds"):
         power_for_effect(1e-12, n_predictors=25)
     with pytest.raises(
@@ -116,3 +119,101 @@ def test_invalid_designs_raise_value_error() -> None:
         detectable_effect(10, n_predictors=25)
     with pytest.raises(ValueError, match=r"n must exceed n_predictors"):
         simulate_power(0.05, n_obs=10, n_predictors=25)
+    # a negative control count used to pass and fabricate extra df
+    with pytest.raises(ValueError, match="n_predictors must be >= 0"):
+        detectable_effect(2000, n_predictors=-1)
+    with pytest.raises(ValueError, match="n_predictors must be >= 0"):
+        detectable_effect(2000, n_predictors=-25)
+
+
+def test_zero_predictors_is_a_valid_no_controls_design() -> None:
+    # n_predictors=0 ("no controls") is valid in both entry points
+    n_needed = power_for_effect(0.3, n_predictors=0)
+    assert n_needed > 0
+    min_r2_none = detectable_effect(2000, n_predictors=0)
+    assert 0.0 < min_r2_none < 1.0
+    # more controls cost degrees of freedom: the detectable effect grows
+    min_r2_few = detectable_effect(200, n_predictors=1)
+    min_r2_many = detectable_effect(200, n_predictors=50)
+    assert min_r2_few < min_r2_many
+    est_none = simulate_power(0.3, n_obs=100, n_predictors=0, n_sims=50)
+    assert 0.0 <= est_none <= 1.0
+
+
+@pytest.mark.parametrize(
+    ("call", "name"),
+    [
+        (
+            lambda: power_for_effect(
+                0.3,
+                n_predictors=2.5,  # type: ignore[arg-type]
+            ),
+            "n_predictors",
+        ),
+        (
+            lambda: detectable_effect(
+                2000.5,  # type: ignore[arg-type]
+                25,
+            ),
+            "n_obs",
+        ),
+        (
+            lambda: detectable_effect(
+                2000,
+                n_predictors=2.5,  # type: ignore[arg-type]
+            ),
+            "n_predictors",
+        ),
+        (
+            lambda: simulate_power(
+                0.3,
+                n_obs=200.5,  # type: ignore[arg-type]
+                n_predictors=5,
+            ),
+            "n_obs",
+        ),
+        (
+            lambda: simulate_power(
+                0.3,
+                n_obs=200,
+                n_predictors=2.5,  # type: ignore[arg-type]
+            ),
+            "n_predictors",
+        ),
+        (
+            lambda: check_design_rule(
+                n_obs=2000.5  # type: ignore[arg-type]
+            ),
+            "n_obs",
+        ),
+        (
+            lambda: check_design_rule(
+                n_predictors=2.5  # type: ignore[arg-type]
+            ),
+            "n_predictors",
+        ),
+    ],
+)
+def test_integer_parameters_reject_fractional_values(
+    call: Callable[[], object], name: str
+) -> None:
+    """Non-integer design dimensions raise ValueError.
+
+    Regression class: ``int(value)`` coercion used to truncate
+    ``n_obs=2000.5`` / ``n_predictors=2.5`` silently, shifting every
+    degrees-of-freedom computation.
+    """
+    with pytest.raises(ValueError, match=f"{name} must be an integer"):
+        call()
+
+
+def test_run_all_examples_demo_smoke(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Layer-0: the demo's internal asserts hold on the design point."""
+    run_all_examples()
+    output = capsys.readouterr().out
+    assert "power_calculator demo" in output
+    assert "N required = " in output
+    assert "min partial R2 = " in output
+    assert "check_design_rule():" in output

@@ -17,8 +17,10 @@ Decision discipline: the divergence test fires ONCE, at the
 preregistered decision point (``min_observations``); the drawdown
 floor is a preregistered path rule (a barrier, not a repeated test),
 so it may be watched continuously without multiple-testing inflation.
-LIVE_OK is NOT confirmation of the edge - it only means reality has
-not killed it yet.
+The kill machinery fails closed: a drawdown that cannot be computed
+(an overflowing equity path, :class:`DrawdownNotComputable`) is
+INCONCLUSIVE, never a silent pass.  LIVE_OK is NOT confirmation of
+the edge - it only means reality has not killed it yet.
 
 Every function is a pure mapping: data in -> result out.
 
@@ -32,28 +34,30 @@ from typing import Any
 
 import numpy as np
 
+from atropos._utils import clean_1d
+
 __all__ = [
+    "DrawdownNotComputable",
     "drawdown_floor_check",
     "live_verdict",
     "prereg_divergence",
-    "run_all_examples",
     "sharpe_standard_error",
 ]
 
 
-def _clean(values: Any) -> np.ndarray:
-    """Coerce array-like input to a flat 1-D float array, NaNs dropped.
+# N818 (Error suffix) waived: the class name deliberately mirrors the
+# public ``drawdown_not_computable`` INCONCLUSIVE reason it maps to.
+class DrawdownNotComputable(ValueError):  # noqa: N818
+    """Drawdown cannot be computed: the equity path is non-finite.
 
-    Args:
-        values: array-like of numbers; non-finite entries are removed
-            before any statistic is computed.
-
-    Returns:
-        1-D float64 array holding only the finite entries.
+    The compounded equity overflowed to infinity, so ``equity / peak``
+    is NaN and the deepest drawdown has no numeric value.  A kill
+    barrier must fail closed on this input, never silently pass.
+    Subclasses :class:`ValueError` (backward compatible: pre-existing
+    ``except ValueError`` callers keep catching it), while
+    :func:`live_verdict` catches exactly this class to degrade to an
+    ``INCONCLUSIVE`` verdict with reason ``drawdown_not_computable``.
     """
-    arr = np.asarray(values, dtype=float).reshape(-1)
-    # np.asarray pins the ndarray type: stubs resolve this to Any.
-    return np.asarray(arr[np.isfinite(arr)])
 
 
 def _is_constant(values: np.ndarray) -> bool:
@@ -98,16 +102,28 @@ def _max_drawdown(values: np.ndarray) -> float:
 
     Returns:
         The deepest drawdown as a negative fraction (e.g. ``-0.30``);
-        0.0 for an empty or never-drawing series.  A single return of
-        ``-1.0`` or worse wipes the equity to zero and yields ``-1.0``.
+        0.0 for an empty or never-drawing series.  Terminal equity
+        ``<= 0`` yields the ``-1.0`` sentinel WITHOUT distinguishing
+        "total loss" (equity exactly zero, a single return of
+        ``-1.0``) from a NEGATIVE balance (any return below ``-1.0``,
+        e.g. from leverage): a drawdown below -100% is not
+        expressible as a fraction of the peak, so both cases collapse
+        to the same value - a diagnostic limitation (behavior kept;
+        callers needing the distinction must inspect the raw path).
+        NaN when the compounded equity path overflows to infinity
+        (gigantic growth): callers must classify that as "not
+        computable", never as "no drawdown".
     """
     if values.size == 0:
         return 0.0
-    equity = np.cumprod(np.concatenate(([1.0], 1.0 + values)))
-    if equity[-1] <= 0.0:
-        return -1.0
-    peak = np.maximum.accumulate(equity)
-    drawdown = equity / peak - 1.0
+    # Overflow to inf is for the caller to classify, not a warning to
+    # spam: inf/inf yields NaN drawdown entries here on purpose.
+    with np.errstate(over="ignore", invalid="ignore"):
+        equity = np.cumprod(np.concatenate(([1.0], 1.0 + values)))
+        if equity[-1] <= 0.0:
+            return -1.0
+        peak = np.maximum.accumulate(equity)
+        drawdown = equity / peak - 1.0
     return float(np.min(drawdown))
 
 
@@ -117,9 +133,13 @@ def sharpe_standard_error(
     """Lo (2002) i.i.d. standard error of an annualized Sharpe ratio.
 
     ``se(SR_pp) = sqrt((1 + SR_pp^2 / 2) / n_obs)``, rescaled by
-    ``sqrt(periods)`` to annual units.  Valid under i.i.d. returns;
-    autocorrelation widens the true SE, so the divergence test based
-    on it is conservative in the strategy's favor.
+    ``sqrt(periods)`` to annual units.  Asymptotically exact for
+    i.i.d. Gaussian returns; real return streams only push the true
+    SE wider than this formula.  For heavy-tailed / skewed returns
+    the true SE is wider; the divergence test becomes
+    anti-conservative (over-kills); consider bootstrap SE if that
+    matters.  Autocorrelation widens the true SE in the same
+    direction.
 
     Args:
         sharpe: annualized Sharpe ratio estimate.
@@ -135,8 +155,8 @@ def sharpe_standard_error(
 
     Example::
 
-        >>> sharpe_standard_error(1.0, 100, periods=1)   # doctest: +SKIP
-        0.12247448713915891
+        >>> sharpe_standard_error(1.0, 100, periods=1)
+        0.1224744871391589
     """
     if not math.isfinite(float(sharpe)):
         raise ValueError(f"sharpe must be finite, got {sharpe}")
@@ -170,7 +190,11 @@ def prereg_divergence(
         live_sharpe: annualized Sharpe of the live track.
         n_live: live observations.
         expected_sharpe: annualized Sharpe promised by the prereg
-            (the backtest estimate).
+            (the backtest estimate).  Any finite value is accepted
+            here, including negative ones: this primitive is a pure
+            z-test of two estimates, and the "nobody preregisters a
+            dead edge" policy (``expected_sharpe > 0``) is enforced
+            one level up, by :func:`live_verdict`.
         n_backtest: observations behind the backtest estimate.
         periods: periods per year (252 for daily data).
         kill_z: kill threshold in sigmas (one-sided; 1.64 ~= 5%).
@@ -219,6 +243,42 @@ def prereg_divergence(
     }
 
 
+def _drawdown_floor_from_clean(
+    rets: np.ndarray, dd_floor: float
+) -> dict[str, Any]:
+    """Barrier verdict on an ALREADY-CLEANED return series.
+
+    Private single-cleaning fast path shared by the public
+    :func:`drawdown_floor_check` and :func:`live_verdict` (which
+    cleans its input once and feeds both the barrier and the Sharpe
+    leg from the same array).
+
+    Args:
+        rets: cleaned (finite, 1-D) live returns.
+        dd_floor: already-validated strictly-negative drawdown floor.
+
+    Returns:
+        Dict with ``mdd``, ``dd_floor``, ``breached`` and ``n_obs``.
+
+    Raises:
+        DrawdownNotComputable: if the deepest drawdown is not finite
+            - the compounded equity path overflowed.  A kill barrier
+            must fail closed: "cannot compute" must never degrade to
+            "not breached" (``nan <= floor`` is False).
+    """
+    mdd = _max_drawdown(rets)
+    if not math.isfinite(mdd):
+        raise DrawdownNotComputable(
+            "drawdown not computable (non-finite equity path)"
+        )
+    return {
+        "mdd": mdd,
+        "dd_floor": float(dd_floor),
+        "breached": bool(mdd <= float(dd_floor)),
+        "n_obs": int(rets.size),
+    }
+
+
 def drawdown_floor_check(
     live_returns: Any, dd_floor: float
 ) -> dict[str, Any]:
@@ -227,6 +287,12 @@ def drawdown_floor_check(
     The floor is a path rule from the prereg, monitored continuously:
     a breach kills immediately, without waiting for the decision
     point and without any additional statistics.
+
+    An empty track reports ``mdd=0.0`` / ``breached=False``: with no
+    observations the barrier is vacuously intact.  That answer is
+    misleading when a truncated or empty feed is called directly, so
+    prefer routing through :func:`live_verdict`, whose ``n_obs`` gate
+    never lets a too-short track pass as LIVE_OK.
 
     Args:
         live_returns: per-period live returns since deployment.
@@ -239,6 +305,11 @@ def drawdown_floor_check(
 
     Raises:
         ValueError: if ``dd_floor`` is not strictly negative.
+        DrawdownNotComputable: if the deepest drawdown is not finite
+            (the compounded equity path overflowed - the barrier
+            fails closed instead of silently passing); a
+            ``ValueError`` subclass, so ``except ValueError``
+            callers are unaffected.
 
     Example::
 
@@ -248,14 +319,54 @@ def drawdown_floor_check(
     """
     if not float(dd_floor) < 0.0:
         raise ValueError(f"dd_floor must be < 0, got {dd_floor}")
-    rets = _clean(live_returns)
-    mdd = _max_drawdown(rets)
-    return {
-        "mdd": mdd,
-        "dd_floor": float(dd_floor),
-        "breached": bool(mdd <= float(dd_floor)),
-        "n_obs": int(rets.size),
-    }
+    rets = clean_1d(live_returns)
+    return _drawdown_floor_from_clean(rets, float(dd_floor))
+
+
+def _validate_verdict_prereg(
+    *,
+    expected_sharpe: float,
+    n_backtest: int,
+    periods: int,
+    min_observations: int,
+    dd_floor: float,
+    kill_z: float,
+) -> None:
+    """Raise ``ValueError`` unless every prereg parameter is sane.
+
+    All prereg validation happens upfront, before any data is
+    touched: ``dd_floor`` included, so a bad barrier cannot slip past
+    as a late failure from deep inside the drawdown check.
+
+    Args:
+        expected_sharpe: preregistered annualized Sharpe promise.
+        n_backtest: observations behind the prereg estimate.
+        periods: periods per year.
+        min_observations: preregistered decision point length.
+        dd_floor: preregistered drawdown barrier.
+        kill_z: one-sided kill threshold in sigmas.
+
+    Raises:
+        ValueError: on the first invalid parameter encountered.
+    """
+    if not math.isfinite(float(expected_sharpe)) or (
+        float(expected_sharpe) <= 0.0
+    ):
+        raise ValueError(
+            f"expected_sharpe must be finite and > 0, got {expected_sharpe}"
+        )
+    if int(n_backtest) < 1:
+        raise ValueError(f"n_backtest must be >= 1, got {n_backtest}")
+    if int(periods) < 1:
+        raise ValueError(f"periods must be >= 1, got {periods}")
+    if int(min_observations) < 8:
+        raise ValueError(
+            f"min_observations must be >= 8, got {min_observations}"
+        )
+    if not float(dd_floor) < 0.0:
+        raise ValueError(f"dd_floor must be < 0, got {dd_floor}")
+    if not 0.0 < float(kill_z) <= 4.0:
+        raise ValueError(f"kill_z must be in (0, 4], got {kill_z}")
 
 
 def live_verdict(
@@ -284,7 +395,10 @@ def live_verdict(
     Verdicts: ``LIVE_KILLED`` (a rule fired; the prereg tombstone gets
     its production entry), ``LIVE_OK`` (no rule fired - NOT a
     confirmation of the edge), ``INCONCLUSIVE`` (track too short,
-    degenerate returns, or undefined statistics; re-check later).
+    degenerate returns, undefined statistics, or a drawdown that
+    cannot be computed - an overflowing equity path raises
+    :class:`DrawdownNotComputable`, caught here to fail closed;
+    re-check later).
 
     Args:
         live_returns: per-period live returns since deployment.
@@ -303,7 +417,9 @@ def live_verdict(
         ``min_observations``, ``periods``.
 
     Raises:
-        ValueError: on invalid prereg parameters.
+        ValueError: on invalid prereg parameters (``expected_sharpe``,
+            ``n_backtest``, ``periods``, ``min_observations``,
+            ``dd_floor`` or ``kill_z``).
 
     Example::
 
@@ -314,26 +430,17 @@ def live_verdict(
         ...                    "INCONCLUSIVE"}
         True
     """
-    if not math.isfinite(float(expected_sharpe)) or (
-        float(expected_sharpe) <= 0.0
-    ):
-        raise ValueError(
-            f"expected_sharpe must be finite and > 0, got {expected_sharpe}"
-        )
-    if int(n_backtest) < 1:
-        raise ValueError(f"n_backtest must be >= 1, got {n_backtest}")
-    if int(periods) < 1:
-        raise ValueError(f"periods must be >= 1, got {periods}")
-    if int(min_observations) < 8:
-        raise ValueError(
-            f"min_observations must be >= 8, got {min_observations}"
-        )
-    if not 0.0 < float(kill_z) <= 4.0:
-        raise ValueError(f"kill_z must be in (0, 4], got {kill_z}")
+    _validate_verdict_prereg(
+        expected_sharpe=expected_sharpe,
+        n_backtest=n_backtest,
+        periods=periods,
+        min_observations=min_observations,
+        dd_floor=dd_floor,
+        kill_z=kill_z,
+    )
 
-    rets = _clean(live_returns)
+    rets = clean_1d(live_returns)
     n_obs = int(rets.size)
-    dd = drawdown_floor_check(rets, dd_floor)
     result: dict[str, Any] = {
         "verdict": "INCONCLUSIVE",
         "reason": "empty_track_record",
@@ -343,12 +450,25 @@ def live_verdict(
         "z": float("nan"),
         "se_live": float("nan"),
         "se_expected": float("nan"),
-        "mdd": dd["mdd"],
-        "dd_breached": dd["breached"],
+        "mdd": float("nan"),
+        "dd_breached": False,
         "kill_z": float(kill_z),
         "min_observations": int(min_observations),
         "periods": int(periods),
     }
+    try:
+        dd = _drawdown_floor_from_clean(rets, float(dd_floor))
+    except DrawdownNotComputable:
+        # Fail closed: NaN mdd would make `nan <= floor` False and a
+        # naive barrier check would wave the strategy through.  The
+        # catch is deliberately NARROW: an ordinary ValueError raised
+        # anywhere else (a validation bug, a bad parameter that slipped
+        # past the upfront checks) must propagate, not quietly turn
+        # into an INCONCLUSIVE verdict.
+        result["reason"] = "drawdown_not_computable"
+        return result
+    result["mdd"] = dd["mdd"]
+    result["dd_breached"] = dd["breached"]
     if dd["breached"]:
         result["verdict"] = "LIVE_KILLED"
         result["reason"] = "drawdown_floor_breached"
@@ -381,9 +501,9 @@ def live_verdict(
     if divergence["diverged"]:
         result["verdict"] = "LIVE_KILLED"
         result["reason"] = "live_below_prereg"
-        return result
-    result["verdict"] = "LIVE_OK"
-    result["reason"] = "consistent_with_prereg"
+    else:
+        result["verdict"] = "LIVE_OK"
+        result["reason"] = "consistent_with_prereg"
     return result
 
 
@@ -397,18 +517,49 @@ def _fmt_or_dash(value: float, template: str, dash: str) -> str:
     return template.format(value)
 
 
+def _tile_with_sharpe(
+    target_sharpe: float, up_return: float, n_pairs: int
+) -> np.ndarray:
+    """Deterministic ``[up, down]`` tile of analytically known Sharpe.
+
+    A two-point tile has ``mean = (up + down) / 2`` and population
+    std ``(up - down) / 2``, so ``SR_pp = (up + down) / (up - down)``;
+    choosing ``down = up * (r - 1) / (r + 1)`` with
+    ``r = target_sharpe / sqrt(252)`` pins the per-period Sharpe at
+    ``r`` exactly (the sample ddof=1 estimate sits below it by a
+    ``sqrt((n - 1) / n)`` factor, e.g. 0.9995 at n=1000).  No seed,
+    no luck: the annualized Sharpe of the stream is known in closed
+    form, and the drawdown equals the down leg (every up move sets a
+    fresh peak).
+
+    Args:
+        target_sharpe: annualized Sharpe the tile realizes.
+        up_return: the up leg of the tile.
+        n_pairs: number of up/down pairs (stream length
+            ``2 * n_pairs``).
+
+    Returns:
+        1-D array of the tiled return stream.
+    """
+    ratio = float(target_sharpe) / float(np.sqrt(252.0))
+    down_return = up_return * (ratio - 1.0) / (ratio + 1.0)
+    return np.tile([up_return, down_return], int(n_pairs))
+
+
 def run_all_examples() -> None:
-    """Demo the production track-record verdict on four live fates."""
-    # Deterministic streams (sample SR is exact, no seed luck): a
-    # [0, gain] tile has mean = std = gain/2, so SR_pp = 1.0 exactly.
-    live_intact = np.tile([0.0, 0.016], 500)  # SR_ann ~ sqrt(252)
-    # inverted edge with BOUNDED drawdown: a monotone losing tile hits
-    # the DD barrier long before the divergence test can speak
-    live_inverted = np.tile([0.016, -0.017], 250)  # SR_ann ~ -0.5
-    live_crash = np.concatenate(
-        [np.tile([0.0, 0.016], 60), np.full(40, -0.01)]
+    """Demo (and regression-test) the verdict on four live fates.
+
+    Realistic prereg: the backtest promised ``SR=1.5`` on 2000 daily
+    observations.  All four canonical outcomes are asserted, so the
+    demo doubles as a regression test: a drift in the verdict logic
+    fails loudly instead of printing a wrong line.
+    """
+    expected = 1.5  # preregistered promise (n_backtest=2000)
+    live_intact = _tile_with_sharpe(1.5, 0.02, 500)  # n=1000, SR~1.50
+    live_faded = _tile_with_sharpe(0.5, 0.02, 1000)  # n=2000, SR~0.50
+    live_crash = np.concatenate(  # 280 obs, mdd ~ -34% < -25% floor
+        [live_intact[:240], np.full(40, -0.01)]
     )
-    expected = _annualized_sharpe(np.tile([0.0, 0.016], 1000), 252)
 
     print("=" * 72)
     print(
@@ -417,19 +568,36 @@ def run_all_examples() -> None:
     )
     print("=" * 72)
     cases = [
-        ("edge intact", live_intact, 500, -0.40),
-        ("edge inverted in prod", live_inverted, 400, -0.40),
-        ("crash breach", live_crash, 150, -0.25),
-        ("track too short", live_intact[:80], 500, -0.40),
+        ("edge intact", live_intact, "LIVE_OK", "consistent_with_prereg"),
+        (
+            "edge faded in prod",
+            live_faded,
+            "LIVE_KILLED",
+            "live_below_prereg",
+        ),
+        (
+            "crash breach",
+            live_crash,
+            "LIVE_KILLED",
+            "drawdown_floor_breached",
+        ),
+        (
+            "track too short",
+            live_intact[:80],
+            "INCONCLUSIVE",
+            "track_too_short",
+        ),
     ]
-    for name, stream, min_obs, floor in cases:
+    for name, stream, want_verdict, want_reason in cases:
         out = live_verdict(
             stream,
             expected,
             n_backtest=2000,
-            min_observations=min_obs,
-            dd_floor=floor,
+            min_observations=252,
+            dd_floor=-0.25,
         )
+        assert out["verdict"] == want_verdict, (name, out)
+        assert out["reason"] == want_reason, (name, out)
         z_text = _fmt_or_dash(out["z"], "z={:+.2f}", "z= --")
         sr_text = _fmt_or_dash(
             out["live_sharpe"], "live_SR={:+.2f}", "live_SR= --"

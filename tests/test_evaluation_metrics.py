@@ -2,24 +2,29 @@
 
 Known-answer checks for equity compounding, drawdown, trade metrics and
 turnover; sign, key and determinism checks for the Sharpe family,
-including the deflated Sharpe penalty for multiple trials.
+including the deflated Sharpe penalty for multiple trials, the
+``sr_annual``/``rf`` inputs of DSR and its degenerate-denominator NaN.
 """
 
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 
 import numpy as np
 import pytest
 from atropos.evaluation_metrics import (
+    calmar_ratio,
     deflated_sharpe,
     equity_from_returns,
     max_drawdown,
     profit_factor,
+    run_all_examples,
     sharpe_ratio,
     turnover,
     win_rate,
 )
+from scipy import stats
 
 
 def test_equity_from_returns_compounds_exactly() -> None:
@@ -52,6 +57,15 @@ def test_max_drawdown_guards_and_empty_input() -> None:
     assert math.isnan(empty["mdd"])
     assert empty["n"] == 0
     assert empty["mdd_duration"] == 0
+
+
+def test_max_drawdown_rejects_2d_input() -> None:
+    grid = np.array([[1.0, 1.2, 0.9], [1.1, 1.3, 1.0]])
+    with pytest.raises(ValueError, match="1-D"):
+        max_drawdown(grid)
+    # the same data flattened explicitly is fine
+    flat = max_drawdown(grid.reshape(-1))
+    assert flat["n"] == 6
 
 
 def test_sharpe_ratio_signs_keys_and_ci_bounds() -> None:
@@ -92,6 +106,43 @@ def test_sharpe_ratio_seed_determinism_and_flat_returns() -> None:
     assert math.isnan(flat["sr_ci"][0])
 
 
+def test_block_bootstrap_numbers_unchanged_after_refactor() -> None:
+    """Refactor guard: shared _utils helpers reproduce historical values.
+
+    The move of the inline block bootstrap to ``_utils.block_indices``
+    and of ``_clean`` to ``_utils.clean_1d`` must be bit-compatible
+    with the pre-refactor RNG order at a fixed seed.
+    """
+    generator = np.random.default_rng(9)
+    n_obs = 756
+    shocks = generator.standard_normal(n_obs)
+    ar = np.zeros(n_obs)
+    for step in range(1, n_obs):
+        ar[step] = 0.3 * ar[step - 1] + 0.95 * shocks[step]
+    returns = 0.0006 + 0.01 * ar
+
+    sr = sharpe_ratio(returns, rf=0.02, seed=0)
+    assert sr["sr_ci"] == pytest.approx(
+        (-0.4167637458935403, 2.556882296222872), abs=1e-12
+    )
+    # exact demo values (the demo keeps only the seeded containment
+    # sr_low < sr < sr_high, which is not a theorem, only a fixed-seed
+    # fact)
+    assert sr["sr"] == pytest.approx(1.0888354644333431, abs=1e-12)
+    assert sr["sr_ci"][0] < sr["sr"] < sr["sr_ci"][1]
+    dsr = deflated_sharpe(returns, n_trials=2, seed=0)
+    assert dsr["dsr"] == pytest.approx(0.8856476225494652, abs=1e-12)
+    boot = deflated_sharpe(
+        returns,
+        n_trials=10,
+        sr_var_annual="bootstrap",
+        n_boot=200,
+        seed=0,
+    )
+    assert boot["sr_var_annual"] == pytest.approx(0.53875895088458, abs=1e-12)
+    assert boot["dsr"] == pytest.approx(0.5418688773414638, abs=1e-12)
+
+
 def test_deflated_sharpe_penalizes_more_trials() -> None:
     returns = 0.0004 + 0.01 * np.random.default_rng(3).standard_normal(300)
     few = deflated_sharpe(returns, n_trials=2, seed=0)
@@ -111,6 +162,89 @@ def test_deflated_sharpe_penalizes_more_trials() -> None:
     )
     assert boot["sr_var_source"] == "bootstrap"
     assert boot["sr_var_annual"] > 0
+
+
+def test_deflated_sharpe_single_trial_equals_psr() -> None:
+    returns = 0.0004 + 0.01 * np.random.default_rng(3).standard_normal(300)
+    single = deflated_sharpe(returns, n_trials=1, seed=0)
+    # one trial = no selection among strategies: the benchmark is zero
+    # and the multiple-testing penalty must vanish entirely
+    assert single["sr_benchmark_annual"] == 0.0
+    sr_pp = float(returns.mean() / returns.std(ddof=1))
+    skew = float(stats.skew(returns))
+    kurt = float(stats.kurtosis(returns, fisher=False))
+    denom = float(
+        np.sqrt(1.0 - skew * sr_pp + (kurt - 1.0) / 4.0 * sr_pp * sr_pp)
+    )
+    psr = float(stats.norm.cdf(sr_pp * np.sqrt(returns.size - 1) / denom))
+    assert single["dsr"] == pytest.approx(psr)
+    # monotone penalty: 1 -> 10 -> 100 trials deflates DSR stepwise
+    ten = deflated_sharpe(returns, n_trials=10, seed=0)
+    hundred = deflated_sharpe(returns, n_trials=100, seed=0)
+    assert single["dsr"] > ten["dsr"] > hundred["dsr"]
+
+
+def test_deflated_sharpe_sr_annual_drives_dsr() -> None:
+    returns = 0.0004 + 0.01 * np.random.default_rng(3).standard_normal(300)
+    sample = deflated_sharpe(returns, n_trials=5, seed=0)
+    higher = deflated_sharpe(returns, n_trials=5, sr_annual=2.0, seed=0)
+    assert higher["sr_annual"] == 2.0
+    assert higher["dsr"] > sample["dsr"]
+    # known answer: the DSR math uses sr_annual / sqrt(periods)
+    sr_pp_used = 2.0 / float(np.sqrt(252))
+    skew = float(stats.skew(returns))
+    kurt = float(stats.kurtosis(returns, fisher=False))
+    denom = float(
+        np.sqrt(
+            1.0
+            - skew * sr_pp_used
+            + (kurt - 1.0) / 4.0 * sr_pp_used * sr_pp_used
+        )
+    )
+    sr0_pp = sample["sr_benchmark_annual"] / float(np.sqrt(252))
+    expected = float(
+        stats.norm.cdf(
+            (sr_pp_used - sr0_pp) * np.sqrt(returns.size - 1) / denom
+        )
+    )
+    assert higher["dsr"] == pytest.approx(expected)
+    # roundtrip: feeding back the sample's own annualized SR is a no-op
+    roundtrip = deflated_sharpe(
+        returns, n_trials=5, sr_annual=sample["sr_annual"], seed=0
+    )
+    assert roundtrip["dsr"] == pytest.approx(sample["dsr"])
+
+
+def test_deflated_sharpe_degenerate_denominator_is_nan() -> None:
+    rets = np.concatenate([np.full(39, 0.01), np.full(54, -0.05)])
+    degenerate_sr_annual = 97.13331045527151
+    skew = float(stats.skew(rets))
+    kurt = float(stats.kurtosis(rets, fisher=False))
+    sr_pp_used = degenerate_sr_annual / float(np.sqrt(252))
+    denom2 = (
+        1.0 - skew * sr_pp_used + (kurt - 1.0) / 4.0 * sr_pp_used * sr_pp_used
+    )
+    # a two-point sample probed at the vertex of the quadratic: float
+    # rounding pushes the denominator just below zero, so the DSR
+    # approximation is out of its domain and must return NaN, not a
+    # fabricated 0/1 from clamping
+    assert denom2 <= 0.0
+    out = deflated_sharpe(rets, n_trials=5, sr_annual=degenerate_sr_annual)
+    assert math.isnan(out["dsr"])
+    assert math.isnan(out["p_value"])
+    sane = deflated_sharpe(rets, n_trials=5)
+    assert math.isfinite(sane["dsr"])
+
+
+def test_deflated_sharpe_rf_subtracts_from_returns() -> None:
+    returns = 0.0004 + 0.01 * np.random.default_rng(3).standard_normal(300)
+    gross = deflated_sharpe(returns, n_trials=5, seed=0)
+    net = deflated_sharpe(returns, n_trials=5, rf=0.02, seed=0)
+    expected_pp = (returns.mean() - 0.02 / 252.0) / returns.std(ddof=1)
+    assert net["sr_annual"] == pytest.approx(
+        expected_pp * float(np.sqrt(252))
+    )
+    assert net["sr_annual"] < gross["sr_annual"]
 
 
 def test_profit_factor_and_win_rate_on_known_trades() -> None:
@@ -151,3 +285,168 @@ def test_turnover_on_known_position_series() -> None:
     assert constant["n_rebalances"] == 0
     short = turnover([1.0])
     assert math.isnan(short["turnover_per_period"])
+
+
+def test_public_parameters_validated_before_data() -> None:
+    """Upfront ValueError naming the PUBLIC parameter, before the data.
+
+    ``garbage = object()`` proves the checks fire before any input
+    coercion: the parameter ValueError must win over a numpy
+    coercion error.
+    """
+    garbage = object()
+    with pytest.raises(ValueError, match="ci_level"):
+        sharpe_ratio(garbage, ci_level=1.5)
+    with pytest.raises(ValueError, match="periods"):
+        sharpe_ratio(garbage, periods=0)
+    with pytest.raises(ValueError, match="n_boot"):
+        sharpe_ratio(garbage, n_boot=0)
+    with pytest.raises(ValueError, match="block"):
+        sharpe_ratio(garbage, block=0)
+    with pytest.raises(ValueError, match="rf"):
+        sharpe_ratio(garbage, rf=float("nan"))
+    with pytest.raises(ValueError, match="ci_level"):
+        win_rate(garbage, ci_level=0.0)
+    with pytest.raises(ValueError, match="periods"):
+        turnover(garbage, periods=0)
+    with pytest.raises(ValueError, match="n_trials"):
+        deflated_sharpe(garbage, n_trials=0)
+    with pytest.raises(ValueError, match="n_trials"):
+        # fractional trials must be rejected, not truncated to 2
+        deflated_sharpe(garbage, n_trials=2.5)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="rf"):
+        deflated_sharpe(garbage, n_trials=5, rf=float("nan"))
+    with pytest.raises(ValueError, match="sr_annual"):
+        deflated_sharpe(garbage, n_trials=5, sr_annual=float("inf"))
+    # None sr_annual stays legal (it means "estimate from returns")
+    sample = deflated_sharpe(
+        np.linspace(-0.02, 0.02, 30), n_trials=1, sr_annual=None
+    )
+    assert sample["n"] == 30
+
+
+@pytest.mark.parametrize(
+    ("call", "name"),
+    [
+        (
+            lambda: sharpe_ratio(
+                object(),
+                periods=2.5,  # type: ignore[arg-type]
+            ),
+            "periods",
+        ),
+        (
+            lambda: sharpe_ratio(
+                object(),
+                n_boot=2.5,  # type: ignore[arg-type]
+            ),
+            "n_boot",
+        ),
+        (
+            lambda: sharpe_ratio(
+                object(),
+                block=2.5,  # type: ignore[arg-type]
+            ),
+            "block",
+        ),
+        (
+            lambda: calmar_ratio(
+                object(),
+                periods=2.5,  # type: ignore[arg-type]
+            ),
+            "periods",
+        ),
+        (
+            lambda: turnover(
+                object(),
+                periods=2.5,  # type: ignore[arg-type]
+            ),
+            "periods",
+        ),
+        (
+            lambda: deflated_sharpe(
+                object(),
+                n_trials=2.5,  # type: ignore[arg-type]
+            ),
+            "n_trials",
+        ),
+        (
+            lambda: deflated_sharpe(
+                object(),
+                n_trials=2,
+                periods=2.5,  # type: ignore[arg-type]
+            ),
+            "periods",
+        ),
+        (
+            lambda: deflated_sharpe(
+                object(),
+                n_trials=2,
+                n_boot=2.5,  # type: ignore[arg-type]
+            ),
+            "n_boot",
+        ),
+        (
+            lambda: deflated_sharpe(
+                object(),
+                n_trials=2,
+                block=2.5,  # type: ignore[arg-type]
+            ),
+            "block",
+        ),
+    ],
+)
+def test_integer_parameters_reject_fractional_values(
+    call: Callable[[], object], name: str
+) -> None:
+    """Non-integer counts raise ValueError before the data is touched.
+
+    Regression class: ``int(value) >= 1`` guards used to truncate
+    ``n_boot=2.5`` / ``periods=2.5`` silently (and ``calmar_ratio``
+    did not check ``periods`` at all).
+    """
+    with pytest.raises(ValueError, match=f"{name} must be an integer"):
+        call()
+
+
+def test_numeric_parameters_reject_object_with_value_error() -> None:
+    """``object()`` numeric params raise ValueError naming the parameter.
+
+    The docstrings promise ``Raises: ValueError`` before the data is
+    touched; the old bare ``0 < x < 1`` / ``math.isfinite`` checks
+    escaped as ``TypeError`` instead.
+    """
+    garbage = object()
+    with pytest.raises(ValueError, match="ci_level must be a finite"):
+        sharpe_ratio(
+            garbage,
+            ci_level=object(),  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="rf must be a finite"):
+        sharpe_ratio(garbage, rf=object())  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="n_boot must be an integer"):
+        sharpe_ratio(garbage, n_boot=object())  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="sr_annual must be a finite"):
+        deflated_sharpe(
+            garbage,
+            n_trials=5,
+            sr_annual=object(),  # type: ignore[arg-type]
+        )
+
+
+def test_demo_run_all_examples_smoke(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The module demo runs clean and prints every metric block."""
+    run_all_examples()
+    out = capsys.readouterr().out
+    assert "evaluation_metrics demo" in out
+    assert "sharpe_ratio : " in out
+    assert "moving_block" in out
+    assert "max_drawdown : " in out
+    assert "calmar_ratio : " in out
+    assert "deflated_sharpe(trials=  1)" in out
+    assert "deflated_sharpe(trials=100)" in out
+    assert "profit_factor: " in out
+    assert "win_rate     : " in out
+    assert "turnover     : " in out

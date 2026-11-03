@@ -1,11 +1,15 @@
 """Tests for atropos.predictive_model_eval: purged CV and OOS verdicts."""
 
+from collections.abc import Callable
+from types import SimpleNamespace
 from typing import Any, cast
 
 import numpy as np
 import pandas as pd
 import pytest
 from atropos.predictive_model_eval import (
+    ModelFn,
+    Predictor,
     deflated_performance,
     feature_importance_stability,
     kernel_model_fn,
@@ -62,6 +66,11 @@ def test_purged_kfold_blocks_partition_timeline_with_purge_gaps() -> None:
     # strong signal: high out-of-fold IC and hit rate, full oof coverage
     assert result["mean_ic"] > 0.5
     assert result["oos_hit_rate"] > 0.6
+    # two-sided p-value of the per-fold IC t-stat
+    assert 0.0 <= result["ic_p_value"] <= 1.0
+    assert result["ic_p_value"] < 0.05
+    # nothing skipped: every fold was scored
+    assert bool(folds["skipped_reason"].isna().all())
     oof_predictions = result["oof_predictions"]
     assert oof_predictions is not None
     assert oof_predictions.shape == (total_rows,)
@@ -77,6 +86,29 @@ def test_purged_kfold_purge_gap_shrinks_training_sets() -> None:
     )
 
 
+def test_purged_kfold_skips_folds_with_too_few_train_rows() -> None:
+    generator = np.random.default_rng(45)
+    # 20 rows x 20 features: every fold trains on < n_features + 2 rows
+    features = generator.standard_normal((20, 20))
+    target = generator.standard_normal(20)
+    result = purged_kfold_cv(
+        features, target, n_splits=5, purge_gap=0, model_fn=ols_model_fn
+    )
+    folds = result["folds"]
+    # the skip is now LOUD: each fold row says why it was not scored
+    assert bool(folds["skipped_reason"].notna().all())
+    reason = str(folds["skipped_reason"].iloc[0])
+    assert "n_train=16" in reason
+    assert "n_features+2=22" in reason
+    assert bool(folds["fold_ic"].isna().all())
+    assert bool(np.isnan(result["mean_ic"]))
+    assert bool(np.isnan(result["ic_t"]))
+    assert bool(np.isnan(result["ic_p_value"]))
+    oof_predictions = result["oof_predictions"]
+    assert oof_predictions is not None
+    assert bool(np.isnan(oof_predictions).all())
+
+
 def test_purged_kfold_rejects_bad_arguments() -> None:
     features, target = make_linear_problem(60, 0.5, 13)
     with pytest.raises(ValueError, match="n_splits must be >= 2"):
@@ -85,6 +117,116 @@ def test_purged_kfold_rejects_bad_arguments() -> None:
         purged_kfold_cv(features, target, n_splits=20)  # needs 4*n_splits
     with pytest.raises(ValueError, match="rows but target has"):
         purged_kfold_cv(features, target[:-3])
+
+
+def test_integer_parameters_reject_fractional_values() -> None:
+    """Every integer parameter rejects ``2.5`` instead of truncating it.
+
+    Regression class: ``int(n_splits)``-style coercion used to treat
+    ``n_splits=2.5`` as 2 folds without a word.
+    """
+    features, target = make_linear_problem(120, 0.5, 77)
+    returns = np.random.default_rng(78).normal(0.001, 0.01, 200)
+    cases: list[tuple[Callable[[], object], str]] = [
+        (
+            lambda: purged_kfold_cv(
+                features,
+                target,
+                n_splits=2.5,  # type: ignore[arg-type]
+            ),
+            "n_splits",
+        ),
+        (
+            lambda: purged_kfold_cv(
+                features,
+                target,
+                purge_gap=2.5,  # type: ignore[arg-type]
+            ),
+            "purge_gap",
+        ),
+        (
+            lambda: walkforward_model_eval(
+                features,
+                target,
+                ols_model_fn,
+                train_window=2.5,  # type: ignore[arg-type]
+            ),
+            "train_window",
+        ),
+        (
+            lambda: walkforward_model_eval(
+                features,
+                target,
+                ols_model_fn,
+                test_window=2.5,  # type: ignore[arg-type]
+            ),
+            "test_window",
+        ),
+        (
+            lambda: walkforward_model_eval(
+                features,
+                target,
+                ols_model_fn,
+                step=2.5,  # type: ignore[arg-type]
+            ),
+            "step",
+        ),
+        (
+            lambda: walkforward_model_eval(
+                features,
+                target,
+                ols_model_fn,
+                purge_gap=2.5,  # type: ignore[arg-type]
+            ),
+            "purge_gap",
+        ),
+        (
+            lambda: feature_importance_stability(
+                features,
+                target,
+                ols_model_fn,
+                n_bootstrap=2.5,  # type: ignore[arg-type]
+            ),
+            "n_bootstrap",
+        ),
+        (
+            lambda: feature_importance_stability(
+                features,
+                target,
+                ols_model_fn,
+                top_k=2.5,  # type: ignore[arg-type]
+            ),
+            "top_k",
+        ),
+        (
+            lambda: deflated_performance(
+                returns,
+                2.5,  # type: ignore[arg-type]
+                mdd=-0.1,
+            ),
+            "n_strategies",
+        ),
+        (
+            lambda: deflated_performance(
+                returns,
+                5,
+                mdd=-0.1,
+                periods=2.5,  # type: ignore[arg-type]
+            ),
+            "periods",
+        ),
+        (
+            lambda: knn_model_fn(
+                features,
+                target,
+                n_neighbors=2.5,  # type: ignore[arg-type]
+            ),
+            "n_neighbors",
+        ),
+    ]
+    for call, name in cases:
+        with pytest.raises(ValueError, match=f"{name} must be an integer"):
+            call()
 
 
 def test_walkforward_real_edge_passes_noise_target_fails() -> None:
@@ -214,6 +356,55 @@ def test_sign_consistency_edges() -> None:
     assert bool(np.isnan(tiny["directional_accuracy"]))
 
 
+def test_sign_consistency_constant_predictions_fail() -> None:
+    # REGRESSION (blocker): "always +1" on an outcome with ~60% positives
+    # used to PASS every accuracy/regime gate — but a constant predictor
+    # is a beta bet on the outcome mean, not a model.  It must FAIL.
+    generator = np.random.default_rng(33)
+    outcomes = generator.choice(np.array([-1.0, 1.0]), size=300, p=[0.4, 0.6])
+    result = sign_consistency(np.ones(300), outcomes)
+    assert result["verdict"] == "FAIL"
+    assert result["stable"] is False
+    assert result["reason"] == "degenerate (constant) predictions"
+    assert result["sign_stability_by_regime"] == {}
+    assert result["n"] == 300
+    assert 0.5 < result["directional_accuracy"] < 0.7
+
+
+def test_sign_consistency_constant_outcome_inconclusive() -> None:
+    predictions = np.random.default_rng(34).standard_normal(200)
+    result = sign_consistency(predictions, np.ones(200))
+    # no sign variation in the outcome: nothing to explain -> not FAIL,
+    # the test itself is unidentifiable here
+    assert result["verdict"] == "INCONCLUSIVE"
+    assert result["reason"] == "degenerate (constant) outcomes"
+    assert result["sign_stability_by_regime"] == {}
+    assert result["stable"] is False
+    assert result["n"] == 200
+
+
+def test_sign_consistency_excludes_exact_zeros() -> None:
+    # sign(0) == 0 carries no direction: rows with an exact 0 on EITHER
+    # side are excluded from every accuracy denominator instead of
+    # silently counting as mismatches.
+    n_rows = 30
+    row_idx = np.arange(n_rows)
+    zero_rows = row_idx % 5 == 4  # 6 rows with outcome exactly 0
+    signs = np.where(row_idx % 2 == 0, 1.0, -1.0)
+    magnitudes = np.where(row_idx % 10 < 4, 2.0, 1.0)
+    predictions = np.where(zero_rows, 1.0, signs)
+    outcomes = np.where(zero_rows, 0.0, signs * magnitudes)
+    result = sign_consistency(predictions, outcomes)
+    assert result["n"] == 30
+    assert result["n_usable"] == 24
+    assert result["directional_accuracy"] == 1.0  # not the naive 24/30
+    # the low-|outcome| tercile contains only zero-outcome rows: with no
+    # usable rows left it is omitted rather than scored
+    assert "vol_tercile_low" not in result["sign_stability_by_regime"]
+    assert result["verdict"] == "PASS"
+    assert result["stable"] is True
+
+
 def test_deflated_performance_many_strategies_raise_the_bar() -> None:
     returns = np.random.default_rng(41).normal(0.002, 0.01, 400)
     few = deflated_performance(returns, n_strategies=2, mdd=-0.15)
@@ -236,6 +427,32 @@ def test_deflated_performance_zero_mean_returns_fail() -> None:
     assert result["p_value"] > 0.05
     with pytest.raises(ValueError, match="n_strategies must be >= 1"):
         deflated_performance(flat, n_strategies=0, mdd=-0.10)
+
+
+def test_deflated_performance_single_strategy_disables_penalty() -> None:
+    # n_strategies=1 means "no selection among trials": the multiple-
+    # testing penalty must vanish (DSR == PSR).  The DIRECTION below is
+    # stable regardless of evaluation_metrics' own n_trials=1 handling:
+    # one trial can never be punished harder than ten.
+    returns = np.random.default_rng(43).normal(0.0005, 0.01, 500)
+    single = deflated_performance(returns, n_strategies=1, mdd=-0.10)
+    ten = deflated_performance(returns, n_strategies=10, mdd=-0.10)
+    assert single["sr_annual"] == ten["sr_annual"]  # same returns
+    assert single["dsr"] > ten["dsr"]
+    assert single["p_value"] < ten["p_value"]
+    assert single["sr_benchmark_annual"] <= ten["sr_benchmark_annual"]
+
+
+def test_deflated_performance_rejects_positive_mdd() -> None:
+    returns = np.random.default_rng(44).normal(0.001, 0.01, 300)
+    # a positive "drawdown" is a sign error: it must not silently yield
+    # deflated_calmar = inf
+    with pytest.raises(ValueError, match="mdd must be <= 0"):
+        deflated_performance(returns, n_strategies=5, mdd=0.15)
+    # mdd == 0 ("no drawdown observed") stays allowed
+    no_drawdown = deflated_performance(returns, n_strategies=5, mdd=0.0)
+    assert no_drawdown["mdd"] == 0.0
+    assert bool(np.isinf(no_drawdown["deflated_calmar"]))
 
 
 def test_ols_model_fn_recovers_known_beta_exactly() -> None:
@@ -273,6 +490,70 @@ def test_ols_model_fn_predictor_and_importance_contract() -> None:
     assert importances.shape == (2,)
     assert bool(np.all(importances >= 0.0))
     assert float(np.sum(importances)) == pytest.approx(1.0)
+
+
+def test_ols_model_fn_rejects_rank_deficient_design() -> None:
+    # fail-closed: a duplicated feature column makes the OLS solution
+    # non-unique; the fit must raise instead of silently returning a
+    # minimum-norm coefficient pick
+    generator = np.random.default_rng(53)
+    column = generator.standard_normal(120)
+    duplicated = np.column_stack([column, column])
+    target = 0.5 * column + generator.standard_normal(120)
+    with pytest.raises(ValueError, match="rank-deficient"):
+        ols_model_fn(duplicated, target)
+    # a constant (zero-variance) feature column is collinear with the
+    # intercept and is rejected by the same rank check
+    with pytest.raises(ValueError, match="rank-deficient"):
+        ols_model_fn(np.column_stack([column, np.full(120, 3.0)]), target)
+    # the same data with an independent second column still fits
+    model = ols_model_fn(
+        np.column_stack([column, generator.standard_normal(120)]), target
+    )
+    assert np.asarray(model(duplicated[:10]), dtype=float).shape == (10,)
+
+
+def _demo_linear_chain_data() -> tuple[pd.DataFrame, np.ndarray]:
+    """Replicate the ``run_all_examples`` stage-1 data exactly (seed 21).
+
+    Draw order matters: f1, f2, f3, then the target noise from the same
+    generator, matching ``_demo_linear_chain`` in the module.
+    """
+    generator = np.random.default_rng(21)
+    f1 = generator.standard_normal(800)
+    f2 = generator.standard_normal(800)
+    f3 = generator.standard_normal(800)
+    target = 0.6 * f1 + 0.3 * f2 + generator.standard_normal(800)
+    features = pd.DataFrame({"alpha_1": f1, "alpha_2": f2, "noise_3": f3})
+    return features, target
+
+
+def test_seeded_regression_walkforward_demo_config() -> None:
+    # exact pin of the demo's seed-specific walk-forward values
+    # (run_all_examples asserts only the soft n_folds >= 10 floor)
+    features, target = _demo_linear_chain_data()
+    wfe = walkforward_model_eval(
+        features, target, ols_model_fn, train_window=200, test_window=50
+    )
+    assert wfe["n_folds"] == 12
+    assert wfe["verdict"] == "PASS"
+    assert wfe["pnl_t"] > 5.0
+
+
+def test_seeded_regression_importance_demo_config() -> None:
+    # exact pin of the demo's seed-specific importance-stability values
+    # (run_all_examples asserts only the soft n_valid >= 30 floor)
+    features, target = _demo_linear_chain_data()
+    stab = feature_importance_stability(
+        features, target, ols_model_fn, n_bootstrap=40, top_k=1, seed=1
+    )
+    assert stab["n_valid"] == 40
+    assert stab["verdict"] == "STABLE"
+    assert list(stab["per_feature"]["feature"]) == [
+        "alpha_1",
+        "alpha_2",
+        "noise_3",
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +647,80 @@ def test_native_models_reject_bad_arguments() -> None:
         kernel_model_fn(features, target, bandwidth=-0.5)
     with pytest.raises(ValueError, match="bandwidth must be > 0"):
         kernel_model_fn(features, target, bandwidth=0.0)
+
+
+def test_kernel_model_tiny_weight_sums_fall_back_to_nearest() -> None:
+    train_features = np.array([[0.0], [1.0]])
+    train_target = np.array([5.0, -5.0])
+    model = kernel_model_fn(train_features, train_target, bandwidth=1.0)
+    # the query sits 7.75 standardized units from the nearer training
+    # row: kernel weights sum to ~9e-14 — strictly positive but pure
+    # underflow noise, so the nearest-target fallback must kick in
+    borderline = np.asarray(model(np.array([[4.875]])), dtype=float)
+    assert borderline.shape == (1,)
+    assert float(borderline[0]) == pytest.approx(-5.0, abs=1e-12)
+    # full underflow (query astronomically far) takes the same fallback
+    far = np.asarray(model(np.array([[1e9]])), dtype=float)
+    assert float(far[0]) == pytest.approx(-5.0, abs=1e-12)
+
+
+def _static_model_factory(model_value: Any) -> ModelFn:
+    """model_fn that ignores the data and returns a fixed fitted model."""
+
+    def factory(
+        features_train: np.ndarray, target_train: np.ndarray
+    ) -> Predictor:
+        _ = (features_train, target_train)
+        return cast(Predictor, model_value)
+
+    return factory
+
+
+def test_extract_importances_dict_and_object_share_keys() -> None:
+    generator = np.random.default_rng(65)
+    features = generator.standard_normal((80, 2))
+    target = generator.standard_normal(80)
+    coef_dict = {"coef": np.array([-3.0, 1.0])}
+    coef_object = SimpleNamespace(coef=np.array([-3.0, 1.0]))
+    importance_dict = {"feature_importances": np.array([0.2, 0.8])}
+    importance_object = SimpleNamespace(
+        feature_importances=np.array([0.2, 0.8])
+    )
+    models = {
+        "coef_dict": coef_dict,
+        "coef_object": coef_object,
+        "importance_dict": importance_dict,
+        "importance_object": importance_object,
+    }
+    mean_importances: dict[str, np.ndarray] = {}
+    for label, fitted_model in models.items():
+        result = feature_importance_stability(
+            features,
+            target,
+            _static_model_factory(fitted_model),
+            n_bootstrap=3,
+            seed=2,
+        )
+        assert result["n_valid"] == 3
+        # identical importances on every draw -> perfectly rank-stable
+        assert result["mean_pairwise_spearman"] == pytest.approx(1.0)
+        mean_importances[label] = result["per_feature"][
+            "mean_importance"
+        ].to_numpy(dtype=float)
+    # coef-style keys: |value| -> [3, 1] normalized = [0.75, 0.25]
+    assert np.allclose(mean_importances["coef_dict"], [0.75, 0.25])
+    assert np.allclose(mean_importances["coef_object"], [0.75, 0.25])
+    # importance-style keys are returned as-is (no abs distortion)
+    assert np.allclose(mean_importances["importance_dict"], [0.2, 0.8])
+    assert np.allclose(mean_importances["importance_object"], [0.2, 0.8])
+    # dict and object models now behave IDENTICALLY for every key
+    assert np.array_equal(
+        mean_importances["coef_dict"], mean_importances["coef_object"]
+    )
+    assert np.array_equal(
+        mean_importances["importance_dict"],
+        mean_importances["importance_object"],
+    )
 
 
 def test_knn_integrates_with_purged_kfold_cv() -> None:

@@ -4,6 +4,12 @@ Evaluation framework for any model that maps features -> next-period return
 forecasts.  All functions take ``features`` (feature matrix) and ``target``
 (outcome) with rows in CHRONOLOGICAL order.
 
+IMPORTANT — positional alignment: every function pairs ``features`` with
+``target`` (or ``predictions`` with ``outcomes``) POSITIONALLY.  Pandas
+inputs are converted via ``.to_numpy()`` and their indexes are IGNORED —
+there is no reindexing and no sorting inside.  Rows must already be
+pairwise aligned AND in chronological order before the call.
+
 Functions
 ---------
 ``purged_kfold_cv``               contiguous K-fold with purge gaps on both
@@ -41,6 +47,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+from atropos._utils import validate_int, validate_number
 from atropos.evaluation_metrics import deflated_sharpe
 
 __all__ = [
@@ -64,7 +71,14 @@ ModelFn = Callable[[np.ndarray, np.ndarray], Predictor]
 def _as_arrays(
     features: Any, target: Any
 ) -> tuple[np.ndarray, np.ndarray, list[str]]:
-    """Convert features/target to float arrays, dropping NaN rows."""
+    """Convert features/target to float arrays, dropping NaN rows.
+
+    IMPORTANT: alignment is POSITIONAL, never index-based.  Pandas inputs
+    are converted with ``.to_numpy()`` and their indexes are IGNORED (no
+    reindexing, no sorting).  Callers must pass rows already pairwise
+    aligned and in CHRONOLOGICAL order — the purged/walk-forward splits
+    below are time blocks and silently assume it.
+    """
     if isinstance(features, pd.DataFrame):
         names = [str(column) for column in features.columns]
         features_arr = features.to_numpy(dtype=float)
@@ -96,6 +110,18 @@ def _pearson(left: np.ndarray, right: np.ndarray) -> float:
 # cap / base seed of the deterministic permutation-importance scheme
 _IMPORTANCE_CAP = 256
 _IMPORTANCE_SEED = 0
+
+# keys probed (in this order) on fitted models for importances; the SAME
+# set is used for dict models (entries) and object models (attributes)
+_IMPORTANCE_KEYS = (
+    "feature_importances_",
+    "feature_importances",
+    "coef_",
+    "coef",
+)
+# coefficient-style sources: the sign carries no importance meaning, so
+# they are mapped through |.|; importance-style keys are returned as-is
+_COEFFICIENT_KEYS = frozenset({"coef_", "coef"})
 
 
 def _as_matrix(features: Any) -> np.ndarray:
@@ -177,6 +203,12 @@ def _permutation_importance(
     normalized to sum 1; all-zero drops yield the uniform vector.  The
     scheme touches no global RNG state, so fits are reproducible.
 
+    CAVEAT - the clip ``max(baseline - permuted, 0)``: a negative
+    baseline R^2 (model worse than the mean predictor) clips to zero
+    and can hide features whose permutation actually IMPROVES the
+    model; interpret importances as RELATIVE rankings within one fit,
+    not as absolute evidence that a feature helps.
+
     Args:
         predict_fn: fitted predictor closure (``features -> forecasts``).
         features_train: ``(n_train, n_features)`` raw training matrix.
@@ -239,12 +271,23 @@ def purged_kfold_cv(
 
     When ``model_fn`` is given, every fold is scored: out-of-fold
     predictions, per-fold information coefficient (Pearson corr of forecast
-    vs realized) and directional hit rate.
+    vs realized) and directional hit rate.  A fold whose training set is
+    too small to fit (``n_train < n_features + 2``) is SKIPPED instead of
+    silently scored as NaN: its fold row carries ``skipped_reason`` (a
+    short string) while ``fold_ic`` / ``fold_hit`` stay NaN; scored folds
+    carry ``skipped_reason = None``.
+
+    IMPORTANT — positional alignment: ``features`` and ``target`` are
+    paired POSITIONALLY; pandas indexes are IGNORED (no reindexing, no
+    sorting).  Rows must already be aligned and in CHRONOLOGICAL order —
+    the contiguous fold blocks above are time blocks.
 
     Returns ``{n, n_splits, purge_gap, n_features, folds (DataFrame),
-    mean_ic, ic_t, oos_hit_rate, oof_predictions, model_used}``.  ``ic_t`` is
-    a t-stat of the per-fold ICs; ``oof_predictions`` is full-length with NaN
-    outside test folds.
+    mean_ic, ic_t, ic_p_value, oos_hit_rate, oof_predictions,
+    model_used}``.  ``ic_t`` is a t-stat of the per-fold ICs;
+    ``ic_p_value`` is its two-sided p-value, ``2 * t.sf(|ic_t|,
+    n_splits - 1)``; ``oof_predictions`` is full-length with NaN outside
+    test folds.
 
     Example::
 
@@ -261,11 +304,8 @@ def purged_kfold_cv(
     """
     features_arr, target_arr, names = _as_arrays(features, target)
     n_rows, n_features = features_arr.shape
-    ns, gap = int(n_splits), int(purge_gap)
-    if ns < 2:
-        raise ValueError(f"n_splits must be >= 2, got {ns}")
-    if gap < 0:
-        raise ValueError(f"purge_gap must be >= 0, got {gap}")
+    ns = validate_int("n_splits", n_splits, minimum=2)
+    gap = validate_int("purge_gap", purge_gap, minimum=0)
     if n_rows < 4 * ns:
         raise ValueError(
             f"n={n_rows} too small for {ns} folds (need >= 4*n_splits)"
@@ -292,7 +332,8 @@ def purged_kfold_cv(
             "n_train": int(tr.size),
             "n_test": int(te.size),
         }
-        if model_fn is not None and tr.size >= n_features + 2:
+        min_train = n_features + 2
+        if model_fn is not None and tr.size >= min_train:
             model = model_fn(features_arr[tr], target_arr[tr])
             preds = np.asarray(model(features_arr[te]), dtype=float).reshape(
                 -1
@@ -303,9 +344,15 @@ def purged_kfold_cv(
             hit = float(np.mean(np.sign(preds) == np.sign(target_arr[te])))
             row["fold_ic"] = ic
             row["fold_hit"] = hit
+            row["skipped_reason"] = None
         else:
             row["fold_ic"] = float("nan")
             row["fold_hit"] = float("nan")
+            row["skipped_reason"] = (
+                None
+                if model_fn is None
+                else f"n_train={int(tr.size)} < n_features+2={min_train}"
+            )
         fold_rows.append(row)
 
     folds = pd.DataFrame(fold_rows)
@@ -331,6 +378,11 @@ def purged_kfold_cv(
         "folds": folds,
         "mean_ic": mean_ic,
         "ic_t": ic_t,
+        "ic_p_value": (
+            float(2.0 * stats.t.sf(abs(ic_t), ns - 1))
+            if np.isfinite(ic_t)
+            else float("nan")
+        ),
         "oos_hit_rate": float(np.mean(hits_valid))
         if hits_valid.size
         else float("nan"),
@@ -353,6 +405,11 @@ def walkforward_model_eval(
     purge_gap: int = 0,
 ) -> dict[str, Any]:
     """Rolling train/test walk-forward: honest out-of-sample model quality.
+
+    IMPORTANT — positional alignment: ``features`` and ``target`` are
+    paired POSITIONALLY; pandas indexes are IGNORED (no reindexing, no
+    sorting).  Rows must already be aligned and in CHRONOLOGICAL order —
+    the rolling windows below are time windows.
 
     Every fold trains on the FIXED-length window
     ``[t0 - purge_gap - train_window, t0 - purge_gap)`` and tests on
@@ -389,15 +446,14 @@ def walkforward_model_eval(
     """
     features_arr, target_arr, _ = _as_arrays(features, target)
     n_rows = features_arr.shape[0]
-    tw, ew = int(train_window), int(test_window)
-    st = int(step) if step is not None else ew
-    pg = int(purge_gap)
+    tw = validate_int("train_window", train_window)
+    ew = validate_int("test_window", test_window)
+    st = validate_int("step", step) if step is not None else ew
+    pg = validate_int("purge_gap", purge_gap, minimum=0)
     if tw < 10 or ew < 1 or st < 1:
         raise ValueError(
             "need train_window >= 10, test_window >= 1, step >= 1"
         )
-    if pg < 0:
-        raise ValueError("purge_gap must be >= 0")
     if tw + pg + ew > n_rows:
         raise ValueError(
             f"n={n_rows} too small for train_window={tw}"
@@ -420,6 +476,7 @@ def walkforward_model_eval(
                 f"{realized.size} rows"
             )
         pnl = np.sign(preds) * realized
+        pnl_sd = float(np.std(pnl, ddof=1))
         fold_rows.append(
             {
                 "fold": len(fold_rows),
@@ -436,10 +493,8 @@ def walkforward_model_eval(
                 ),
                 "fold_pnl_mean": float(np.mean(pnl)),
                 "fold_pnl_t": (
-                    float(
-                        np.mean(pnl) / np.std(pnl, ddof=1) * np.sqrt(pnl.size)
-                    )
-                    if np.std(pnl, ddof=1) > 0
+                    float(np.mean(pnl) / pnl_sd * np.sqrt(pnl.size))
+                    if pnl_sd > 0
                     else float("nan")
                 ),
             }
@@ -490,7 +545,30 @@ def _extract_importances(
     n_features: int,
     importance_fn: Callable[[Any], Any] | None,
 ) -> np.ndarray:
-    """Pull a length-``n_features`` importance vector from a fitted model."""
+    """Pull a length-``n_features`` importance vector from a fitted model.
+
+    Dict models (entries) and object models (attributes) are probed with
+    the SAME ordered key set ``("feature_importances_",
+    "feature_importances", "coef_", "coef")`` and the SAME abs handling:
+    coefficient-style keys (``coef_`` / ``coef``) are mapped through
+    ``|.|`` because their sign carries no importance meaning;
+    importance-style keys are returned as-is (downstream consumers such
+    as :func:`feature_importance_stability` apply ``|.|`` themselves
+    where needed).
+
+    Args:
+        model: fitted model (dict or arbitrary object).
+        n_features: expected length of the importance vector.
+        importance_fn: explicit extractor; when given it fully replaces
+            the default key probing.
+
+    Returns:
+        ``(n_features,)`` importance vector.
+
+    Raises:
+        ValueError: if no probed key yields a length-``n_features``
+            vector and no ``importance_fn`` was supplied.
+    """
     if importance_fn is not None:
         values = np.asarray(importance_fn(model), dtype=float).reshape(-1)
         if values.size != n_features:
@@ -499,27 +577,19 @@ def _extract_importances(
                 f"expected {n_features}"
             )
         return values
-    if isinstance(model, dict):
-        for key in (
-            "feature_importances_",
-            "feature_importances",
-            "coef_",
-            "coef",
-        ):
-            if key in model:
-                values = np.asarray(model[key], dtype=float).reshape(-1)
-                if values.size == n_features:
-                    # asarray pins the ndarray type (stubs -> Any).
-                    return np.asarray(np.abs(values))
-    for attr in ("feature_importances_", "coef_"):
-        raw = getattr(model, attr, None)
-        if raw is not None:
-            values = np.asarray(raw, dtype=float).reshape(-1)
-            if values.size == n_features:
-                if attr == "coef_":
-                    # asarray pins the ndarray type (stubs -> Any).
-                    return np.asarray(np.abs(values))
-                return values
+    for key in _IMPORTANCE_KEYS:
+        if isinstance(model, dict):
+            raw = model.get(key)
+        else:
+            raw = getattr(model, key, None)
+        if raw is None:
+            continue
+        values = np.asarray(raw, dtype=float).reshape(-1)
+        if values.size == n_features:
+            if key in _COEFFICIENT_KEYS:
+                # asarray pins the ndarray type (stubs -> Any).
+                return np.asarray(np.abs(values))
+            return values
     raise ValueError(
         "cannot extract feature importances from the fitted model; "
         "pass importance_fn(model) -> (n_features,) array"
@@ -537,6 +607,11 @@ def feature_importance_stability(
     seed: int | None = None,
 ) -> dict[str, Any]:
     """Are feature importances stable across bootstrap refits?
+
+    IMPORTANT — positional alignment: ``features`` and ``target`` are
+    paired POSITIONALLY; pandas indexes are IGNORED (no reindexing, no
+    sorting).  Rows must already be aligned and in CHRONOLOGICAL order
+    (each bootstrap draw then resamples rows iid).
 
     Each of ``n_bootstrap`` draws resamples rows (iid bootstrap), refits
     the model and extracts importances (default extractors:
@@ -573,14 +648,13 @@ def feature_importance_stability(
     """
     features_arr, target_arr, names = _as_arrays(features, target)
     n_rows, n_features = features_arr.shape
-    nb = int(n_bootstrap)
-    if nb < 2:
-        raise ValueError(f"n_bootstrap must be >= 2, got {nb}")
+    nb = validate_int("n_bootstrap", n_bootstrap, minimum=2)
     tk = int(top_k)
     if not (1 <= tk <= n_features):
         raise ValueError(
             f"top_k must be in [1, n_features={n_features}], got {tk}"
         )
+    tk = validate_int("top_k", top_k)
     rng = np.random.default_rng(seed)
 
     imps: list[np.ndarray] = []
@@ -680,11 +754,33 @@ def sign_consistency(
     thirds and (b) terciles of ``|outcome|`` (calm / normal / violent rows).
     A model that only works in one regime is a regime bet, not an edge.
 
+    IMPORTANT — positional alignment: ``predictions`` and ``outcomes``
+    are paired POSITIONALLY; pandas indexes are IGNORED (no reindexing,
+    no sorting).  Rows must already be aligned and in CHRONOLOGICAL
+    order.
+
+    Degenerate inputs are rejected explicitly — a constant predictor is
+    a beta bet, not a model, and a constant outcome has no sign
+    variation to explain:
+
+    * constant predictions (``ptp(predictions) == 0``) -> verdict
+      ``FAIL`` with ``reason="degenerate (constant) predictions"``;
+    * constant outcomes (``ptp(outcomes) == 0``) -> verdict
+      ``INCONCLUSIVE`` with ``reason="degenerate (constant) outcomes"``.
+
+    Exact zeros: ``sign(0) == 0`` carries no directional information, so
+    rows where EITHER side is exactly 0 are EXCLUDED from every accuracy
+    denominator (overall and per-regime); ``n_usable`` reports how many
+    sign-bearing rows remain.  A regime with no usable rows is omitted
+    from ``sign_stability_by_regime``.
+
     Verdict: PASS when overall accuracy > 0.5 AND every regime accuracy
-    > 0.5; FAIL otherwise.
+    > 0.5; FAIL otherwise (and always for degenerate predictions);
+    INCONCLUSIVE for degenerate outcomes.
 
     Returns ``{directional_accuracy, sign_stability_by_regime (dict),
-    stable, verdict, n}``.
+    stable, verdict, n, n_usable}`` (plus ``reason`` in the degenerate
+    cases and ``note`` when fewer than 10 finite rows remain).
 
     Example::
 
@@ -711,18 +807,49 @@ def sign_consistency(
             "stable": False,
             "verdict": "FAIL",
             "n": n_rows,
+            "n_usable": int(
+                np.count_nonzero((pred_vals != 0.0) & (outc_vals != 0.0))
+            ),
             "note": "insufficient data",
         }
     correct = np.sign(pred_vals) == np.sign(outc_vals)
-    acc = float(np.mean(correct))
+    if float(np.ptp(pred_vals)) == 0.0:
+        # "always +1" (or any constant) is a beta bet, not a model: it
+        # must not PASS just because the outcome mean is positive.
+        return {
+            "directional_accuracy": float(np.mean(correct)),
+            "sign_stability_by_regime": {},
+            "stable": False,
+            "verdict": "FAIL",
+            "n": n_rows,
+            "n_usable": int(np.count_nonzero(outc_vals != 0.0)),
+            "reason": "degenerate (constant) predictions",
+        }
+    if float(np.ptp(outc_vals)) == 0.0:
+        # constant outcome: sign accuracy is unidentifiable here
+        return {
+            "directional_accuracy": float(np.mean(correct)),
+            "sign_stability_by_regime": {},
+            "stable": False,
+            "verdict": "INCONCLUSIVE",
+            "n": n_rows,
+            "n_usable": int(np.count_nonzero(pred_vals != 0.0)),
+            "reason": "degenerate (constant) outcomes",
+        }
+    usable = (pred_vals != 0.0) & (outc_vals != 0.0)
+    n_usable = int(np.count_nonzero(usable))
+    acc = float(np.mean(correct[usable])) if n_usable else float("nan")
 
     regime_acc: dict[str, float] = {}
     nr = max(2, int(n_regimes))
     for regime_idx, chunk in enumerate(
         np.array_split(np.arange(n_rows), nr), start=1
     ):
-        regime_acc[f"time_third_{regime_idx}"] = float(
-            np.mean(correct[chunk])
+        chunk_usable = usable[chunk]
+        regime_acc[f"time_third_{regime_idx}"] = (
+            float(np.mean(correct[chunk][chunk_usable]))
+            if chunk_usable.any()
+            else float("nan")
         )
     mag_bins = np.clip(
         np.digitize(
@@ -737,7 +864,7 @@ def sign_consistency(
         (0, 1, 2),
         strict=True,  # 3 regime names for 3 tercile bins, by construction
     ):
-        sel = mag_bins == bin_idx
+        sel = (mag_bins == bin_idx) & usable
         if sel.any():
             regime_acc[name] = float(np.mean(correct[sel]))
 
@@ -752,6 +879,7 @@ def sign_consistency(
         "stable": stable,
         "verdict": verdict,
         "n": n_rows,
+        "n_usable": n_usable,
     }
 
 
@@ -770,15 +898,34 @@ def deflated_performance(
     Delegates the statistics to ``evaluation_metrics.deflated_sharpe``
     (Bailey & Lopez de Prado, 2014): the observed Sharpe is compared against
     the expected MAXIMUM Sharpe of ``n_strategies`` unit-variance trials, so
-    a "best of N" selection cannot masquerade as an edge.  ``mdd`` (the
+    a "best of N" selection cannot masquerade as an edge.  ``n_strategies
+    = 1`` disables the multiple-testing penalty (DSR == PSR): with a single
+    trial there is no "best of N" selection to punish.  ``mdd`` (the
     strategy's max drawdown, negative) turns the excess Sharpe into a
     drawdown-scaled ``deflated_calmar`` diagnostic.
 
     Verdict: PASS when the deflated-Sharpe p-value < 0.05 (the edge survives
     having tried ``n_strategies`` strategies); FAIL otherwise.
 
-    Returns ``{dsr, p_value, sr_annual, sr_benchmark_annual, excess_sr, mdd,
-    deflated_calmar, n_strategies, verdict}``.
+    Args:
+        returns: per-period return series of the selected strategy.
+        n_strategies: number of trials the strategy was selected from;
+            ``1`` disables the multiple-testing penalty (DSR == PSR).
+        mdd: max drawdown of the strategy, NEGATIVE by convention
+            (``mdd == 0`` means "no drawdown observed" and yields
+            ``deflated_calmar = inf`` for a positive excess Sharpe).
+        periods: periods per year (252 for daily data).
+        sr_var_annual: variance of Sharpe ratios across trials, in
+            annualized units (forwarded to ``deflated_sharpe``).
+
+    Returns:
+        ``{dsr, p_value, sr_annual, sr_benchmark_annual, excess_sr, mdd,
+        deflated_calmar, n_strategies, verdict}``.
+
+    Raises:
+        ValueError: if ``n_strategies`` or ``periods`` is not an
+            integer >= 1, or ``mdd > 0`` (a positive drawdown is a
+            sign error, not a drawdown).
 
     Example::
 
@@ -790,9 +937,13 @@ def deflated_performance(
         >>> dp["verdict"]  # doctest: +SKIP
         'PASS'
     """
-    ns = int(n_strategies)
-    if ns < 1:
-        raise ValueError(f"n_strategies must be >= 1, got {ns}")
+    ns = validate_int("n_strategies", n_strategies)
+    periods = validate_int("periods", periods)
+    mdd_f = validate_number("mdd", mdd)
+    if mdd_f > 0.0:
+        raise ValueError(
+            f"mdd must be <= 0 (max drawdown is negative), got {mdd_f}"
+        )
     base = deflated_sharpe(
         returns, n_trials=ns, periods=periods, sr_var_annual=sr_var_annual
     )
@@ -801,7 +952,6 @@ def deflated_performance(
     excess = (
         sr_a - sr0 if np.isfinite(sr_a) and np.isfinite(sr0) else float("nan")
     )
-    mdd_f = float(mdd)
     if np.isfinite(excess) and np.isfinite(mdd_f) and mdd_f < 0:
         deflated_calmar = float(excess / abs(mdd_f))
     elif np.isfinite(excess) and excess > 0:
@@ -836,6 +986,16 @@ def ols_model_fn(
     sum 1) so the default importance extractor of
     :func:`feature_importance_stability` works without configuration.
 
+    The fit is fail-closed on rank deficiency: with collinear,
+    duplicated or constant feature columns the least-squares solution
+    is not unique, so the fit raises instead of silently returning a
+    minimum-norm coefficient pick.
+
+    Raises:
+        ValueError: if the design matrix ``[1 | features]`` is
+            rank-deficient (collinear features) - the coefficients are
+            not identifiable.
+
     Example::
 
         >>> model = ols_model_fn(  # doctest: +SKIP
@@ -848,6 +1008,12 @@ def ols_model_fn(
         features_arr = features_arr.reshape(-1, 1)
     target_arr = np.asarray(target_train, dtype=float).reshape(-1)
     design = np.column_stack([np.ones(target_arr.size), features_arr])
+    if np.linalg.matrix_rank(design) < design.shape[1]:
+        raise ValueError(
+            "design is rank-deficient (collinear, duplicated or "
+            "constant feature columns): OLS coefficients are not "
+            "identifiable - drop or de-duplicate the offending columns"
+        )
     beta, _, _, _ = np.linalg.lstsq(design, target_arr, rcond=None)
     sd = features_arr.std(axis=0)
     sd = np.where(sd > 0, sd, 1.0)
@@ -919,9 +1085,7 @@ def knn_model_fn(
     features_arr = _as_matrix(features_train)
     target_arr = np.asarray(target_train, dtype=float).reshape(-1)
     n_rows = features_arr.shape[0]
-    neighbors = int(n_neighbors)
-    if neighbors < 1:
-        raise ValueError(f"n_neighbors must be >= 1, got {neighbors}")
+    neighbors = validate_int("n_neighbors", n_neighbors)
     if n_rows < 1:
         raise ValueError("need at least 1 training row")
     if neighbors > n_rows:
@@ -965,9 +1129,10 @@ def kernel_model_fn(
         prediction = sum(K_i * y_i) / sum(K_i),
         K_i = exp(-0.5 * (d_i / bandwidth)**2)
 
-    with euclidean distances ``d_i`` in standardized space; when every
-    ``K_i`` underflows to 0 (query very far from all training rows) the
-    forecast falls back to the single nearest training target.
+    with euclidean distances ``d_i`` in standardized space; when the
+    kernel weight sum is numerically negligible (``denom <= 1e-12``, e.g.
+    every ``K_i`` underflows to 0 for a query very far from all training
+    rows) the forecast falls back to the single nearest training target.
 
     The default bandwidth is Scott's rule ``n ** (-1 / (n_features +
     4))`` computed on the standardized train data (scalar).  Importances
@@ -1003,7 +1168,7 @@ def kernel_model_fn(
     if bandwidth is None:
         width = float(n_rows ** (-1.0 / (n_features + 4)))
     else:
-        width = float(bandwidth)
+        width = validate_number("bandwidth", bandwidth)
         if not width > 0.0:
             raise ValueError(f"bandwidth must be > 0, got {width}")
 
@@ -1012,10 +1177,13 @@ def kernel_model_fn(
         dist_sq = _pairwise_dist_sq(test_std, train_std)
         weights = np.exp(-0.5 * dist_sq / (width * width))
         denom = weights.sum(axis=1)
-        smoothed = (weights @ target_arr) / np.where(denom > 0.0, denom, 1.0)
+        # denom in (0, 1e-12] is numerically useless (the weights are
+        # pure underflow noise): fall back to the nearest training row.
+        usable_denom = denom > 1e-12
+        smoothed = (weights @ target_arr) / np.where(usable_denom, denom, 1.0)
         nearest = target_arr[np.argmin(dist_sq, axis=1)]
         return np.asarray(
-            np.where(denom > 0.0, smoothed, nearest), dtype=float
+            np.where(usable_denom, smoothed, nearest), dtype=float
         )
 
     importances = _permutation_importance(predict, features_arr, target_arr)
@@ -1027,15 +1195,8 @@ def kernel_model_fn(
 # ----------------------------------------------------------------------------
 # demo
 # ----------------------------------------------------------------------------
-def run_all_examples() -> None:
-    """Demo of the full chain plus a non-linear model shoot-out."""
-    print("=" * 72)
-    print(
-        "predictive_model_eval demo: 2 informative features + 1 noise feature"
-    )
-    print("=" * 72)
-    rng = np.random.default_rng(21)
-    n_obs = 800
+def _demo_linear_chain(rng: np.random.Generator, n_obs: int) -> None:
+    """Demo stage 1: a linear problem through the full eval chain."""
     f1 = rng.standard_normal(n_obs)
     f2 = rng.standard_normal(n_obs)
     f3 = rng.standard_normal(n_obs)
@@ -1055,6 +1216,10 @@ def run_all_examples() -> None:
             ["fold", "n_train", "n_test", "fold_ic", "fold_hit"]
         ].to_string(index=False, float_format=lambda value: f"{value:.3f}")
     )
+    assert float(cv["mean_ic"]) > 0.5
+    assert float(cv["ic_t"]) > 10.0
+    assert 0.0 <= float(cv["ic_p_value"]) < 0.001
+    assert bool(cv["folds"]["skipped_reason"].isna().all())
 
     wfe = walkforward_model_eval(
         features,
@@ -1069,6 +1234,13 @@ def run_all_examples() -> None:
         f"pnl_t={wfe['pnl_t']:.2f} hit={wfe['oos_hit_rate']:.3f} "
         f"verdict={wfe['verdict']}"
     )
+    # Soft floor, not an exact pin: the seeded demo config (seed 21,
+    # n=800, train_window=200, test_window=50) yields exactly 12 folds;
+    # that exact value is regression-pinned in
+    # tests/test_predictive_model_eval.py::test_seeded_regression_*.
+    assert int(wfe["n_folds"]) >= 10
+    assert wfe["verdict"] == "PASS"
+    assert float(wfe["pnl_t"]) > 5.0
 
     stab = feature_importance_stability(
         features, target, ols_model_fn, n_bootstrap=40, top_k=1, seed=1
@@ -1083,6 +1255,16 @@ def run_all_examples() -> None:
             index=False, float_format=lambda value: f"{value:.3f}"
         )
     )
+    assert stab["verdict"] == "STABLE"
+    # Soft floor, not an exact pin: at seed 1 with n_bootstrap=40 every
+    # draw is valid (n_valid == 40); the exact value is regression-
+    # pinned in tests/test_predictive_model_eval.py (seeded regression).
+    assert int(stab["n_valid"]) >= 30
+    assert list(stab["per_feature"]["feature"]) == [
+        "alpha_1",
+        "alpha_2",
+        "noise_3",
+    ]
 
     sc = sign_consistency(wfe["predictions"], wfe["realized"])
     print(
@@ -1091,6 +1273,8 @@ def run_all_examples() -> None:
     )
     for name, entry in sc["sign_stability_by_regime"].items():
         print(f"  {name:18s} acc={entry:.3f}")
+    assert sc["verdict"] == "PASS"
+    assert float(sc["directional_accuracy"]) > 0.6
 
     pnl = np.sign(wfe["predictions"]) * wfe["realized"]
     dp = deflated_performance(pnl, n_strategies=10, mdd=-0.18)
@@ -1100,7 +1284,12 @@ def run_all_examples() -> None:
         f"vs benchmark={dp['sr_benchmark_annual']:.2f} "
         f"defl_calmar={dp['deflated_calmar']:.2f} verdict={dp['verdict']}"
     )
+    assert dp["verdict"] == "PASS"
+    assert 0.0 <= float(dp["p_value"]) < 0.05
 
+
+def _demo_nonlinear_shootout(rng: np.random.Generator, n_obs: int) -> None:
+    """Demo stage 2: non-linear models on ``y = sin(3*x) + noise``."""
     print("\n" + "=" * 72)
     print("non-linear demo: y = sin(3*x) + noise (one feature)")
     print("=" * 72)
@@ -1115,6 +1304,7 @@ def run_all_examples() -> None:
         ),
         ("kernel(scott)", kernel_model_fn),
     ]
+    shootout: dict[str, float] = {}
     for label, model_factory in model_factories:
         nonlinear_cv = purged_kfold_cv(
             nonlinear_features,
@@ -1123,7 +1313,27 @@ def run_all_examples() -> None:
             purge_gap=1,
             model_fn=model_factory,
         )
+        shootout[label] = float(nonlinear_cv["mean_ic"])
         print(f"{label:20s} purged-CV mean_ic={nonlinear_cv['mean_ic']:.3f}")
+    assert shootout["knn(n_neighbors=5)"] > shootout["ols"]
+    assert shootout["kernel(scott)"] > shootout["ols"]
+
+
+def run_all_examples() -> None:
+    """Demo of the full chain plus a non-linear model shoot-out.
+
+    Every printed outcome is cross-checked with a deterministic assert
+    (the data is seeded, so the demo doubles as a smoke test).
+    """
+    print("=" * 72)
+    print(
+        "predictive_model_eval demo: 2 informative features + 1 noise feature"
+    )
+    print("=" * 72)
+    rng = np.random.default_rng(21)
+    n_obs = 800
+    _demo_linear_chain(rng, n_obs)
+    _demo_nonlinear_shootout(rng, n_obs)
 
 
 if __name__ == "__main__":

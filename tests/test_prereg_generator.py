@@ -1,10 +1,11 @@
 """Tests for atropos.prereg_generator validation and rendering.
 
 Covers every problem class that ``validate_prereg`` must catch (missing
-field, non-numeric dict threshold, bad comparison operator, string
-criterion without a number), acceptance of a valid spec, ``ValueError``
-propagation from ``generate_prereg``, markdown rendering with an
-explicit ``date=``, and roundtrip stability.
+field, non-numeric dict threshold, missing or bad comparison operator,
+string criterion without an operator bound to a number, wrong
+content-field types), acceptance of a valid spec, ``ValueError``
+propagation from ``generate_prereg`` (including non-ISO dates), markdown
+rendering with an explicit ``date=``, and roundtrip stability.
 """
 
 from __future__ import annotations
@@ -14,7 +15,9 @@ from typing import Any
 import pytest
 from atropos.prereg_generator import (
     REQUIRED_FIELDS,
+    _criteria_rows,
     generate_prereg,
+    run_all_examples,
     validate_prereg,
 )
 
@@ -88,6 +91,19 @@ def test_validate_prereg_rejects_non_numeric_thresholds() -> None:
         assert expected in problems[0]
 
 
+def test_validate_prereg_requires_comparison_in_dict_criteria() -> None:
+    # no default "~": a dict criterion without a direction is a soft
+    # kill switch and must be rejected
+    params = make_valid_params()
+    params["kill_criteria"] = [
+        {"criterion": "t after controls", "threshold": 2.0}
+    ]
+    assert validate_prereg(params) == [
+        "kill_criteria[0]: missing required 'comparison' "
+        "(one of ['<', '<=', '==', '>', '>=', '~'])"
+    ]
+
+
 def test_validate_prereg_rejects_bad_comparison_operator() -> None:
     params = make_valid_params()
     params["kill_criteria"] = [
@@ -103,13 +119,96 @@ def test_validate_prereg_rejects_bad_comparison_operator() -> None:
     assert "not in" in problems[0]
 
 
-def test_validate_prereg_rejects_string_criterion_without_number() -> None:
-    for bad_criterion in ("beat the benchmark", "   "):
+def test_tilde_comparison_is_valid_but_approximate() -> None:
+    """'~' stays allowed (not a breaking removal) but is approximate.
+
+    Documented contract: ``~`` is allowed only as an explicit
+    diagnostic/approximate marker - a kill criterion written with
+    ``~`` must be understood as approximate; prefer directional
+    operators for hard kills.  The rendered table must show ``~`` in
+    the Rule column so readers see the criterion is not directional.
+    """
+    params = make_valid_params()
+    params["kill_criteria"] = [
+        {
+            "criterion": "mean daily IC hovers around zero",
+            "comparison": "~",
+            "threshold": 0.0,
+        }
+    ]
+    assert validate_prereg(params) == []
+    doc = generate_prereg(params, date="2026-01-15")
+    assert "| 1 | mean daily IC hovers around zero | ~ | 0.0 |" in doc
+
+
+def test_validate_prereg_rejects_string_criterion_without_operator() -> None:
+    # a bare number in prose ("wait 200 days") is a soft, movable kill
+    # switch; only an operator bound to a number freezes a threshold
+    bad_with_expected = (
+        (
+            "beat the benchmark",
+            "no comparison operator bound to a numeric threshold",
+        ),
+        ("   ", "empty string"),
+        (
+            "wait 200 days before final check",
+            "no comparison operator bound to a numeric threshold",
+        ),
+        (
+            "benchmark window of 63 days",
+            "no comparison operator bound to a numeric threshold",
+        ),
+    )
+    for bad_criterion, expected in bad_with_expected:
         params = make_valid_params()
         params["kill_criteria"] = [bad_criterion]
         problems = validate_prereg(params)
-        assert len(problems) == 1
-        assert "kill_criteria[0]" in problems[0]
+        assert len(problems) == 1, problems
+        assert problems[0].startswith("kill_criteria[0]:")
+        assert expected in problems[0]
+
+
+def test_validate_prereg_reports_non_dict_params() -> None:
+    assert validate_prereg(["not", "a", "dict"]) == [
+        "params must be a dict, got list"
+    ]
+
+
+def test_validate_prereg_rejects_wrong_content_field_types() -> None:
+    # construction/nulls take str | list[str]; only power_calc accepts
+    # a dict; None/int are reported, never silently stringified
+    for field in ("construction", "nulls"):
+        params = make_valid_params()
+        params[field] = None
+        assert validate_prereg(params) == [
+            f"field '{field}' must be a non-empty string or list of "
+            f"strings, got NoneType"
+        ]
+        params[field] = {"steps": "zscore"}
+        assert validate_prereg(params) == [
+            f"field '{field}' must be a non-empty string or list of "
+            f"strings, got dict"
+        ]
+        params[field] = ["signal = zscore(x)", 42]
+        assert validate_prereg(params) == [
+            f"field '{field}' list items must be strings, got int"
+        ]
+        params[field] = ["   "]
+        assert validate_prereg(params) == [
+            f"field '{field}' must be a non-empty string or list of "
+            f"strings; the list has no non-empty item"
+        ]
+    params = make_valid_params()
+    params["power_calc"] = 42
+    assert validate_prereg(params) == [
+        "field 'power_calc' must be a non-empty string, list of "
+        "strings, or non-empty dict, got int"
+    ]
+    params = make_valid_params()
+    params["power_calc"] = {}
+    assert validate_prereg(params) == [
+        "field 'power_calc' must not be an empty dict"
+    ]
 
 
 def test_generate_prereg_raises_listing_all_problems() -> None:
@@ -145,8 +244,8 @@ def test_generate_prereg_renders_sections_and_table_rows() -> None:
     assert "| # | Criterion | Rule | Threshold |" in doc
     # pipes inside criterion text are escaped for the markdown table
     assert "| 1 | \\|t\\| after controls | < | 2.0 |" in doc
-    # string criteria keep their extracted numeric threshold
-    assert "| 3 | placebo p >= 0.05 | ~ | 0.05 |" in doc
+    # string criteria show the operator actually used in the text
+    assert "| 3 | placebo p >= 0.05 | >= | 0.05 |" in doc
     assert "- **N:** 2600" in doc
 
 
@@ -167,15 +266,43 @@ def test_string_criterion_freezes_operator_adjacent_number() -> None:
         "net sharpe > 1.5 after costs",
     ]
     doc = generate_prereg(params, date="2026-01-15")
-    assert "| ~ | 0.05 |" in doc
-    assert "| ~ | 1.5 |" in doc
-    assert "| ~ | 200 |" not in doc
+    # the Rule column carries the operator actually used in the text
+    assert "| < | 0.05 |" in doc
+    assert "| >= | 0.05 |" in doc
+    assert "| > | 1.5 |" in doc
+    assert "| ~ |" not in doc
+    assert "| < | 200 |" not in doc
 
 
-def test_string_criterion_without_operator_falls_back_to_first_number() -> (
-    None
-):
+def test_criteria_rows_raises_on_operator_free_string() -> None:
+    # defensive guard: post-validation this input cannot reach
+    # _criteria_rows through generate_prereg, but a broken contract
+    # must fail loudly, not render a bogus "~" row
+    with pytest.raises(ValueError, match="comparison operator"):
+        _criteria_rows(["wait 200 days"])
+
+
+def test_generate_prereg_rejects_non_iso_date() -> None:
+    for bad_date in ("garbage", "2026-13-45", "15.01.2026"):
+        with pytest.raises(ValueError, match="ISO date"):
+            generate_prereg(make_valid_params(), date=bad_date)
+
+
+def test_generate_prereg_collapses_newlines_in_power_values() -> None:
     params = make_valid_params()
-    params["kill_criteria"] = ["benchmark window of 63 days"]
+    params["power_calc"] = {"N": 2600, "note": "alpha\n= 0.05\nseeded"}
     doc = generate_prereg(params, date="2026-01-15")
-    assert "| ~ | 63 |" in doc
+    assert "- **note:** alpha = 0.05 seeded" in doc
+    assert "\n= 0.05" not in doc
+
+
+def test_run_all_examples_demo_smoke(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Layer-0: valid prereg renders, soft kill switches are rejected."""
+    run_all_examples()
+    output = capsys.readouterr().out
+    assert "# Preregistration: demo_overnight_imbalance_edge" in output
+    assert "| >= | 0.05 |" in output  # real operator in the Rule column
+    assert "ValueError raised as expected" in output
+    assert "must be a finite number, got 'small'" in output

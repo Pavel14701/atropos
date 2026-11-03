@@ -3,6 +3,8 @@
 A planted linear edge must walk-forward to PASS with the expected fold
 count and no peeking, pure noise must never PASS, the calendar guard
 must fire, and tampered folds must be caught by check_no_peeking.
+Overlapping folds (step < test_window) are scored on the UNION of test
+rows - each row exactly once - so refit frequency cannot inflate wf_t.
 """
 
 from __future__ import annotations
@@ -41,6 +43,18 @@ def _predict_slope(
     model: dict[str, float], test_df: pd.DataFrame
 ) -> np.ndarray:
     return model["slope"] * test_df["sig"].to_numpy(dtype=float)
+
+
+def _fit_const(_train_df: pd.DataFrame) -> dict[str, float]:
+    """Fit that ignores the train slice (deterministic union checks)."""
+    return {"slope": 1.0}
+
+
+def _predict_identity(
+    _model: dict[str, float], test_df: pd.DataFrame
+) -> np.ndarray:
+    """Prediction equal to the signal column (no outcome needed)."""
+    return test_df["signal"].to_numpy(dtype=float)
 
 
 def test_walkforward_planted_edge_passes() -> None:
@@ -264,3 +278,153 @@ def test_calendar_guard_matches_whole_tokens_not_substrings() -> None:
         framed = data.rename(columns={"signal": banned})
         with pytest.raises(ValueError, match="calendar terms forbidden"):
             walkforward(framed, train_window=180, test_window=60, step=60)
+
+
+def test_calendar_guard_allows_day_suffix_names() -> None:
+    data = _edge_frame(360, 97, 0.5)
+    # suffix / digit-glued "day" names are naming decoration, not
+    # calendar dummies
+    for benign in ("5day", "trading_day", "trading_days"):
+        framed = data.rename(columns={"signal": benign})
+        result = walkforward(
+            framed, train_window=180, test_window=60, step=60
+        )
+        assert result["n_folds"] == 3
+    # ... while the day_of_week-class is still forbidden
+    for banned in ("day", "days", "day_of_week", "day_of_month"):
+        framed = data.rename(columns={"signal": banned})
+        with pytest.raises(ValueError, match="calendar terms forbidden"):
+            walkforward(framed, train_window=180, test_window=60, step=60)
+
+
+def test_overlapping_folds_score_union_of_test_rows_once() -> None:
+    data = _edge_frame(360, 92, 0.5)
+    result = walkforward(
+        data,
+        train_window=150,
+        test_window=30,
+        step=1,
+        fit_fn=_fit_const,
+        predict_fn=_predict_identity,
+    )
+    assert result["n_folds"] == 181  # t0 = 150 .. 330
+    assert result["n_pnl_unique"] == 210  # rows 150..359, each ONCE
+    assert result["overlap_factor"] == pytest.approx(30.0)
+    assert any("overlap" in warning for warning in result["warnings"])
+    assert set(result) >= {
+        "wf_t",
+        "warnings",
+        "n_pnl_unique",
+        "overlap_factor",
+        "purge_gap",
+    }
+    # honest t-stat: every OOS row exactly once, independently computed
+    preds = data["signal"].to_numpy(dtype=float)[150:]
+    realized = data["outcome"].to_numpy(dtype=float)[150:]
+    pnl = np.sign(preds) * realized
+    sd = float(np.std(pnl, ddof=1))
+    honest_t = float(np.mean(pnl) / sd * np.sqrt(pnl.size))
+    assert result["wf_t"] == pytest.approx(honest_t)
+    direction = float(np.mean(np.sign(preds) == np.sign(realized)))
+    assert result["wf_direction_consistency"] == pytest.approx(direction)
+    # the naive overlapping stack counts each row up to 30 times
+    # (5430 stacked rows) and inflates the t-stat by up to
+    # sqrt(test_window / step) = sqrt(30); the fold-coverage ramps at
+    # both ends of the sample pull it slightly below that bound
+    signal_all = data["signal"].to_numpy(dtype=float)
+    outcome_all = data["outcome"].to_numpy(dtype=float)
+    naive_pnl = np.concatenate(
+        [
+            np.sign(signal_all[t0 : t0 + 30]) * outcome_all[t0 : t0 + 30]
+            for t0 in range(150, 331)
+        ]
+    )
+    assert naive_pnl.size == 181 * 30
+    naive_sd = float(np.std(naive_pnl, ddof=1))
+    naive_t = float(np.mean(naive_pnl) / naive_sd * np.sqrt(naive_pnl.size))
+    assert naive_t == pytest.approx(np.sqrt(30.0) * result["wf_t"], rel=0.15)
+
+
+def test_disjoint_folds_report_union_size_and_unit_overlap_factor() -> None:
+    data = _edge_frame(360, 85, 0.5)
+    result = walkforward(data, train_window=150, test_window=50, step=50)
+    assert result["n_folds"] == 4
+    assert result["n_pnl_unique"] == 200  # 4 disjoint folds x 50 rows
+    assert result["overlap_factor"] == pytest.approx(1.0)
+    assert result["warnings"] == []
+
+
+def test_predict_fn_gets_test_frame_without_outcome() -> None:
+    gen = np.random.default_rng(93)
+    signal = gen.standard_normal(300)
+    data = pd.DataFrame(
+        {
+            "sig": signal,
+            "fwd_ret": 0.6 * signal + gen.standard_normal(300),
+        }
+    )
+
+    def _peeking_predict(
+        _model: dict[str, float], test_df: pd.DataFrame
+    ) -> np.ndarray:
+        return test_df["fwd_ret"].to_numpy(dtype=float)
+
+    with pytest.raises(KeyError):
+        walkforward(
+            data,
+            train_window=120,
+            test_window=60,
+            step=60,
+            fit_fn=_fit_slope,
+            predict_fn=_peeking_predict,
+            outcome_col="fwd_ret",
+        )
+
+
+def test_frozen_threshold_raises_on_fully_degenerate_grid() -> None:
+    train_df = pd.DataFrame({"signal": np.ones(50), "outcome": np.zeros(50)})
+    with pytest.raises(ValueError, match="non-degenerate"):
+        frozen_threshold(train_df, "signal", "outcome", grid=[0.5, 1.5])
+    with pytest.raises(ValueError, match="non-degenerate"):
+        frozen_threshold(train_df, "signal", "outcome", grid=[])
+    # default grid on a constant signal is degenerate too
+    with pytest.raises(ValueError, match="non-degenerate"):
+        frozen_threshold(train_df, "signal", "outcome")
+
+
+def test_frozen_threshold_skips_degenerate_grid_points() -> None:
+    gen = np.random.default_rng(94)
+    signal = gen.standard_normal(200)
+    train_df = pd.DataFrame(
+        {
+            "signal": signal,
+            "outcome": 0.5 * signal + gen.standard_normal(200),
+        }
+    )
+    huge = float(np.max(signal) + 10.0)  # no trades -> degenerate
+    chosen = frozen_threshold(train_df, "signal", "outcome", grid=[huge, 0.0])
+    assert chosen["threshold"] == 0.0
+    assert np.isfinite(chosen["train_t"])
+
+
+def test_frozen_threshold_tstat_uses_ddof_one() -> None:
+    gen = np.random.default_rng(95)
+    signal = gen.standard_normal(120)
+    outcome = 0.4 * signal + gen.standard_normal(120)
+    train_df = pd.DataFrame({"signal": signal, "outcome": outcome})
+    threshold = float(np.quantile(signal, 0.4))
+    chosen = frozen_threshold(train_df, "signal", "outcome", grid=[threshold])
+    pos = (signal > threshold).astype(float)
+    pnl = np.zeros_like(outcome)
+    pnl[1:] = pos[:-1] * outcome[1:]
+    expected = float(np.mean(pnl) / np.std(pnl, ddof=1) * np.sqrt(pnl.size))
+    assert chosen["train_t"] == pytest.approx(expected)
+
+
+def test_default_predict_constant_predictions_raise() -> None:
+    gen = np.random.default_rng(96)
+    data = pd.DataFrame(
+        {"flat": np.zeros(300), "outcome": gen.standard_normal(300)}
+    )
+    with pytest.raises(ValueError, match="constant predictions"):
+        walkforward(data, train_window=150, test_window=50, step=50)

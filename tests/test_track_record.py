@@ -10,13 +10,17 @@ barrier precedence over the decision point, and prereg validation.
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import numpy as np
 import pytest
+from atropos import track_record
 from atropos.track_record import (
+    DrawdownNotComputable,
     drawdown_floor_check,
     live_verdict,
     prereg_divergence,
+    run_all_examples,
     sharpe_standard_error,
 )
 
@@ -114,6 +118,57 @@ def test_drawdown_floor_validates() -> None:
         drawdown_floor_check([0.01, 0.02], dd_floor=0.0)
     with pytest.raises(ValueError):
         drawdown_floor_check([0.01, 0.02], dd_floor=0.5)
+
+
+def test_drawdown_overflow_fails_closed() -> None:
+    # 1 + 1e308 == 1e308 in float64, so cumprod overflows to inf,
+    # inf/inf makes mdd NaN and `nan <= floor` is False.  The barrier
+    # must fail closed: never a silent LIVE_OK on uncomputable input.
+    overflow = [1e308, 1e308, 1e308]
+    with pytest.raises(ValueError, match="non-finite"):
+        drawdown_floor_check(overflow, dd_floor=-0.25)
+    out = live_verdict(overflow, 1.5, n_backtest=2000)
+    assert out["verdict"] == "INCONCLUSIVE"
+    assert out["reason"] == "drawdown_not_computable"
+    assert math.isnan(out["mdd"])
+    assert not out["dd_breached"]
+    # fails closed even past the decision point: not-computable takes
+    # precedence over the too-short gate
+    at_decision_point = live_verdict(
+        overflow, 1.5, n_backtest=2000, min_observations=8
+    )
+    assert at_decision_point["reason"] == "drawdown_not_computable"
+
+
+def test_drawdown_not_computable_is_narrow_value_error() -> None:
+    # the overflow sentinel is a dedicated class, and it IS still a
+    # ValueError (backward compatibility for external handlers)
+    assert issubclass(DrawdownNotComputable, ValueError)
+    with pytest.raises(DrawdownNotComputable, match="non-finite"):
+        drawdown_floor_check([1e308, 1e308, 1e308], dd_floor=-0.25)
+    # legacy `except ValueError` callers intercept the very same raise
+    with pytest.raises(ValueError, match="non-finite"):
+        drawdown_floor_check([1e308, 1e308, 1e308], dd_floor=-0.25)
+
+
+def test_live_verdict_does_not_mask_foreign_value_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # the INCONCLUSIVE degradation is reserved for DrawdownNotComputable
+    # alone: an ordinary ValueError raised anywhere else must PROPAGATE
+    # (a validation bug must stay visible, not become a soft verdict)
+    def _boom(_rets: np.ndarray, _floor: float) -> dict[str, Any]:
+        raise ValueError("unexpected bug inside the drawdown leg")
+
+    monkeypatch.setattr(track_record, "_drawdown_floor_from_clean", _boom)
+    with pytest.raises(ValueError, match="unexpected bug"):
+        track_record.live_verdict([0.01, -0.02], 1.5, n_backtest=100)
+    # invalid dd_floor is upfront VALIDATION: it raises, it never
+    # degrades to INCONCLUSIVE
+    with pytest.raises(ValueError, match="dd_floor must be < 0"):
+        track_record.live_verdict(
+            [0.01, -0.02], 1.5, n_backtest=100, dd_floor=0.0
+        )
 
 
 def test_live_verdict_ok_on_consistent_track() -> None:
@@ -238,4 +293,13 @@ def test_live_verdict_validates_prereg_parameters() -> None:
     with pytest.raises(ValueError):
         live_verdict(live, 1.5, n_backtest=2000, dd_floor=0.0)
     with pytest.raises(ValueError):
+        live_verdict(live, 1.5, n_backtest=2000, dd_floor=float("nan"))
+    with pytest.raises(ValueError):
         live_verdict(live, 1.5, n_backtest=2000, kill_z=0.0)
+
+
+def test_run_all_examples_asserts_all_four_fates() -> None:
+    # the demo is itself a regression test: its internal asserts on
+    # the four canonical verdicts (LIVE_OK, divergence kill, DD kill,
+    # too short) must hold
+    run_all_examples()

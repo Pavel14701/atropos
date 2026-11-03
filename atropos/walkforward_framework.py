@@ -14,19 +14,37 @@ predicts the next slice, and stacks the out-of-sample PnL:
   (Lopez de Prado's purging).  ``purge_gap = label horizon`` is the
   correct setting; 0 keeps the historical behaviour.
 * **No peeking** - ``fit_fn`` receives the train slice only,
-  structurally; the helper :func:`check_no_peeking` re-verifies
-  ``train_end + purge_gap <= test_start`` for every recorded fold.
-* **Calendar terms forbidden** - any column whose name looks like a
-  calendar feature (year / month / dow / date / month-day names) raises
-  ``ValueError``, because calendar dummies let a "signal" memorize
-  regimes.
+  structurally, and ``predict_fn`` receives the test frame WITHOUT the
+  outcome column, so neither hook can touch realized test returns; the
+  helper :func:`check_no_peeking` re-verifies ``train_end + purge_gap
+  <= test_start`` for every recorded fold.
+* **Overlapping folds de-duplicated** - with ``step < test_window`` the
+  test slices overlap; ``wf_t`` and direction consistency are computed
+  on the UNION of test rows (each row counted exactly once, with the
+  prediction from the first fold that tested it), so folding frequency
+  cannot manufacture significance.  ``overlap_factor`` records
+  ``test_window / step``: a naive overlapping stack would count every
+  row up to that many times and inflate ``wf_t`` by up to
+  ``sqrt(overlap_factor)``.
+* **Calendar terms forbidden** - any column whose name carries
+  year / month / week / date / quarter / holiday / dow / doy (or a
+  month / weekday abbreviation like jan or tue) as a separate letter
+  subword raises ``ValueError``, because calendar dummies let a
+  "signal" memorize regimes.  ``day`` / ``days`` are flagged only as
+  the whole name or its first segment, so ``trading_day`` or ``5day``
+  pass; see :func:`_forbidden_columns` for the exact rule and naming
+  advice.
 * **Threshold frozen on train** - use :func:`frozen_threshold` inside
   a custom ``fit_fn``: the threshold is selected on the train slice and
   stored in the model; the test slice is scored against it untouched
   (the default OLS fit is threshold-free).
 
 Returned dict: ``{wf_t, wf_direction_consistency, wf_shrink_ratio,
-verdict, n_folds, in_sample_t, folds, warnings, mode}``.
+verdict, n_folds, in_sample_t, folds, warnings, mode, purge_gap,
+n_pnl_unique, overlap_factor}``.  ``in_sample_t`` is a
+LOOKAHEAD-DIAGNOSTIC: computed by refitting on the FULL sample -
+in-sample by construction; used only as the ``wf_shrink_ratio``
+denominator, never for verdicts.
 
 Usage::
 
@@ -50,13 +68,20 @@ import pandas as pd
 
 __all__ = ["check_no_peeking", "frozen_threshold", "walkforward"]
 
-# Calendar terms are matched as whole tokens (with optional plural), so
-# ordinary feature names containing them as substrings - "window" (dow),
-# "update" (date) - do not trigger false positives.
+# Calendar terms are matched as separate letter subwords (with optional
+# plural): the term must be bounded by the string edge or a non-letter on
+# both sides, so ordinary feature names carrying them as glued substrings
+# - "window" (dow), "update" (date) - do not trigger false positives.
+# Digit-letter bounds DO count as edges, so "2024year" is flagged.
+# "day" is deliberately EXCLUDED here and handled by _DAY_HEAD_RE below,
+# so suffix / digit-glued day names stay usable.
 _ALWAYS_BAD_RE = re.compile(
-    r"(?i)(?:^|[^a-z])(?:year|month|week|date|quarter|holiday|day|dow|doy)"
+    r"(?i)(?:^|[^a-z])(?:year|month|week|date|quarter|holiday|dow|doy)"
     r"s?(?:[^a-z]|$)"
 )
+# day / days are flagged only when they ARE the column name or start it
+# ("day", "days", "day_of_week"); "trading_day" and "5day" pass.
+_DAY_HEAD_RE = re.compile(r"(?i)^days?(?:[^a-z]|$)")
 _MONTH_DOW_RE = re.compile(
     r"(?i)(?:^|[^a-z])(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|"
     r"mon|tue|tues|wed|thu|thur|fri|sat|sun)(?:[^a-z]|$)"
@@ -64,11 +89,32 @@ _MONTH_DOW_RE = re.compile(
 
 
 def _forbidden_columns(columns: Any) -> list[str]:
-    """Column names that smell like calendar features."""
+    """Column names that smell like calendar features.
+
+    Flagged is any name containing one of year / month / week / date /
+    quarter / holiday / dow / doy (plus optional plural), or a month /
+    weekday abbreviation (jan .. dec, mon .. sun), as a separate letter
+    subword: bounded on both sides by the string edge or a non-letter
+    character.  Digit-letter forms count as bounds, so ``2024year`` or
+    ``q1_month`` are flagged, while glued substrings (``window``,
+    ``update``) are not.  ``day`` / ``days`` are flagged only as the
+    whole name or its FIRST segment - ``day``, ``days``,
+    ``day_of_week`` - because suffix or digit-glued uses such as
+    ``trading_day`` or ``5day`` are ordinary naming, not calendar
+    dummies.  To feed a genuinely calendar feature past the guard,
+    pass ``forbid_calendar=False`` deliberately; to keep a benign
+    name, prefer a non-calendar synonym (``elapsed`` for ``n_days``)
+    over reshuffling word order - the strong terms are flagged in any
+    segment position.
+    """
     bad: list[str] = []
     for col in columns:
         col_name = str(col)
-        if _ALWAYS_BAD_RE.search(col_name) or _MONTH_DOW_RE.search(col_name):
+        if (
+            _ALWAYS_BAD_RE.search(col_name)
+            or _DAY_HEAD_RE.search(col_name)
+            or _MONTH_DOW_RE.search(col_name)
+        ):
             bad.append(col_name)
     return bad
 
@@ -84,8 +130,12 @@ def frozen_threshold(
     Scans the 30/40/50/60/70-percentile grid (or a user grid) of the
     signal, picks the threshold with the highest in-train t-stat of the
     lagged long/flat rule, and returns ``{"threshold": float,
-    "train_t": float}``.  The threshold must then be reused verbatim on
-    every test slice.
+    "train_t": float}``.  The t-stat uses ``np.std(..., ddof=1)``,
+    consistent with :func:`walkforward`.  Degenerate grid points (zero
+    PnL standard deviation) are skipped; if NO grid point yields
+    non-degenerate trades, ``ValueError`` is raised instead of
+    silently returning a NaN threshold.  The threshold must then be
+    reused verbatim on every test slice.
 
     Example::
 
@@ -107,14 +157,14 @@ def frozen_threshold(
         pos = (signal > thr).astype(float)
         pnl = np.zeros_like(outcome)
         pnl[1:] = pos[:-1] * outcome[1:]
-        sd = float(np.std(pnl))
-        t_stat = (
-            float(np.mean(pnl) / sd * np.sqrt(pnl.size))
-            if sd > 0
-            else -np.inf
-        )
+        sd = float(np.std(pnl, ddof=1))
+        if not sd > 0:  # degenerate: all-flat / all-one positions
+            continue
+        t_stat = float(np.mean(pnl) / sd * np.sqrt(pnl.size))
         if t_stat > best_t:
             best_thr, best_t = float(thr), t_stat
+    if not np.isfinite(best_t):
+        raise ValueError("no threshold gives non-degenerate trades")
     return {"threshold": best_thr, "train_t": best_t}
 
 
@@ -141,6 +191,13 @@ def _default_fit(
     features = train_df[cols].to_numpy(dtype=float)
     outcome = train_df[outcome_col].to_numpy(dtype=float)
     design = np.column_stack([np.ones(len(outcome)), features])
+    if not np.all(np.isfinite(design)):
+        # NaN/inf features would surface as an opaque LinAlgError from
+        # the SVD instead of a diagnosable failure
+        raise ValueError(
+            "non-finite values in feature columns: clean or drop "
+            "NaN/inf features before calling walkforward"
+        )
     beta, _, _, _ = np.linalg.lstsq(design, outcome, rcond=None)
     return {"cols": list(cols), "beta": beta}
 
@@ -148,10 +205,18 @@ def _default_fit(
 def _default_predict(
     model: dict[str, Any], test_df: pd.DataFrame
 ) -> np.ndarray:
-    """Default predict: linear model score from the frozen coefficients."""
+    """Default predict: linear model score from the frozen coefficients.
+
+    Raises ``ValueError`` when the scores are constant (e.g. every
+    feature coefficient is zero): a sign rule on a constant forecast
+    carries no information, and failing loudly beats silently trading
+    one side of every test slice.
+    """
     features = test_df[model["cols"]].to_numpy(dtype=float)
     design = np.column_stack([np.ones(len(features)), features])
     scores: np.ndarray = design @ model["beta"]
+    if float(np.ptp(scores)) == 0.0:
+        raise ValueError("model produced constant predictions")
     return scores
 
 
@@ -177,18 +242,47 @@ def walkforward(  # noqa: PLR0912, PLR0915  # one branch per stage
         return).
     train_window : initial training length; the training set then EXPANDS
         with every fold (rolling mode is deliberately not implemented).
-    test_window, step : test-slice length and fold stride.
-    fit_fn : ``fit_fn(train_df) -> model``.  Receives ONLY past data.
-        None -> default OLS fit with a frozen entry threshold.
+    test_window, step : test-slice length and fold stride.  With
+        ``step < test_window`` the test slices overlap; the statistics
+        (``wf_t``, direction consistency) are then computed on the UNION
+        of test rows - each row exactly once, taking the prediction from
+        the FIRST fold that tested it - so overlapping cannot inflate
+        significance (see ``overlap_factor`` in the result).
+    fit_fn : ``fit_fn(train_df) -> model``.  Receives ONLY past data
+        (including the outcome column - fitting needs labels).  None ->
+        default OLS fit on every numeric non-outcome column, scored
+        long/short as ``sign(forecast)``; the default path is
+        threshold-free - entry thresholds via :func:`frozen_threshold`
+        belong to custom ``fit_fn`` / ``predict_fn`` pairs.
     predict_fn : (keyword-only) ``predict_fn(model, test_df) -> array of
-        return forecasts``.  None -> default linear scorer.
+        return forecasts``.  The test frame arrives WITHOUT the outcome
+        column, so a predict_fn structurally cannot peek at realized
+        returns.  None -> default linear scorer (which raises on
+        constant predictions).
     outcome_col : (keyword-only) name of the forward-return column.
     forbid_calendar : (keyword-only) raise on calendar-looking column
-        names (recommended).
+        names (recommended); see :func:`_forbidden_columns` for exactly
+        what is flagged and how to rename benign features.
     purge_gap : (keyword-only) rows removed from the END of each train
         slice so overlapping forward-return labels cannot leak into the
         test period; set it to the label horizon (e.g. 1 for one-period
         forward returns).
+
+    Returns:
+    -------
+    dict with ``wf_t`` (out-of-sample t-stat over the union of test
+    rows), ``wf_direction_consistency``, ``wf_shrink_ratio`` (``wf_t``
+    divided by the in-sample t), ``verdict``, ``n_folds``,
+    ``in_sample_t`` (LOOKAHEAD-DIAGNOSTIC: computed by refitting on
+    the FULL sample - in-sample by construction; used only as the
+    ``wf_shrink_ratio`` denominator, never for verdicts), ``folds``
+    (per-fold frame; ``train_end`` is the
+    EXCLUSIVE end of the train slice - the first row NOT in train - and
+    the test slice spans ``[test_start, test_end)``), ``warnings``
+    (list of strings), ``mode``, ``purge_gap``, ``n_pnl_unique`` (test
+    rows counted once) and ``overlap_factor`` (``test_window / step``;
+    a naive overlapping stack would count every row up to this many
+    times and inflate ``wf_t`` by up to ``sqrt(overlap_factor)``).
 
     Verdict: PASS if ``wf_t >= 2`` and direction consistency >= 0.5;
     DEGRADED if ``wf_t >= 1``; FAIL otherwise.
@@ -247,9 +341,9 @@ def walkforward(  # noqa: PLR0912, PLR0915  # one branch per stage
         predict_fn = _default_predict
 
     fold_rows: list[dict[str, Any]] = []
-    pnls: list[np.ndarray] = []
-    preds_all: list[np.ndarray] = []
-    real_all: list[np.ndarray] = []
+    covered: np.ndarray = np.zeros(n_rows, dtype=bool)
+    union_preds: list[np.ndarray] = []
+    union_real: list[np.ndarray] = []
 
     t0 = train_window + purge_gap
     while t0 + test_window <= n_rows:
@@ -258,7 +352,11 @@ def walkforward(  # noqa: PLR0912, PLR0915  # one branch per stage
         train = data.iloc[: t0 - purge_gap]
         test = data.iloc[t0 : t0 + test_window]  # strictly after train
         model = fit_fn(train)  # fit_fn NEVER sees test data
-        preds = np.asarray(predict_fn(model, test), dtype=float).reshape(-1)
+        # predict_fn NEVER sees the outcome column of the test slice
+        test_features = test.drop(columns=[outcome_col])
+        preds = np.asarray(
+            predict_fn(model, test_features), dtype=float
+        ).reshape(-1)
         if preds.size != len(test):
             raise ValueError(
                 f"predict_fn returned {preds.size} values"
@@ -266,9 +364,13 @@ def walkforward(  # noqa: PLR0912, PLR0915  # one branch per stage
             )
         realized = test[outcome_col].to_numpy(dtype=float)
         pnl = np.sign(preds) * realized
-        pnls.append(pnl)
-        preds_all.append(preds)
-        real_all.append(realized)
+        # union bookkeeping: each data row enters the OOS sample once,
+        # with the prediction of the FIRST fold that tested it
+        positions = np.arange(t0, t0 + test_window)
+        fresh = ~covered[positions]
+        union_preds.append(preds[fresh])
+        union_real.append(realized[fresh])
+        covered[positions] = True
         fold_rows.append(
             {
                 "fold": len(fold_rows),
@@ -288,25 +390,27 @@ def walkforward(  # noqa: PLR0912, PLR0915  # one branch per stage
     if not fold_rows:
         raise ValueError("no walk-forward folds produced")
 
-    pnl_all = np.concatenate(pnls)
-    preds_stacked = np.concatenate(preds_all)
-    real_stacked = np.concatenate(real_all)
-    n_pnl = int(pnl_all.size)
-    sd = float(np.std(pnl_all, ddof=1))
+    preds_unique = np.concatenate(union_preds)
+    real_unique = np.concatenate(union_real)
+    pnl_unique = np.sign(preds_unique) * real_unique
+    n_pnl_unique = int(pnl_unique.size)
+    sd_unique = float(np.std(pnl_unique, ddof=1))
     wf_t = (
-        float(np.mean(pnl_all) / sd * np.sqrt(n_pnl))
-        if sd > 0
+        float(np.mean(pnl_unique) / sd_unique * np.sqrt(n_pnl_unique))
+        if sd_unique > 0
         else float("nan")
     )
-    direction = float(
-        np.mean(np.sign(preds_stacked) == np.sign(real_stacked))
-    )
+    direction = float(np.mean(np.sign(preds_unique) == np.sign(real_unique)))
 
-    # in-sample reference (diagnostic only - this is the shrink denominator)
+    # in-sample reference - LOOKAHEAD-DIAGNOSTIC: computed by refitting
+    # on the FULL sample (train == test), so it is in-sample by
+    # construction and must never feed a verdict; it exists only as
+    # the wf_shrink_ratio denominator.
     model_all = fit_fn(data)
-    preds_is = np.asarray(predict_fn(model_all, data), dtype=float).reshape(
-        -1
-    )
+    preds_is = np.asarray(
+        predict_fn(model_all, data.drop(columns=[outcome_col])),
+        dtype=float,
+    ).reshape(-1)
     pnl_is = np.sign(preds_is) * data[outcome_col].to_numpy(dtype=float)
     sd_is = float(np.std(pnl_is, ddof=1))
     is_t = (
@@ -327,16 +431,16 @@ def walkforward(  # noqa: PLR0912, PLR0915  # one branch per stage
     else:
         verdict = "FAIL"
 
-    warnings: list[str] = []
+    wf_warnings: list[str] = []
     if step > test_window:
-        warnings.append(
+        wf_warnings.append(
             "step > test_window: folds skip periods between tests"
         )
     if step < test_window:
-        warnings.append(
-            "step < test_window: test slices overlap - the naive wf_t "
-            "counts some periods more than once and overstates "
-            "significance"
+        wf_warnings.append(
+            "step < test_window: test slices overlap - statistics use "
+            "the union of test rows (n_pnl_unique), each row counted "
+            "once, so the overlap cannot inflate wf_t"
         )
 
     folds_df = pd.DataFrame(fold_rows)
@@ -346,11 +450,15 @@ def walkforward(  # noqa: PLR0912, PLR0915  # one branch per stage
         "wf_shrink_ratio": shrink,
         "verdict": verdict,
         "n_folds": int(folds_df.shape[0]),
+        # LOOKAHEAD-DIAGNOSTIC: full-sample refit, in-sample by
+        # construction; shrink-ratio denominator only, never a verdict.
         "in_sample_t": is_t,
         "folds": folds_df,
-        "warnings": warnings,
+        "warnings": wf_warnings,
         "mode": "expanding",
         "purge_gap": int(purge_gap),
+        "n_pnl_unique": n_pnl_unique,
+        "overlap_factor": float(test_window / step),
     }
 
 
@@ -382,7 +490,7 @@ def check_no_peeking(result: dict[str, Any]) -> bool:
 # demo
 # ----------------------------------------------------------------------------
 def run_all_examples() -> None:
-    """Demo: walk-forward on a genuine edge, plus the calendar guard."""
+    """Demo: genuine edge, purge, overlap dedup, thresholds, guard."""
     print("=" * 72)
     print("walkforward_framework demo: genuine edge, expanding window")
     print("=" * 72)
@@ -398,6 +506,11 @@ def run_all_examples() -> None:
         }
     )
     out = walkforward(data, train_window=180, test_window=30, step=30)
+    assert check_no_peeking(out)
+    assert np.isfinite(out["wf_t"])
+    # genuine-edge case: the seeded verdict is PASS; DEGRADED (wf_t >= 1)
+    # is the acceptable floor, FAIL would mean the planted edge vanished
+    assert out["verdict"] in {"PASS", "DEGRADED"}
     print(
         f"wf_t={out['wf_t']:.2f}"
         f"  direction={out['wf_direction_consistency']:.3f}"
@@ -416,11 +529,58 @@ def run_all_examples() -> None:
     purged = walkforward(
         data, train_window=180, test_window=30, step=30, purge_gap=5
     )
+    assert check_no_peeking(purged)
     print(
         f"wf_t={purged['wf_t']:.2f}  n_folds={purged['n_folds']}"
         f"  no_peeking={check_no_peeking(purged)}"
         f"  first fold train_end={int(purged['folds']['train_end'].iloc[0])}"
         f" < test_start={int(purged['folds']['test_start'].iloc[0])}"
+    )
+
+    print()
+    print("overlapping folds (step=5 < test_window=30): union statistics")
+    overlapped = walkforward(data, train_window=180, test_window=30, step=5)
+    assert check_no_peeking(overlapped)
+    assert np.isfinite(overlapped["wf_t"])
+    # overlap_factor is exactly test_window / step (30 / 5 here)
+    assert abs(overlapped["overlap_factor"] - 30 / 5) < 1e-9
+    print(
+        f"wf_t={overlapped['wf_t']:.2f}"
+        f"  n_pnl_unique={overlapped['n_pnl_unique']}"
+        f"  overlap_factor={overlapped['overlap_factor']:.1f}"
+        f"  n_folds={overlapped['n_folds']}"
+    )
+    for line in overlapped["warnings"]:
+        print(f"  warning: {line}")
+
+    print()
+    print("frozen-threshold entry rule (long/flat), custom fit/predict:")
+
+    def thr_fit(train_df: pd.DataFrame) -> dict[str, float]:
+        return frozen_threshold(train_df, "signal", "outcome")
+
+    def thr_predict(
+        model: dict[str, float], test_df: pd.DataFrame
+    ) -> np.ndarray:
+        above = test_df["signal"].to_numpy(dtype=float)
+        return (above > model["threshold"]).astype(float)
+
+    head_model = thr_fit(data.iloc[:180])
+    assert np.isfinite(head_model["threshold"])
+    frozen = walkforward(
+        data,
+        train_window=180,
+        test_window=30,
+        step=30,
+        fit_fn=thr_fit,
+        predict_fn=thr_predict,
+    )
+    assert check_no_peeking(frozen)
+    print(
+        f"threshold={head_model['threshold']:.4f}"
+        f"  train_t={head_model['train_t']:.2f}"
+        f"  wf_t={frozen['wf_t']:.2f}"
+        f"  verdict={frozen['verdict']}"
     )
 
     print()
