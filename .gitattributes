@@ -1,0 +1,11 @@
+# Normalize line endings: LF in the repository everywhere, no CRLF
+# churn on checkout under core.autocrlf=true (Windows).
+* text=auto eol=lf
+
+# Binary artifacts must not be renormalized.
+*.db binary
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.pdf binary

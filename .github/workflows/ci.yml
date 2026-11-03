@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+          enable-cache: true
+
+      - name: Sync environment (uv.lock)
+        run: uv sync --locked
+
+      - name: Ruff lint (78 cols, pydocstyle, perflint, E741)
+        run: uv run ruff check .
+
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+      - name: Mypy strict
+        run: uv run mypy
+
+      - name: Pytest
+        run: uv run pytest
+
+      - name: Ensemble pipeline smoke test (self-verifying demo)
+        run: uv run python -m atropos.ensemble_pipeline
