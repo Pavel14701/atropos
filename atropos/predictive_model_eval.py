@@ -509,13 +509,17 @@ def _extract_importances(
             if key in model:
                 values = np.asarray(model[key], dtype=float).reshape(-1)
                 if values.size == n_features:
-                    return np.abs(values)
+                    # asarray pins the ndarray type (stubs -> Any).
+                    return np.asarray(np.abs(values))
     for attr in ("feature_importances_", "coef_"):
         raw = getattr(model, attr, None)
         if raw is not None:
             values = np.asarray(raw, dtype=float).reshape(-1)
             if values.size == n_features:
-                return np.abs(values) if attr == "coef_" else values
+                if attr == "coef_":
+                    # asarray pins the ndarray type (stubs -> Any).
+                    return np.asarray(np.abs(values))
+                return values
     raise ValueError(
         "cannot extract feature importances from the fitted model; "
         "pass importance_fn(model) -> (n_features,) array"

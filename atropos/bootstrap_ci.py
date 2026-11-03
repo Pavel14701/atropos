@@ -36,7 +36,8 @@ __all__ = ["block_bootstrap_ci", "percentile_ci", "stationary_bootstrap_ci"]
 def _clean(values: Any) -> np.ndarray:
     """Coerce array-like input to a flat 1-D float array, NaNs dropped."""
     arr = np.asarray(values, dtype=float).reshape(-1)
-    return arr[np.isfinite(arr)]
+    # np.asarray pins the ndarray type: stubs resolve this to Any.
+    return np.asarray(arr[np.isfinite(arr)])
 
 
 def _apply_stat(samples: np.ndarray, stat: Callable[..., Any]) -> np.ndarray:

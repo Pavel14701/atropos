@@ -140,7 +140,8 @@ def _date_quantiles(
         / signal_values.size
     )
     buckets = np.clip(np.ceil(ranks * n_quantiles), 1, n_quantiles)
-    return buckets.astype(np.int64)
+    # np.asarray pins the ndarray type: stubs resolve this to Any.
+    return np.asarray(buckets).astype(np.int64)
 
 
 def _per_date_ic(

@@ -46,7 +46,8 @@ def _clean(values: Any) -> np.ndarray:
         1-D float64 array holding only the finite entries.
     """
     arr = np.asarray(values, dtype=float).reshape(-1)
-    return arr[np.isfinite(arr)]
+    # np.asarray pins the ndarray type: stubs resolve this to Any.
+    return np.asarray(arr[np.isfinite(arr)])
 
 
 def _clean_pair(

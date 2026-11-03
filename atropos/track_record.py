@@ -52,7 +52,8 @@ def _clean(values: Any) -> np.ndarray:
         1-D float64 array holding only the finite entries.
     """
     arr = np.asarray(values, dtype=float).reshape(-1)
-    return arr[np.isfinite(arr)]
+    # np.asarray pins the ndarray type: stubs resolve this to Any.
+    return np.asarray(arr[np.isfinite(arr)])
 
 
 def _is_constant(values: np.ndarray) -> bool:
@@ -398,7 +399,9 @@ def run_all_examples() -> None:
     # Deterministic streams (sample SR is exact, no seed luck): a
     # [0, gain] tile has mean = std = gain/2, so SR_pp = 1.0 exactly.
     live_intact = np.tile([0.0, 0.016], 500)  # SR_ann ~ sqrt(252)
-    live_inverted = np.tile([0.0, -0.016], 500)  # SR_ann ~ -sqrt(252)
+    # inverted edge with BOUNDED drawdown: a monotone losing tile hits
+    # the DD barrier long before the divergence test can speak
+    live_inverted = np.tile([0.016, -0.017], 250)  # SR_ann ~ -0.5
     live_crash = np.concatenate(
         [np.tile([0.0, 0.016], 60), np.full(40, -0.01)]
     )
@@ -412,7 +415,7 @@ def run_all_examples() -> None:
     print("=" * 72)
     cases = [
         ("edge intact", live_intact, 500, -0.40),
-        ("edge inverted in prod", live_inverted, 500, -0.40),
+        ("edge inverted in prod", live_inverted, 400, -0.40),
         ("crash breach", live_crash, 150, -0.25),
         ("track too short", live_intact[:80], 500, -0.40),
     ]
