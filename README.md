@@ -61,7 +61,3 @@ uv run python -m atropos.ensemble_pipeline     # демо полного кон�
 ## Правило
 
 **Любая гипотеза** → открой FRAMEWORK.md → проверь graveyard → прогони pipeline (до 7 стадий: контролы → спек-кривая → батарея → walk-forward → risk/cost-конверт net-of-cost → модельный OOS → кросс-секция) → один прогон → один вердикт → graveyard или prereg. Ноль параметров после данных. Ноль календарей в скоринге. Ноль «может быть пригодится». Вердикты включают `COST_DEATH` (edge съеден издержками: gross проходит, net — нет) и `CS_NO_EDGE` (кросс-секционный спред не выживает).
-
-## Источник
-
-deterministic-trading-engine repo · 16 раундов марафона · ~89 направлений · 130+ могил · 6 систематических законов · PREREG + graveyard + response doc
