@@ -33,3 +33,6 @@ jobs:
 
       - name: Ensemble pipeline smoke test (self-verifying demo)
         run: uv run python -m atropos.ensemble_pipeline
+
+      - name: Track-record demo smoke test (four live fates)
+        run: uv run python -m atropos.track_record

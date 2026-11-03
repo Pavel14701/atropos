@@ -13,7 +13,7 @@
 
 ## Пакет `atropos`
 
-13 модулей (Python 3.11+, numpy/pandas/scipy), каждый — самодостаточный
+14 модулей (Python 3.11+, numpy/pandas/scipy), каждый — самодостаточный
 инструмент убийства; демо: `python -m atropos.<модуль>`.
 
 | Модуль | Что делает |
@@ -30,6 +30,7 @@
 | `monte_carlo` | GBM-пути, block-bootstrap распределения Sharpe и maxDD |
 | `predictive_model_eval` | Purged K-fold CV, walk-forward OOS, стабильность важностей; встроенные модели: OLS, kNN, Nadaraya-Watson + подключаемые фабрики (sklearn-обёртки без новой зависимости) |
 | `cross_sectional` | Кросс-секция: IC по датам, квантильные long-short спреды net-of-cost, монотонность по квантилям |
+| `track_record` | Прод-трек-рекорд против пререга: Lo (2002) SE, z-тест живого Sharpe + DD-барьер → LIVE_OK / LIVE_KILLED / INCONCLUSIVE |
 | `ensemble_pipeline` | Весь конвейер одним вызовом: до 7 стадий, вердикт по первой же смерти |
 
 ## Инструментарий
@@ -64,7 +65,7 @@ uv run python -m atropos.ensemble_pipeline     # демо полного кон�
 
 ## Правило
 
-**Любая гипотеза** → открой FRAMEWORK.md → проверь graveyard → прогони pipeline (до 7 стадий: контролы → спек-кривая → батарея → walk-forward → risk/cost-конверт net-of-cost → модельный OOS → кросс-секция) → один прогон → один вердикт → graveyard или prereg. Ноль параметров после данных. Ноль календарей в скоринге. Ноль «может быть пригодится». Вердикты включают `COST_DEATH` (edge съеден издержками: gross проходит, net — нет) и `CS_NO_EDGE` (кросс-секционный спред не выживает).
+**Любая гипотеза** → открой FRAMEWORK.md → проверь graveyard → прогони pipeline (до 7 стадий: контролы → спек-кривая → батарея → walk-forward → risk/cost-конверт net-of-cost → модельный OOS → кросс-секция) → один прогон → один вердикт → graveyard или prereg. Ноль параметров после данных. Ноль календарей в скоринге. Ноль «может быть пригодится». Вердикты включают `COST_DEATH` (edge съеден издержками: gross проходит, net — нет) и `CS_NO_EDGE` (кросс-секционный спред не выживает). **SURVIVED — не конец**: выживший в проде добирает трек-рекорд и проходит `live_verdict` — живой Sharpe на `kill_z` сигм ниже прeregовского или пробой DD-пола → `LIVE_KILLED`.
 
 ## Полигон обкатки
 
