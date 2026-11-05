@@ -1,20 +1,20 @@
-# docs/api — авто-генерируемая документация
+# docs/api — auto-generated reference
 
-Содержимое этого каталога (кроме данного README) — **авто-генерат**
-pdoc по докстрингам пакета `atropos`; вручную его не редактируют и не
-правят. Регенерация — из корня репозитория командой ниже (pdoc
-подключается эфемерным окружением `--with pdoc`, зависимости проекта
-не меняются). Модули перечислены явно: голое `pdoc atropos` рендерит
-только страницу пакета (`atropos.html`) — подмодули в обход `__all__`
-pdoc 16 сам не подхватывает.
+Everything in this directory except this README is **generated** by
+pdoc from the package docstrings; do not edit or review it by hand.
+Regenerate from the repository root with the command below (pdoc runs
+in an ephemeral `--with pdoc` environment; project dependencies are
+unchanged). Modules are listed explicitly: a bare `pdoc atropos`
+renders only the package page (verified on pdoc 16.0.0), so every
+submodule is passed by name.
 
 ```bash
 uv run --with pdoc python -m pdoc atropos atropos._utils atropos.bootstrap_ci atropos.cli atropos.cost_model atropos.cross_sectional atropos.ensemble_pipeline atropos.evaluation_metrics atropos.incremental_regression atropos.kill_chain atropos.ml_ensemble atropos.ml_training atropos.monte_carlo atropos.null_control_suite atropos.power_calculator atropos.predictive_model_eval atropos.prereg_generator atropos.robustness_battery atropos.track_record atropos.walkforward_framework atropos.workspace -o docs/api
 ```
 
-Команда перечисляет все 20 модулей пакета. Новый модуль `atropos/`
-добавляется и в этот список (иначе его страницы в `docs/api` не
-появятся и не обновятся).
+The command lists all 20 package modules. A new `atropos/` module is
+added to this list too — otherwise its pages never appear in or
+update `docs/api`.
 
-Точка входа — `docs/api/index.html` (редирект на страницу пакета
-`atropos.html`); страницы модулей лежат в `docs/api/atropos/`.
+The entry point is `docs/api/index.html` (redirect to the package
+page).

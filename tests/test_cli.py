@@ -164,7 +164,7 @@ def test_project_override_scenario(
     code, out, _ = _run(["agent-context", "--content"], user_dir, capsys)
     assert code == 0
     assert "# PROJ RULES" in out
-    assert "пакетный слой (default layer)" not in out
+    assert "default layer" not in out
     assert "===== CLAUDE.md =====" in out
 
 

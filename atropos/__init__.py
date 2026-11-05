@@ -1,6 +1,6 @@
 """Atropos — a hypothesis-killing framework for quantitative research.
 
-Atropos (Атропос) is the Fate who cuts the thread of life: every candidate
+Atropos is the Fate who cuts the thread of life: every candidate
 hypothesis enters the pipeline alive and leaves it with exactly one verdict —
 SURVIVED, KILLED, or INCONCLUSIVE.  The package bundles the tools that do the
 cutting: preregistration, null controls, incremental regression, robustness

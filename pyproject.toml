@@ -38,7 +38,7 @@ packages = ["atropos"]
 # line-length 78 everywhere (code AND docstrings).  Rule families beyond the
 # defaults, per project policy:
 #   D     — docstrings required and checked (pydocstyle)
-#   PERF  — faster equivalent constructs (perflint: "ускорение конструкций")
+#   PERF  — faster equivalent constructs (perflint)
 #   E741  — ambiguous single-letter names; the full single-letter ban is
 #           enforced by tests/test_conventions.py (AST check)
 [tool.ruff]

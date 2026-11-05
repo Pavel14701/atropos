@@ -253,7 +253,7 @@ def assert_chaos_contract(
     as a documented refusal (its message must be non-empty).
     ``numpy.linalg.LinAlgError`` is NEVER accepted as a refusal even
     though it subclasses ``ValueError``: "SVD did not converge" is an
-    opaque LAPACK crash (the exact 'невнятная ошибка' the chaos layer
+    opaque LAPACK crash (the exact 'opaque error' the chaos layer
     exists to catch), not a designed, documented refusal.  Any other
     exception propagates and fails the test -- that is the finding.
     """
