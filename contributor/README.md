@@ -2,7 +2,7 @@
 
 This is where the project's dev discipline lives: code conventions, the
 quality gates (pytest / ruff / mypy), and the rules for agents working
-in this repository. This is NOT a guide to using the framework — see
+in this repository. This is NOT a guide to using the library — see
 the links at the bottom.
 
 ## Files
@@ -43,7 +43,7 @@ any other single-letter field (`q`) is banned like an ordinary variable.
 
 ## Where to go next
 
-- Using the framework with an AI agent → `atropos/agent/`
+- Using the library with an AI agent → `atropos/agent/`
   (a pip package) or the `atropos agent-context` command.
 - Methodology → `FRAMEWORK.md`; deployment → `METHODOLOGY.md`.
 - Templates (prereg, post-mortem, agent briefing) → `TEMPLATES.md`.
