@@ -37,3 +37,22 @@ jobs:
 
       - name: Track-record demo smoke test (four live fates)
         run: uv run python -m atropos.track_record
+
+  real-data-example:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          # match .python-version; a skew forks the uv.lock resolution
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync environment (uv.lock)
+        run: uv sync --locked
+
+      # offline by design: reads the committed SPY snapshot, prints the
+      # frozen prereg, then the walk-forward verdicts (expected ~3s)
+      - name: Real-data example (SPY 12-1 TSMOM, --quick)
+        run: uv run python examples/real_data/run_example.py --quick
