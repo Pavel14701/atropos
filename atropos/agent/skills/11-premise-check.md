@@ -8,7 +8,10 @@ version: 1.0.0
 # SKILL 1: PREMISE CHECK — протокол проверки предпосылки (Stage 1 of 7)
 
 > Самостоятельный протокол: агенту нужен только этот файл + данные.
-> Таксономия смертей: FRAMEWORK.md (корень репо) §4; надгробия: `C:\Users\Pashtet\Desktop\projects\deterministic-trading-engine\docs\THEORY_GRAVEYARD.md`.
+> Таксономия смертей: FRAMEWORK.md (корень репо) §4; надгробия живут
+> в раскладке вашего workspace (`hypotheses/graveyard/`, реестр —
+> `hypotheses/INDEX.csv`): scaffold with `atropos init` (files are
+> generated, never overwritten).
 
 ## PURPOSE (цель)
 

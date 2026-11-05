@@ -82,6 +82,62 @@ looks great until DSR deflates it for the 100 backtests that produced it.
 confidence intervals. Example: 40-day blocks resampled 1000 times give
 the Sharpe CI that an iid bootstrap would understate.
 
+## ML engine
+
+**Model registry** — the open `MODEL_REGISTRY` in `atropos.ml_training`:
+name -> factory; a factory takes keyword arguments from
+`DEFAULT_TRAINING_CONFIG["model_params"][name]` plus a `seed` and
+returns an unfitted sklearn-style estimator. Eight bundled entries
+(gbm, logit, rf, extratrees, hist_gbm, mlp, knn, qda) plus the
+`ensemble` composite after `import atropos.ml_ensemble`. Example:
+`MODEL_REGISTRY["xgb"] = make_xgb` immediately makes
+`config={"model": "xgb"}` work — no engine changes.
+
+**Walk-forward (ML)** — the engine's expanding-block CV over
+monotone int64-microsecond timestamps: every fold fits fresh on
+strictly earlier rows and scores the next block; models share one CV
+pass and are compared, never selected (the engine compares, the
+caller decides). Example: `k_blocks=6` folds over hourly stamps;
+per-model verdicts land in `report["models"][name]`.
+
+**Purge / embargo** — the two leakage guards at the train/test seam:
+purge drops train rows whose label window overlaps the test fold,
+embargo additionally drops rows just before the test start so stale
+information cannot leak backwards. Example:
+`purge_embargo_mask(..., horizon_h=1, purge_h=2, embargo_h=24)`
+keeps a train row only if label window and 24 embargo hours both end
+before the test stamp.
+
+**OOF (out-of-fold)** — scores produced on rows the fold's model
+never trained on; the only honest currency for combining models.
+Example: `oof_score_matrix` builds member scores per past-only time
+tile, so the stacking meta-learner never reads in-sample scores.
+
+**Stacking / nesting** — stacking trains a meta-learner over member
+scores; it is honest only inside two nestings ("no stacking without
+nesting"): the outer walk-forward folds and the inner past-only OOF
+tiles. Example: a meta-learner fitted on in-sample member scores
+reads overfit scores and learns garbage weights — the exact failure
+the nesting rule exists to prevent.
+
+**UNDERPOWERED** — the ML run verdict when fewer than `n_min_events`
+declustered events are taken: undecided, NOT a kill (gate flags stay
+informational). Example: 200 independent events under a 500 floor
+come back `UNDERPOWERED`; a fuller snapshot may still decide the
+hypothesis, so the unified chain maps it to INCONCLUSIVE.
+
+**Cost-aware EV (executable return)** — the engine scores thresholds
+on EV over executable returns the caller has already netted of costs
+(`exec = fwd - cost`), so the cost-line gate kills trades that cannot
+pay their way. Example: a gross 8 bp edge at a 20 bp round-trip cost
+has negative executable EV -> `DEAD(cost_line)`.
+
+**Unified verdict (kill_chain)** — the aggregate of the rule and ML
+chains: KILLED if either chain kills, SURVIVES only if every executed
+chain survives, INCONCLUSIVE when a chain cannot decide. Example:
+rule SURVIVES + ML `UNDERPOWERED` -> `INCONCLUSIVE [ml]`; rule
+REPACKAGING + ML DEAD -> `KILLED [rule+ml]`.
+
 ## Doctrine
 
 **Defense-in-depth** — no single test decides; seven stages of

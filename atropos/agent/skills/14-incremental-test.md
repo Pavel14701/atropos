@@ -5,6 +5,8 @@ when_to_use: Обязательный старт скрина вместе с nu
 version: 1.0.0
 ---
 
+
+> Note: log/registrar excerpts below quote the closed donor corpus (not shipped). The workspace layout itself is yours: scaffold with `atropos init` (files are generated, never overwritten).
 # SKILL 4: INCREMENTAL TEST — решающий тест (Stage 4 of 7, THE DECISIVE KILLER)
 
 > Самостоятельный протокол: агенту нужен только этот файл + данные.

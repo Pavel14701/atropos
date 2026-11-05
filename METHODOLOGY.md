@@ -21,7 +21,8 @@
 
 ## 2. Структура каталогов (Directory Structure)
 
-Создать в `[PROJECT_ROOT]`:
+Создать в `[PROJECT_ROOT]` (в проекте Atropos раскладку создаёт
+`atropos init` — files are generated, never overwritten):
 
 ```text
 [PROJECT_ROOT]/

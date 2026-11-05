@@ -11,7 +11,9 @@
 `run_full_pipeline` прогоняет сигнал через до семи adversarial-стадий и
 возвращает ровно один вердикт. Этот how-to — переводчик: что означает
 каждый вердикт, какая стадия его вынесла, и что делать дальше.
-Самодостаточно: читать `FRAMEWORK.md` не нужно.
+Самодостаточно: читать `FRAMEWORK.md` не нужно. Ниже — и словарь
+второй цепочки убийств, ML (`run_ml_kill_protocol`: три вердикта,
+четыре гейта), и unified-матрица, когда прогоняются обе.
 
 Импорт (пакет `atropos` не реэкспортирует функции наверх — используйте
 путь модуля):
@@ -75,6 +77,70 @@ cross-sectional режима: `panel_signal`/`panel_returns` (DataFrame:
 5 `monte_carlo` (конверт Sharpe/mDD net-of-cost), 6
 `predictive_model_eval` (purged CV, deflated Sharpe), 7
 `cross_sectional` (опциональная, при наличии панели).
+
+## ML-цепочка (run_ml_kill_protocol)
+
+У фреймворка вторая цепочка убийств — walk-forward ML-движок поверх
+признакового датасета (`features` → бинарный `target`), а не
+`signal` → исход. У неё собственный словарь вердиктов: три, а не
+девять. Как собрать датасет и прогнать — how-to 05
+(`docs/how-to/05-run-ml-kill-protocol.md`); здесь — переводчик.
+
+```python
+from atropos.ml_training import run_ml_kill_protocol
+```
+
+| Вердикт | Кто выносит | Что значит | Что делать дальше |
+|---------|-------------|------------|-------------------|
+| `SURVIVES` | каждая запрошенная модель прошла все включённые гейты при `n_events >= n_min_events` | «пока не убито» — не подтверждение, а отсутствие убийства | записать tombstone SURVIVED с числами (EV, DSR, rho, n_events); мониторить на новых снимках |
+| `DEAD(<gate>)` | первый сработавший гейт первой невыжившей модели | эдж не пережил этот гейт; имя в скобках — причина | читать `reason` записи гейта в `kills` / `models[name]["kills"]`; resurrection-условия — в tombstone |
+| `UNDERPOWERED` | у модели `n_events < n_min_events` (дефолт 500 declustered-событий) | **undecided, not a kill**: выборка не запитывает ни одно гейт-решение, флаги гейтов — информационные | добрать данных и перегнать; в unified-матрице это INCONCLUSIVE, не смерть |
+
+Четыре гейта и их пороги (`checks.*` в конфиге):
+
+| Гейт | Что ловит | Дефолтный порог |
+|------|-----------|-----------------|
+| `incremental` | переупаковку линейной части: paired-bootstrap t разницы EV взятых сделок модели и логит-батареи (фичи + ваши `battery_controls`) | `incremental_t` = 2.0 |
+| `cost_line` | книгу, не окупающую издержки: merged-OOS EV взятых сделок ниже плиты | `profit_bar` = 0.0040 (40bp) |
+| `importance_stability` | «сигнал из шума»: per-fold permutation-ранжировки признаков не воспроизводятся | `importance_rho_min` = 0.5 |
+| `deflated_sharpe` | множественное тестирование: deflated Sharpe дневного EV-потока | `dsr_min` = 0.95 |
+
+Каждая запись гейта — `{check, enabled, triggered, inconclusive,
+reason}`. Семантика INCONCLUSIVE та же, что во всём фреймворке:
+«не смогли проверить» ≠ «убито» (типовой случай — incremental без
+`battery_controls`). Осторожно: SURVIVES при невычислимом
+incremental означает, что инкрементальный эдж не доказан, а не
+пройден. Вердикт `DEAD(<gate>)` называет первый сработавший гейт по
+порядку `incremental` → `cost_line` → `importance_stability` →
+`deflated_sharpe`, а не «самую громкую» причину.
+
+## Обе цепочки (run_full_kill_chain)
+
+Rule-конвейер и ML-движок можно прогнать одной обёрткой
+(`rule_data` + опциональный `ml_dataset`); это тонкий агрегатор без
+своих гейтов: `unified` — чистая функция двух вердиктов, и kill
+любой цепочки решает всё. «Жива» = `SURVIVES` /
+`SURVIVES_WITH_WARNINGS`; `[...]` — `unified["source"]`.
+
+```python
+from atropos.kill_chain import run_full_kill_chain
+```
+
+| rule-вердикт | ml-вердикт | unified |
+|--------------|------------|---------|
+| жива | (не запускалась) | `SURVIVES` |
+| kill | (не запускалась) | `KILLED` [rule] |
+| жива | `SURVIVES` | `SURVIVES` |
+| жива | `DEAD(...)` | `KILLED` [ml] |
+| жива | `UNDERPOWERED` | `INCONCLUSIVE` [ml] |
+| kill | `SURVIVES` | `KILLED` [rule] |
+| kill | `DEAD(...)` | `KILLED` [rule+ml] |
+| kill | `UNDERPOWERED` | `KILLED` [rule] |
+
+ML `UNDERPOWERED` транслируется в INCONCLUSIVE — undecided is not
+death: новый снимок с большей мощностью может решить гипотезу. Как
+собрать оба датасета и что делать с каждым исходом — how-to 05;
+справочник: `docs/api/atropos/kill_chain.html`.
 
 ## Разобранные примеры (все прогоны фактические)
 
@@ -276,9 +342,12 @@ kill: недостающие данные не хоронят гипотезу, 
 
 ## Что дальше
 
+- Как получить ML-вердикт и прогнать обе цепочки разом — how-to 05
+  (`docs/how-to/05-run-ml-kill-protocol.md`).
 - Как оформить вердикт в tombstone — how-to 03
   (`docs/how-to/03-read-graveyard.md`).
 - Как расширить null-контроли стадии 1 — how-to 04
   (`docs/how-to/04-add-null-control.md`).
 - Справочник: `docs/api/atropos/ensemble_pipeline.html`,
-  `DEFAULT_CONFIG` — там же.
+  `DEFAULT_CONFIG` — там же; ML-движок —
+  `docs/api/atropos/ml_training.html`.

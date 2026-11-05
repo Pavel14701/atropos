@@ -15,7 +15,8 @@ MODULE_PATHS = sorted(PACKAGE_DIR.glob("*.py"))
 
 # Modules whose run_all_examples already assert their outcomes. After
 # the layer-0 wave every module verifies its demo; a new module must be
-# added here when it gains a demo.
+# added here when it gains a demo.  kill_chain (follow-up from the ML
+# unification wave) and workspace (runtime scaffolding) assert too.
 ASSERTING_DEMO_MODULES = [
     "bootstrap_ci",
     "cost_model",
@@ -23,6 +24,7 @@ ASSERTING_DEMO_MODULES = [
     "ensemble_pipeline",
     "evaluation_metrics",
     "incremental_regression",
+    "kill_chain",
     "monte_carlo",
     "null_control_suite",
     "power_calculator",
@@ -31,6 +33,7 @@ ASSERTING_DEMO_MODULES = [
     "robustness_battery",
     "track_record",
     "walkforward_framework",
+    "workspace",
 ]
 
 # Helpers that must live ONLY in atropos/_utils.py after the fix wave.

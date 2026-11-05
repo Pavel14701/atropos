@@ -5,6 +5,8 @@ when_to_use: На старте скрина вместе с инкремента
 version: 1.0.0
 ---
 
+
+> Note: log/registrar excerpts below quote the closed donor corpus (not shipped). The workspace layout itself is yours: scaffold with `atropos init` (files are generated, never overwritten).
 # SKILL 2: NULL CONTROL — протокол нулевых контролов (Stage 2 of 7)
 
 > Самостоятельный протокол: агенту нужен только этот файл + данные.

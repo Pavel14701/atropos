@@ -64,6 +64,10 @@
 
 ## 6. Индекс ключевых файлов (Key Files Index) — заполнить на проект
 
+Каноническая раскладка `hypotheses/` (preregistrations, code,
+graveyard, INDEX.csv) — конвенция фреймворка: scaffold with
+`atropos init` (files are generated, never overwritten).
+
 | Файл | Назначение |
 |------|------------|
 | `docs/HYPOTHESIS_KILLING_FRAMEWORK.md` | Полная методология: стадии, законы, форматы |

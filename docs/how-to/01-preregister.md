@@ -210,11 +210,16 @@ out.write_text(doc, encoding="utf-8")
 print("saved:", out.resolve())
 ```
 
-Фактический вывод прогона:
+Пример вывода (путь зависит от вашей рабочей директории):
 
 ```text
-saved: C:\Users\Pashtet\AppData\Local\Temp\atropos_howto\PREREG_overnight_imbalance_edge_2026-11-03.md
+saved: <workspace>/PREREG_overnight_imbalance_edge_2026-11-03.md
 ```
+
+Если workspace ещё не создан (нет `GRAVEYARD.md` и каталога
+`hypotheses/`), сгенерируйте скелет командой `atropos init` — команда
+создаёт только отсутствующие файлы и никогда не перезаписывает
+существующие; дальше редактируйте их вручную.
 
 Файл положите в каталог пререгистраций вашего проекта (в раскладке
 методологии — `hypotheses/preregistrations/`) и **закоммитьте до любой

@@ -5,6 +5,8 @@ when_to_use: После premise-check; вместе с nulls и инкремен
 version: 1.0.0
 ---
 
+
+> Note: log/registrar excerpts below quote the closed donor corpus (not shipped). The workspace layout itself is yours: scaffold with `atropos init` (files are generated, never overwritten).
 # SKILL 3: SIGNAL TEST — протокол сырого сигнального теста (Stage 3 of 7)
 
 > Самостоятельный протокол: агенту нужен только этот файл + данные.

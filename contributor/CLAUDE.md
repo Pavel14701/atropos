@@ -54,6 +54,9 @@ uv run mypy                             # 3. типы (strict)
 
 ## 6. Ключевые файлы (Key Files)
 
+Каноническая раскладка `hypotheses/` — конвенция фреймворка:
+scaffold with `atropos init` (files are generated, never overwritten).
+
 | Файл | Роль |
 |------|------|
 | `docs/HYPOTHESIS_KILLING_FRAMEWORK.md` | Методология фреймворка — читать первым |

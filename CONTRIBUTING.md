@@ -56,6 +56,31 @@ born under full law:
   `tests/test_api_contract.py` — adding a key means updating the
   snapshot deliberately.
 
+## Adding an ML model (the registry)
+
+The ML engine's fleet is open, and the contract tests sweep every
+entry automatically — a new model is born under full law:
+
+- **Register the factory** in `atropos/ml_training.py`:
+  `MODEL_REGISTRY["name"] = make_name`. Signature:
+  `make_name(**params, seed: int)` — keyword arguments from the
+  model's `model_params` block plus a `seed`, returning an unfitted
+  sklearn-style estimator with `fit` / `predict_proba` that is
+  deterministic for a fixed seed (import-side registration like
+  `atropos.ml_ensemble` does for `"ensemble"` also works).
+- **Ship defaults**: a non-empty
+  `DEFAULT_TRAINING_CONFIG["model_params"]["name"]` block — the
+  coverage test fails otherwise, and the bundled families' blocks
+  are pinned against silent drift.
+- **Four contract families pick the entry up automatically**
+  (parametrized over `sorted(MODEL_REGISTRY)` in
+  `tests/test_ml_training.py`): determinism (two same-seed fits
+  agree bit-for-bit), probability validity, beats-logit on a planted
+  nonlinearity, and the full engine pass. If your model structurally
+  cannot pass one family, skip it only with the documented
+  structural reason in `_PLANTED_BEATS_SKIP` (see `knn` and
+  KNOWN-ISSUES.md §1c) — never weaken the check.
+
 ## Adding a hypothesis (the user workflow)
 
 The framework's whole point; walk the doctrine, not around it:
@@ -72,7 +97,7 @@ The framework's whole point; walk the doctrine, not around it:
 3. **Record the verdict.** SURVIVES earns a live track record
    (`atropos.track_record.live_verdict` against the prereg); anything
    else gets a tombstone in your graveyard with COD and resurrection
-   conditions. Formats and the full pipeline doctrine: `FRAMEWORK.md`
+   conditions (no graveyard yet? scaffold it with `atropos init`). Formats and the full pipeline doctrine: `FRAMEWORK.md`
    (§2 pipeline, §8 graveyard protocol) and `TEMPLATES.md`.
 
 ## For framework developers
@@ -81,3 +106,8 @@ The developer rulebook (review standards, test layers, perf budgets)
 lives in `contributor/AGENTS.md`. Deep methodology docs
 (`FRAMEWORK.md`, `METHODOLOGY.md`, `CASES_AND_FLAGS.md`) are in Russian;
 code, docstrings, tests and demos are English — keep new code English.
+Case-study excerpts quoted in skills and docs come from a closed
+donor corpus that is not shipped; the portability test
+(`tests/test_portability.py`) fails the suite on any machine-specific
+trace or donor-repo reference — never paste real logs, paths or user
+names into the tree.

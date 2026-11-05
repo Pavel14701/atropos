@@ -5,6 +5,8 @@ when_to_use: После прохождения инкрементального 
 version: 1.0.0
 ---
 
+
+> Note: log/registrar excerpts below quote the closed donor corpus (not shipped). The workspace layout itself is yours: scaffold with `atropos init` (files are generated, never overwritten).
 # SKILL 5: ROBUSTNESS BATTERY — батарея 7 тестов (Stage 5 of 7)
 
 > Самостоятельный протокол: агенту нужен только этот файл + данные.
