@@ -1,505 +1,506 @@
-# ATROPOS — система убийства говнонипотез
+# ATROPOS — a system for killing crap hypotheses
 
-## Портативный фреймворк проверки гипотез в квант-финансах
+## A portable hypothesis-testing framework for quant finance
 
-> **Quick paths.** Пользователь (применить к своему проекту) → `docs/how-to/01`.
-> Термины и определения → `GLOSSARY.md`. Контекст для ИИ-агента → `atropos/agent/`
-> (pip-пакет) или команда `atropos agent-context`. ML-гипотеза (walk-forward
-> движок) → `docs/how-to/` (skill 04 / `run_ml_kill_protocol`). Референс-чтение —
-> в первую очередь секции §1–§3 (философия, pipeline, законы), остальное — по
-> мере надобности.
+> **Quick paths.** User (apply it to your own project) → `docs/how-to/01`.
+> Terms and definitions → `GLOSSARY.md`. Context for an AI agent → `atropos/agent/`
+> (pip package) or the `atropos agent-context` command. ML hypothesis (walk-forward
+> engine) → `docs/how-to/` (skill 04 / `run_ml_kill_protocol`). Reference reading —
+> start with §1–§3 (philosophy, pipeline, laws); the rest as needed.
 
-> **Назначение.** Самодостаточный протокол проверки факторных и торговых гипотез,
-> построенный вокруг фальсификации, а не подтверждения. Агент без какого-либо
-> контекста выполняет этапы §2 по порядку и получает воспроизводимый вердикт.
-> Документ не привязан ни к одному репозиторию, датасету или кодовой базе.
-> Калибровка — крипторынки (спот, перпетуалы, фьючерсы); применимость — любой
-> рынок и класс активов. Все примеры в документе анонимизированы.
+> **Purpose.** A self-contained protocol for testing factor and trading hypotheses,
+> built around falsification rather than confirmation. An agent with zero context
+> runs the stages of §2 in order and gets a reproducible verdict. The document is
+> not tied to any repository, dataset, or codebase. Calibration: crypto markets
+> (spot, perps, futures); applicability: any market and asset class. All examples
+> in this document are anonymized.
 
-**Обозначения.** `forward_return` — форвардная доходность инструмента на горизонте
-сигнала. `t` — t-статистика соответствующего коэффициента. Порог выживания по
-умолчанию: `|t| >= 2`. `20bp` — 0.20%, базовая линия издержек круговой сделки
-(комиссия + спред + проскальзывание + фандинг/борроу).
-
----
-
-## §1 Философия
-
-**1.1. Это инфраструктура фальсификации, а не поиск победителей.**
-Задача фреймворка — не найти стратегию, которая «работает», а убить гипотезу
-как можно раньше и как можно дешевле. Каждый этап — фильтр; порядок этапов —
-по возрастанию стоимости проверки. Хороший день — это не найденный сигнал,
-а дёшево и документированно убитая гипотеза.
-
-**1.2. Кладбище — это и есть продукт.**
-Каждая документированная смерть — институциональная память: она экономит
-следующему исследователю недели тупикового труда и не даёт капиталу повторно
-зайти в известный тупик. Гипотеза без записи о смерти считается непроверенной.
-Гипотеза «в работе», не прошедшая этапов, не имеет права потреблять капитал.
-
-**1.3. Девиз.**
-«Мы не ищем грааль — мы построили машину, которая убивает проигрывающие гипотезы
-до того, как они заберут капитал».
-
-**1.4. Каждое правило оплачено смертями.**
-Ни одно правило этого документа не является теоретическим. Каждое подтверждено
-пятью и более задокументированными смертями гипотез на разных рынках и классах
-активов. Если правило кажется слишком жёстким — это аргумент за него, а не
-против: жёсткость и есть его функция.
-
-**1.5. Бремя доказательства лежит на гипотезе.**
-Гипотеза виновна (шум) до доказательства невиновности. Исследователь — не адвокат
-гипотезы, а прокурор с чек-листом. Фраза «давайте попробуем ещё раз с другими
-параметрами» означает: родилась новая гипотеза, и она обязана пройти весь
-pipeline с этапа 1, без кредита доверия.
-
-**1.6. Пропуск этапа = нарушение протокола.**
-«Очевидно сильный» сигнал не перепрыгивает этапы. Именно очевидно сильные
-сигналы чаще всего оказываются репакаджингом известных факторов или одним
-календарным годом, переодетым в альфу.
+**Notation.** `forward_return` — the forward return of the instrument over the
+signal horizon. `t` — the t-statistic of the corresponding coefficient. Default
+survival threshold: `|t| >= 2`. `20bp` — 0.20%, the baseline cost of a round-trip
+trade (fee + spread + slippage + funding/borrow).
 
 ---
 
-## §2 Канонический Pipeline — 7 этапов
+## §1 Philosophy
 
-Порядок обязателен, пропуск любого этапа = нарушение протокола. Для каждого
-этапа фиксируются: вопрос, процедура, kill-критерии, анонимизированный реальный
-пример и типичная ошибка. Смерть на любом этапе финальна для гипотезы в текущей
-формулировке: запись в кладбище (§8), повторный заход под тем же именем запрещён.
+**1.1. This is falsification infrastructure, not a winner hunt.**
+The framework's job is not to find a strategy that "works" but to kill a hypothesis
+as early and as cheaply as possible. Each stage is a filter; the stages are ordered
+by increasing cost of testing. A good day is not a signal found but a hypothesis
+killed cheaply and documented.
 
-### Этап 1. PREMISE-CHECK — существует ли условие в целевом рынке?
+**1.2. The graveyard is the product.**
+Every documented death is institutional memory: it saves the next researcher weeks
+of dead-end work and keeps capital from re-entering a known dead end. A hypothesis
+without a death record counts as untested. A hypothesis "in progress" that has not
+passed the stages has no right to consume capital.
 
-**Вопрос этапа:** существуют ли структурные предпосылки гипотезы на целевом
-рынке — данные, инструменты, микроструктура, возможность встать в обе стороны?
+**1.3. Motto.**
+"We are not looking for the grail — we built a machine that kills losing hypotheses
+before they take the capital."
 
-**Процедура:**
-1. Выписать предпосылки списком: «существует поле X», «доступен инструмент Y»,
-   «история покрывает хотя бы один полный цикл».
-2. Проверить каждую фактом: наличие поля в данных; наличие инструмента
-   (перпетуал/опцион/борроу/плечо); глубина истории; ликвидность обеих ног;
-   режим фандинга и сессий.
-3. Зафиксировать объём доступной истории и убедиться, что его хватит на все
-   последующие этапы: 200 null-перемешиваний и разбиение на трети.
+**1.4. Every rule has been paid for with deaths.**
+No rule in this document is theoretical. Each is backed by five or more documented
+hypothesis deaths across different markets and asset classes. If a rule seems too
+harsh — that is an argument for it, not against: the harshness is its function.
 
-**Kill-критерии:** предпосылка отсутствует или ложна → PREMISE-DEATH; данные
-недоступны или история короче минимально необходимой → DATA-BLOCKED. Стоп.
-Инфраструктуру под DATA-BLOCKED сигнал не строить (§7, запрет 6).
+**1.5. The burden of proof lies on the hypothesis.**
+A hypothesis is guilty (noise) until proven innocent. The researcher is not the
+hypothesis's lawyer but a prosecutor with a checklist. The phrase "let's try again
+with different parameters" means: a new hypothesis has been born, and it must pass
+the entire pipeline from stage 1, with zero credit.
 
-**Реальный пример (анонимизирован):** фактор X — low-risk конструкция на
-низколиквидном активе: предпосылка «короткая нога доступна» не выполнилась.
-Смерть до любой статистики, ноль потраченных вычислений.
+**1.6. Skipping a stage = protocol violation.**
+An "obviously strong" signal does not skip stages. It is precisely the obviously
+strong signals that most often turn out to be repackaging of known factors or a
+single calendar year dressed up as alpha.
 
-**Типичная ошибка:** перенос предпосылок с другого рынка («на акциях же
-работало»): борроу, глубина стакана, торговые сессии и фандинг в крипте
-устроены принципиально иначе.
+---
 
-### Этап 2. NULL-CONTROL — рождает ли пайплайн сигнал из шума?
+## §2 The Canonical Pipeline — 7 Stages
 
-**Вопрос этапа:** выдаёт ли наш пайплайн «сигнал» из чистого шума?
+The order is mandatory; skipping any stage = protocol violation. For each stage we
+fix: the question, the procedure, the kill criteria, an anonymized real example,
+and the typical mistake. Death at any stage is final for the hypothesis in its
+current formulation: a graveyard entry (§8) is mandatory; re-entry under the same
+name is forbidden.
 
-**Процедура:**
-1. Реальную статистику пока не смотреть. Сначала — null.
-2. 200 раз: перемешать ряд сигнала (permutation) либо подставить placebo-даты;
-   прогнать ПОЛНЫЙ пайплайн, те же фильтры и та же кластеризация; собрать
-   распределение статистики.
-3. Сравнить реальную статистику с распределением: она должна лежать выше
-   95-го перцентиля null-распределения.
+### Stage 1. PREMISE-CHECK — does the condition exist in the target market?
 
-**Kill-критерии:** реальная статистика не бьёт null-распределение → NULL-DEATH,
-стоп. Если пайплайн стабильно находит «сигналы» в перемешанных данных — сломан
-сам пайплайн (lookahead, leakage): чинится пайплайн, а не гипотеза.
+**Stage question:** do the structural premises of the hypothesis exist in the
+target market — data, instruments, microstructure, the ability to hold both sides?
 
-**Реальный пример:** фактор X: raw t = 5.5 выглядел убедительно, но 95-й
-перцентиль placebo-распределения оказался 4.8 — реальный эффект на грани шума.
+**Procedure:**
+1. List the premises: "field X exists", "instrument Y is available",
+   "history covers at least one full cycle".
+2. Check each one against facts: the field present in the data; the instrument
+   available (perp/option/borrow/leverage); history depth; liquidity of both legs;
+   funding and session regimes.
+3. Record the amount of available history and make sure it is enough for all
+   later stages: 200 null permutations and the thirds split.
 
-**Типичная ошибка:** гонять null на урезанном пайплайне (без части фильтров)
-или брать 20 перемешиваний вместо 200 — оценка перцентиля плавает вместе
-с результатом вердикта.
+**Kill criteria:** a premise is missing or false → PREMISE-DEATH; data unavailable
+or history shorter than the minimum required → DATA-BLOCKED. Stop. Do not build
+infrastructure for a DATA-BLOCKED signal (§7, prohibition 6).
 
-### Этап 3. SIGNAL TEST — сырой эффект, знак, устойчивость по годам
+**Real example (anonymized):** factor X — a low-risk construction on an illiquid
+asset: the premise "the short leg is available" failed. Death before any
+statistics, zero compute spent.
 
-**Вопрос этапа:** есть ли сырой безусловный эффект, направленный так, как
-предсказано, и живёт ли он больше одного-двух лет?
+**Typical mistake:** importing premises from another market ("but it worked on
+equities"): borrow, order-book depth, trading sessions, and funding in crypto are
+structured fundamentally differently.
 
-**Процедура:**
-1. Базовая проверка: сортировка по квинтилям или сырая регрессия
+### Stage 2. NULL-CONTROL — does the pipeline produce signal from noise?
+
+**Stage question:** does our pipeline produce a "signal" out of pure noise?
+
+**Procedure:**
+1. Do not look at the real statistic yet. First, the null.
+2. 200 times: shuffle the signal series (permutation) or substitute placebo
+   dates; run the FULL pipeline, same filters and same clustering; collect the
+   distribution of the statistic.
+3. Compare the real statistic against the distribution: it must lie above the
+   95th percentile of the null distribution.
+
+**Kill criteria:** the real statistic does not beat the null distribution →
+NULL-DEATH, stop. If the pipeline consistently finds "signals" in shuffled data,
+the pipeline itself is broken (lookahead, leakage): fix the pipeline, not the
+hypothesis.
+
+**Real example:** factor X: raw t = 5.5 looked convincing, but the 95th percentile
+of the placebo distribution turned out to be 4.8 — the real effect was on the edge
+of noise.
+
+**Typical mistake:** running the null on a truncated pipeline (with some filters
+dropped) or using 20 shuffles instead of 200 — the percentile estimate floats
+together with the verdict.
+
+### Stage 3. SIGNAL TEST — raw effect, sign, stability across years
+
+**Stage question:** is there a raw unconditional effect, directed as predicted,
+and does it live longer than a year or two?
+
+**Procedure:**
+1. Baseline check: a quintile sort or the raw regression
    `forward_return ~ signal`.
-2. Зафиксировать четыре числа: величину эффекта, t, знак против предсказания,
-   долю положительных лет.
-3. Прикинуть монотонность доходностей по квинтилям — она понадобится на этапе 5.
+2. Record four numbers: effect size, t, the sign against the prediction, the
+   share of positive years.
+3. Estimate the monotonicity of returns across quintiles — stage 5 will need it.
 
-**Kill-критерии:** знак противоположен предсказанию без априорного основания →
-INVERTED-DEATH; `|t| < 2` → смерть; эффект держится на 1–2 годах → пометить
-как подозрение на календарную контаминацию и идти дальше: финальный вердикт
-даст этап 7.
+**Kill criteria:** the sign is opposite to the prediction with no a priori grounds
+→ INVERTED-DEATH; `|t| < 2` → death; the effect holds in only 1–2 years → flag as
+suspected calendar contamination and move on: stage 7 delivers the final verdict.
 
-**Реальный пример:** фактор X: raw t = 5.5, 8 из 10 лет в плюс — этап пройден,
-погиб позже на инкрементальности. Контраст: фактор Y: raw t = 3.1, но знак
-противоположен всей известной литературе → INVERTED-DEATH без жалости.
+**Real example:** factor X: raw t = 5.5, 8 of 10 years positive — stage passed,
+died later on incrementality. Contrast: factor Y: raw t = 3.1, but the sign
+contradicts the entire known literature → INVERTED-DEATH, no mercy.
 
-**Типичная ошибка:** праздновать сырой t как «работает». Сырой t — самая
-переоценённая цифра в исследованиях; без этапа 4 она не значит ничего.
+**Typical mistake:** celebrating the raw t as "it works". The raw t is the most
+overrated number in research; without stage 4 it means nothing.
 
-### Этап 4. INCREMENTAL TEST — главный этап
+### Stage 4. INCREMENTAL TEST — the main stage
 
-**Вопрос этапа:** добавляет ли сигнал что-нибудь сверх уже известного?
+**Stage question:** does the signal add anything beyond what is already known?
 
-**Процедура:**
-1. Регрессия: `forward_return ~ momentum + size + volume + iv_level +
-   market_beta + new_signal`, ошибки HC0 (робастные, в духе Уайта).
-2. Набор контролов фиксируется априори: импульс (momentum), размер (size),
-   объём (volume), уровень IV, рыночная бета. Расширять или сужать набор
-   по результату запрещено.
-3. Смотреть исключительно на `t(new_signal)`.
+**Procedure:**
+1. Regression: `forward_return ~ momentum + size + volume + iv_level +
+   market_beta + new_signal`, HC0 errors (robust, White-style).
+2. The control set is fixed a priori: momentum, size, volume, IV level, market
+   beta. Expanding or shrinking the set based on the result is forbidden.
+3. Look exclusively at `t(new_signal)`.
 
-**Kill-критерии:** `t(new_signal) < 2` после контролов = REPACKAGING
-(INCREMENTAL-DEATH): сигнал — переупаковка известных факторов. Стоп.
+**Kill criteria:** `t(new_signal) < 2` after controls = REPACKAGING
+(INCREMENTAL-DEATH): the signal is a repackaging of known factors. Stop.
 
-**Реальный пример:** фактор X: raw t = 5.5 → после контролов t = -0.20.
-Оказался импульсом в дорогой одежде.
+**Real example:** factor X: raw t = 5.5 → after controls t = -0.20.
+It turned out to be momentum in expensive clothes.
 
-**Типичная ошибка:** забыть главного конкурента (тестировать «волатильностный»
-сигнал без контроля уровня IV), использовать неробастные ошибки, или заранее
-ортогонализовать сигнал — ортогонализация прячет само пересечение; вердикт даёт
-только честная регрессия с полным набором контролов.
+**Typical mistake:** forgetting the main competitor (testing a "volatility"
+signal without an IV-level control), using non-robust errors, or orthogonalizing
+the signal up front — orthogonalization hides the contest itself; only an honest
+regression with the full control set delivers the verdict.
 
-### Этап 5. ROBUSTNESS BATTERY — 7 тестов
+### Stage 5. ROBUSTNESS BATTERY — 7 tests
 
-**Вопрос этапа:** переживает ли эффект возмущение произвольных
-исследовательских выборов?
+**Stage question:** does the effect survive perturbation of arbitrary research
+choices?
 
-**Процедура — все 7 тестов, без исключений:**
-1. **Threshold 2×:** основной порог/параметр удвоить и уполовинить — эффект жив?
-2. **Window adjacent:** сдвинуть окно удержания на соседний шаг (±1).
-3. **Subperiod thirds:** эффект значим в каждой трети выборки (минимум 2 из 3).
-4. **Leave-one-out:** выбрасывать по одному инструменту/активу — эффект
-   не исчезает ни при одном выбросе.
-5. **Placebo > 95pctl:** реальная статистика выше 95-го перцентиля
-   null-распределения этапа 2.
-6. **Declustering top-1%:** удалить крупнейший кластер перекрывающихся событий
-   (топ-1% по вкладу в эффект) — эффект остаётся.
-7. **Sign monotone:** доходности квинтильных портфелей монотонны по сигналу.
+**Procedure — all 7 tests, no exceptions:**
+1. **Threshold 2×:** double and halve the main threshold/parameter — does the
+   effect survive?
+2. **Window adjacent:** shift the holding window by an adjacent step (±1).
+3. **Subperiod thirds:** the effect is significant in each third of the sample
+   (at least 2 of 3).
+4. **Leave-one-out:** drop one instrument/asset at a time — the effect does not
+   vanish under any single drop.
+5. **Placebo > 95pctl:** the real statistic is above the 95th percentile of the
+   stage-2 null distribution.
+6. **Declustering top-1%:** remove the largest cluster of overlapping events
+   (top 1% by contribution to the effect) — the effect remains.
+7. **Sign monotone:** quintile portfolio returns are monotone in the signal.
 
-**Kill-критерии:** пройдено < 5 из 7 → ROBUSTNESS-DEATH, стоп. Пройдено 5–6,
-но всё держится на одном измерении → FRAGILE-DEATH.
+**Kill criteria:** fewer than 5 of 7 passed → ROBUSTNESS-DEATH, stop. 5–6 passed
+but everything hangs on a single dimension → FRAGILE-DEATH.
 
-**Реальный пример:** фактор Z: raw t = 4.2, прошёл порог и окно, но умер на
-declustering — весь эффект был одна недельная катастрофа.
+**Real example:** factor Z: raw t = 4.2, passed threshold and window, but died on
+declustering — the whole effect was one weekly catastrophe.
 
-**Типичная ошибка:** мягкий зачёт («t = 1.7 — почти значимо»). Батарея — это
-pass/fail по каждому тесту; одна поблажка обесценивает все семь тестов разом.
+**Typical mistake:** soft scoring ("t = 1.7 — nearly significant"). The battery is
+pass/fail on every test; one leniency devalues all seven tests at once.
 
-### Этап 6. WALK-FORWARD — вне выборки, при замороженных решениях
+### Stage 6. WALK-FORWARD — out of sample, with frozen decisions
 
-**Вопрос этапа:** работает ли эффект вне выборки, когда ни одно решение
-не принималось с оглядкой на будущее?
+**Stage question:** does the effect work out of sample, when no decision was made
+looking at the future?
 
-**Процедура:**
-1. Роллинг train→test: обучение на окне — применение к следующему отрезку.
-2. Все пороги и параметры заморожены в момент train; на test применяются
-   как есть, без пересмотра.
-3. Expanding-окно запрещено: «накопленная история» = регулярное перетюнивание
-   на всё более знакомых данных.
+**Procedure:**
+1. Rolling train→test: fit on a window — apply to the next segment.
+2. All thresholds and parameters are frozen at train time; on test they are
+   applied as-is, no revising.
+3. Expanding windows are forbidden: "accumulated history" = regular retuning on
+   ever more familiar data.
 
-**Kill-критерии:** сжатие > 2× (результат на test хуже половины результата
-на train) → OVERFIT-DEATH, стоп. Смена знака эффекта на test → смерть без
-обсуждений.
+**Kill criteria:** shrinkage > 2× (the test result is worse than half the train
+result) → OVERFIT-DEATH, stop. The effect's sign flips on test → death, no
+discussion.
 
-**Реальный пример:** фактор W: train t = 3.9 → test t = 1.1; параметры
-(порог + кулдаун) до этого подбирались на полной выборке → OVERFIT-DEATH.
+**Real example:** factor W: train t = 3.9 → test t = 1.1; the parameters
+(threshold + cooldown) had been tuned on the full sample → OVERFIT-DEATH.
 
-**Типичная ошибка:** «подправить один параметр» между train и test, либо
-оценивать walk-forward на перекрывающихся окнах и считать коррелированные
-победы независимыми (см. §7, запрет 8).
+**Typical mistake:** "tweaking one parameter" between train and test, or
+evaluating walk-forward on overlapping windows and counting correlated wins as
+independent (see §7, prohibition 8).
 
-### Этап 7. CALENDAR CONTROL — календарная контаминация
+### Stage 7. CALENDAR CONTROL — calendar contamination
 
-**Вопрос этапа:** не является ли эффект одним календарным годом или одним
-режимом, переодетым в альфу?
+**Stage question:** is the effect just one calendar year or one regime dressed up
+as alpha?
 
-**Процедура:**
-1. Повторить инкрементальную регрессию этапа 4, добавив годовые дамми и флаги
-   режимов (бык/медведь, высокая/низкая волатильность).
-2. Сравнить `t(new_signal)` до и после добавления.
+**Procedure:**
+1. Repeat the stage-4 incremental regression, adding year dummies and regime
+   flags (bull/bear, high/low volatility).
+2. Compare `t(new_signal)` before and after the addition.
 
-**Kill-критерии:** если t падает < 2 → календарная контаминация →
-INCREMENTAL-DEATH (календарный вариант), стоп. Календарный приор не переносится
-на новые дни (§3, закон 5).
+**Kill criteria:** if t drops below 2 → calendar contamination → INCREMENTAL-DEATH
+(calendar variant), stop. A calendar edge does not transfer to new days
+(§3, law 5).
 
-**Реальный пример:** фактор V: t = 2.8 → с годовыми дамми t = 0.9; весь эффект —
-один бычий год.
+**Real example:** factor V: t = 2.8 → with year dummies t = 0.9; the whole effect
+is one bull year.
 
-**Типичная ошибка:** тюнинговать набор режимных флагов «пока t не выживет» —
-это подгонка контролов под спасение гипотезы, замаскированная под контроль.
-
----
-
-## §3 Шесть систематических законов
-
-Законы — обобщения, оплаченные смертями. Формат каждого: утверждение →
-механизм → три анонимизированных примера → протокол.
-
-### Закон 1. Описание ≠ предсказание
-
-**Утверждение.** Статистики, описывающие прошлое распределение переменной
-(«в 10 из 10 дней режима было X»), описывают текущий режим и не предсказывают
-ничего о новых днях.
-
-**Механизм.** Описательная статистика обусловлена знанием, что режим идёт.
-На границе режима условное распределение меняется; сама длительность режима —
-не аргумент за его продолжение, часто наоборот.
-
-**Примеры:**
-- фактор A: hit-rate 10/10 внутри режима, нулевая предсказательная сила
-  на holdout-днях;
-- фактор B: vol-of-vol идеально описывал дни краха, форвардной доходности нет;
-- фактор C: корреляционный режим описан безупречно, форвардное направление —
-  монетка.
-
-**Протокол.** Любая описательная статистика обязана пройти форвард-тест
-предсказания на днях, не входивших в выборку, по которой считалось описание.
-Не прошла → DECORATION-DEATH.
-
-### Закон 2. Инкрементальность — решающий тест
-
-**Утверждение.** Сырой t не значит ничего; единственный вердикт — t нового
-сигнала после известных контролов.
-
-**Механизм.** Новый сигнал почти всегда коррелирует с известными факторами
-(импульс, размер, объём, IV, бета). Регрессия делит объяснительный пирог;
-кто владеет пирогом, у того и остаётся t.
-
-**Примеры.** Три кандидата с raw t > 5 умерли при t < 1 после контролов:
-- фактор A: raw 5.8 → 0.4;
-- фактор B: raw 5.5 → -0.20;
-- фактор C: raw 6.1 → 0.9.
-
-**Протокол.** Сырой t никогда не фигурирует сам по себе. Этап 4 обязателен,
-набор контролов фиксируется априори. `t < 2` после контролов = REPACKAGING.
-
-### Закон 3. Cost-линия 20bp
-
-**Утверждение.** Если амплитуда эффекта на круговую сделку ниже ~20bp
-издержек, гипотеза мертва до всякой статистики.
-
-**Механизм.** Комиссия + спред + проскальзывание + фандинг/борроу. Эффект,
-меньший стоимости его сбора, немонетизируем при любой статистической
-значимости.
-
-**Примеры (18+ смертей на этой линии):**
-- фактор A: средний край 8bp на круг при ежедневном обороте → COST-DEATH;
-- фактор B: внутридневной реверсал 12bp gross против 20bp издержек;
-- фактор C: 6bp края на частоте ребаланса, требуемой самой конструкцией.
-
-**Протокол.** Cost-модель считается ДО статистики (§7, запрет 5). Медианный
-gross-край < 20bp → COST-DEATH: минуя все этапы, сразу в кладбище.
-
-### Закон 4. Risk premium в крипте отрицательный
-
-**Утверждение.** Факторы, платящие премию за риск на акциях (лотерейность,
-высокий риск, высокая IV, неликвидность), в крипте часто инвертированы:
-рискованные активы проигрывают.
-
-**Механизм.** Рынок, доминированный ритейлом с предпочтением лотерейных
-выплат, переплачивает за «казино» и не платит премию за риск в академическом
-смысле; институционального спроса на «факторы риска» нет. Знак из другого
-класса активов — предположение, а не факт.
-
-**Примеры:**
-- фактор A: max-ret/лотерейный фактор — знак противоположен академической
-  литературе;
-- фактор B: премия за высокую IV отрицательна;
-- фактор C: low-vol аномалия в крипте сильнее, а не слабее, чем на акциях.
-
-**Протокол.** Проверка знака на этапе 3 обязательна (§7, запрет 4). Инверсия
-с априорным обоснованием — не провал теста, а отдельная гипотеза «инверт»,
-которая сама проходит весь pipeline с этапа 1.
-
-### Закон 5. Годовой режим = календарная контаминация
-
-**Утверждение.** Правило, найденное на режиме одного календарного года
-(«в такой год это сработало»), не переносится на новые дни.
-
-**Механизм.** Один год = одна реализация одного режима; годовые дамми его
-поглощают. Рынок не помнит календарных ярлыков, уникальность режима
-не воспроизводится.
-
-**Примеры:**
-- фактор A: весь эффект в одном году; с годовыми дамми t 2.8 → 0.9;
-- фактор B: правило «месяц года» умерло в первый же следующий год;
-- фактор C: режимный флаг, подогнанный на одном эпизоде, мёртв на следующем.
-
-**Протокол.** Этап 7 выполняется всегда. Календарные термины в скоринге
-запрещены (§7, запрет 1). Для выживания эффект должен жить минимум в 2 из 3
-субпериодов.
-
-### Закон 6. Прогноз волы не монетизируется
-
-**Утверждение.** Хороший прогноз волатильности сам по себе не превращается
-в PnL. Два независимых подтверждения: прогноз работает — сайзинг не работает.
-
-**Механизм.** Прогноз волы улучшает описание распределения, но выигрыш от
-сайзинга — эффект второго порядка (дисперсия терминального богатства), и его
-съедают издержки и ограничения конструкции. Прирост Sharpe от вола-тайминга
-мал против тех же усилий, вложенных в направление.
-
-**Примеры:**
-- фактор A: у прогноза волы приличное качество, Sharpe вола-таргетированного
-  портфеля не изменился;
-- фактор B: режимный предиктор волы — не найден сайзинг, бьющий константный
-  бенчмарк после издержек;
-- фактор C: предиктор типа индекса страха: точность высокая, монетизация
-  нулевая.
-
-**Протокол.** Гипотезы о воле тестируются только явным сайзинг-правилом против
-бенчмарк-сайзинга, после издержек. Точность прогноза сама по себе — не успех.
+**Typical mistake:** tuning the set of regime flags "until t survives" — that is
+fitting the controls to rescue the hypothesis, disguised as a control.
 
 ---
 
-## §4 Таксономия смерти — 18 терминов
+## §3 The Six Systematic Laws
 
-| Термин | Определение | Пример (одна строка) |
+The laws are generalizations paid for with deaths. Each follows the format:
+statement → mechanism → three anonymized examples → protocol.
+
+### Law 1. Description ≠ prediction
+
+**Statement.** Statistics describing the past distribution of a variable
+("in 10 of 10 regime days there was X") describe the current regime and predict
+nothing about new days.
+
+**Mechanism.** A descriptive statistic is conditioned on knowing the regime is
+underway. At the regime boundary the conditional distribution changes; the
+regime's duration itself is no argument for its continuation — often the opposite.
+
+**Examples:**
+- factor A: hit-rate 10/10 inside the regime, zero predictive power on holdout
+  days;
+- factor B: vol-of-vol described the crash days perfectly, no forward return;
+- factor C: the correlation regime described flawlessly, the forward direction —
+  a coin flip.
+
+**Protocol.** Any descriptive statistic must pass a forward test of its
+prediction on days outside the sample the description was computed on. Failed →
+DECORATION-DEATH.
+
+### Law 2. Incrementality is the deciding test
+
+**Statement.** The raw t means nothing; the only verdict is the new signal's t
+after the known controls.
+
+**Mechanism.** A new signal almost always correlates with known factors
+(momentum, size, volume, IV, beta). The regression divides the explanatory pie;
+whoever owns the pie keeps the t.
+
+**Examples.** Three candidates with raw t > 5 died at t < 1 after controls:
+- factor A: raw 5.8 → 0.4;
+- factor B: raw 5.5 → -0.20;
+- factor C: raw 6.1 → 0.9.
+
+**Protocol.** The raw t never appears on its own. Stage 4 is mandatory; the
+control set is fixed a priori. `t < 2` after controls = REPACKAGING.
+
+### Law 3. The 20bp cost line
+
+**Statement.** If the effect's amplitude per round trip is below ~20bp of costs,
+the hypothesis is dead before any statistics.
+
+**Mechanism.** Fee + spread + slippage + funding/borrow. An effect smaller than
+the cost of harvesting it cannot be monetized at any level of statistical
+significance.
+
+**Examples (18+ deaths on this line):**
+- factor A: mean edge 8bp per round trip at daily turnover → COST-DEATH;
+- factor B: intraday reversal, 12bp gross against 20bp of costs;
+- factor C: 6bp of edge at the rebalance frequency the construction itself
+  requires.
+
+**Protocol.** The cost model is computed BEFORE statistics (§7, prohibition 5).
+Median gross edge < 20bp → COST-DEATH: past all stages, straight to the graveyard.
+
+### Law 4. The risk premium in crypto is negative
+
+**Statement.** Factors that pay a risk premium in equities (lottery-likeness,
+high risk, high IV, illiquidity) are often inverted in crypto: risky assets lose.
+
+**Mechanism.** A market dominated by retail with a taste for lottery payouts
+overpays for the "casino" and pays no risk premium in the academic sense; there
+is no institutional demand for "risk factors". A sign imported from another asset
+class is an assumption, not a fact.
+
+**Examples:**
+- factor A: max-ret/lottery factor — the sign is opposite to the academic
+  literature;
+- factor B: the premium for high IV is negative;
+- factor C: the low-vol anomaly in crypto is stronger, not weaker, than in
+  equities.
+
+**Protocol.** The sign check at stage 3 is mandatory (§7, prohibition 4). An
+inversion with an a priori rationale is not a failed test but a separate
+"inverse" hypothesis that itself passes the entire pipeline from stage 1.
+
+### Law 5. An annual regime = calendar contamination
+
+**Statement.** A rule found in the regime of a single calendar year ("in a year
+like this it worked") does not transfer to new days.
+
+**Mechanism.** One year = one realization of one regime; year dummies absorb it.
+The market does not remember calendar labels; the regime's uniqueness does not
+replicate.
+
+**Examples:**
+- factor A: the entire effect in a single year; with year dummies t 2.8 → 0.9;
+- factor B: the "month of year" rule died in the very next year;
+- factor C: a regime flag fitted on one episode is dead on the next.
+
+**Protocol.** Stage 7 is always run. Calendar terms in scoring are forbidden
+(§7, prohibition 1). To survive, the effect must live in at least 2 of 3
+subperiods.
+
+### Law 6. A vol forecast does not monetize
+
+**Statement.** A good volatility forecast does not by itself turn into PnL. Two
+independent confirmations: the forecast works — the sizing does not.
+
+**Mechanism.** A vol forecast improves the description of the distribution, but
+the gain from sizing is a second-order effect (the variance of terminal wealth),
+and costs and construction constraints eat it. The Sharpe gain from vol timing is
+small against the same effort spent on direction.
+
+**Examples:**
+- factor A: the vol forecast has decent quality, the Sharpe of the
+  vol-targeted portfolio did not change;
+- factor B: a regime vol predictor — no sizing was found that beats the constant
+  benchmark after costs;
+- factor C: a fear-index-style predictor: high accuracy, zero monetization.
+
+**Protocol.** Vol hypotheses are tested only with an explicit sizing rule against
+benchmark sizing, after costs. Forecast accuracy by itself is not success.
+
+---
+
+## §4 The Death Taxonomy — 18 Terms
+
+| Term | Definition | Example (one line) |
 |---|---|---|
-| NULL-DEATH | Реальная статистика неотличима от распределения перемешанных данных. | t = 3.2 при 95-м перцентиле placebo = 4.1 |
-| COST-DEATH | Gross-край ниже линии издержек ~20bp на круговую сделку. | край 12bp при ежедневном обороте |
-| INCREMENTAL-DEATH | После известных контролов t нового сигнала падает ниже 2: репакаджинг. | raw 5.5 → 0.1 после momentum+IV |
-| PREMISE-DEATH | Структурная предпосылка гипотезы не существует на целевом рынке. | короткая нога недоступна |
-| RISK-DEATH | Эффект — просто премия за известный риск; после контроля экспозиции исчезает. | премия ушла после контроля беты и дней краха |
-| DATA-BLOCKED | Гипотезу невозможно проверить: данных нет, история коротка или грязна. | нужна цепь опционов, есть только спот |
-| ROBUSTNESS-DEATH | Провалена батарея: меньше 5 из 7 тестов. | умирает при удвоении порога |
-| PARADIGM-DEATH | Гипотеза верна в парадигме, которая закончилась (структурный слом). | эффект до институционализации рынка, после — ноль |
-| INSTRUMENT-BLOCKED | Эффект существует, но недостижим доступными инструментами. | базис-трейд требует перпа, есть только спот |
-| OVERFIT-DEATH | Walk-forward сжатие > 2×: параметры запомнили train. | train t 3.9 → test t 1.1 |
-| PERSISTENCE-DEATH | Эффект истощился во времени (публикация, адаптация, арбитраж). | работал два года, потом флэт |
-| INVERTED-DEATH | Знак противоположен предсказанию: гипотеза в этой формулировке неверна. | «высокая IV выигрывает» — проигрывает |
-| FRAGILE-DEATH | Эффект жив только в узкой полосе параметров/окон. | жив при пороге 0.8–1.2, умирает при 1.3 |
-| LEVERAGE-DEATH | Gross-результат положителен, но траектория (просадка/вола) ликвидирует до выплаты премии. | просадка 60% при плече 3× |
-| ANTI-SIGNAL-DEATH | Сигнал предсказывает верно, но торговля против него неисполнима. | сигнал краха срабатывает, когда выйти нельзя |
-| DECAY-DEATH | Полураспад сигнала короче задержки исполнения. | сигнал живёт 30 секунд, исполнение — 5 минут |
-| DECORATION-DEATH | Красивое описание без предсказательной силы. | 10/10 внутри режима, ноль на новых днях |
-| CONSTRUCTION-CLOSED | Торговая конструкция в заявленном виде невозможна. | веса требуют завтрашнего открытия сегодня |
+| NULL-DEATH | The real statistic is indistinguishable from the distribution of shuffled data. | t = 3.2 with placebo 95th percentile = 4.1 |
+| COST-DEATH | Gross edge below the cost line of ~20bp per round trip. | edge of 12bp at daily turnover |
+| INCREMENTAL-DEATH | After known controls the new signal's t falls below 2: repackaging. | raw 5.5 → 0.1 after momentum+IV |
+| PREMISE-DEATH | A structural premise of the hypothesis does not exist in the target market. | the short leg is unavailable |
+| RISK-DEATH | The effect is just a premium for a known risk; it disappears once the exposure is controlled. | the premium vanished after controlling for beta and crash days |
+| DATA-BLOCKED | The hypothesis cannot be tested: no data, or history too short or dirty. | an option chain is needed, only spot exists |
+| ROBUSTNESS-DEATH | Battery failed: fewer than 5 of 7 tests passed. | dies when the threshold is doubled |
+| PARADIGM-DEATH | The hypothesis was true in a paradigm that has ended (structural break). | the effect exists before the market institutionalizes, zero after |
+| INSTRUMENT-BLOCKED | The effect exists but is unreachable with the available instruments. | the basis trade needs a perp, only spot exists |
+| OVERFIT-DEATH | Walk-forward shrinkage > 2×: the parameters memorized train. | train t 3.9 → test t 1.1 |
+| PERSISTENCE-DEATH | The effect depleted over time (publication, adaptation, arbitrage). | worked for two years, then flat |
+| INVERTED-DEATH | The sign is opposite to the prediction: the hypothesis is wrong in this formulation. | "high IV wins" — it loses |
+| FRAGILE-DEATH | The effect lives only in a narrow band of parameters/windows. | alive at threshold 0.8–1.2, dead at 1.3 |
+| LEVERAGE-DEATH | The gross result is positive, but the path (drawdown/vol) liquidates the position before the premium is paid. | a 60% drawdown at 3× leverage |
+| ANTI-SIGNAL-DEATH | The signal predicts correctly, but trading against it is unexecutable. | the crash signal fires when exit is impossible |
+| DECAY-DEATH | The signal's half-life is shorter than the execution delay. | the signal lives 30 seconds, execution takes 5 minutes |
+| DECORATION-DEATH | A beautiful description with no predictive power. | 10/10 inside the regime, zero on new days |
+| CONSTRUCTION-CLOSED | The trading construction is impossible as stated. | the weights require tomorrow's open today |
 
-Примечание. PERSISTENCE-DEATH — про старение известного эффекта; DECAY-DEATH —
-про внутреннюю скорость сигнала против задержки исполнения; PARADIGM-DEATH —
-про структурный слом всего класса гипотез.
-
----
-
-## §5 Красная нить
-
-Одна строка, ради которой существует весь документ:
-
-```
-Premise → Null → Signal → INCREMENTAL → Robustness → Walk-forward → Calendar → Вердикт → Graveyard | Prereg
-```
-
-- Каждая стрелка — фильтр; самые дешёвые убийцы стоят первыми.
-- Движение только вперёд: возврат на предыдущий этап запрещён.
-- Смерть на любом отрезке финальна для гипотезы в текущей формулировке.
-- У выжившей гипотезы два исхода, и оба честные: пререгистрация и форвард
-  (§8), дальше — adopt или reject.
+Note. PERSISTENCE-DEATH is about the aging of a known effect; DECAY-DEATH is
+about the signal's intrinsic speed against the execution delay; PARADIGM-DEATH is
+about the structural break of an entire class of hypotheses.
 
 ---
 
-## §6 Что делать если... — дерево решений
+## §5 The Red Thread
+
+One line — the reason this document exists:
 
 ```
-Старт: гипотеза сформулирована (что, где, знак, горизонт, конструкция)
+Premise → Null → Signal → INCREMENTAL → Robustness → Walk-forward → Calendar → Verdict → Graveyard | Prereg
+```
+
+- Each arrow is a filter; the cheapest killers come first.
+- Movement is forward-only: returning to an earlier stage is forbidden.
+- Death at any segment is final for the hypothesis in its current formulation.
+- A surviving hypothesis has two outcomes, and both are honest: preregistration
+  and forward (§8), then adopt or reject.
+
+---
+
+## §6 What to Do If... — the Decision Tree
+
+```
+Start: hypothesis formulated (what, where, sign, horizon, construction)
   |
-  |-- Этап 1: premise не существует / данных нет ----> DATA-BLOCKED ---------> STOP
-  |-- Этап 2: null не бьёт (t внутри шума) ----------> NULL-DEATH ------------> STOP
-  |-- Этап 3: знак против предсказания --------------> INVERTED-DEATH -------> STOP
-  |-- Этап 4: incremental t < 2 ---------------------> REPACKAGING -----------> STOP
+  |-- Stage 1: premise missing / no data ------------> DATA-BLOCKED ---------> STOP
+  |-- Stage 2: null not beaten (t inside noise) -----> NULL-DEATH -----------> STOP
+  |-- Stage 3: sign against the prediction ----------> INVERTED-DEATH -------> STOP
+  |-- Stage 4: incremental t < 2 ---------------------> REPACKAGING -----------> STOP
   |                                                   (INCREMENTAL-DEATH)
-  |-- Этап 5: robustness < 5/7 ----------------------> ROBUSTNESS-DEATH ------> STOP
-  |-- Этап 6: WF shrink > 2x ------------------------> OVERFIT-DEATH ---------> STOP
-  |-- Этап 7: calendar t падает < 2 -----------------> INCREMENTAL-DEATH -----> STOP
+  |-- Stage 5: robustness < 5/7 ----------------------> ROBUSTNESS-DEATH ------> STOP
+  |-- Stage 6: WF shrink > 2x ------------------------> OVERFIT-DEATH ---------> STOP
+  |-- Stage 7: calendar t drops < 2 ------------------> INCREMENTAL-DEATH -----> STOP
   |                                                   (calendar variant)
   |
-  `-- Всё пройдено ---> PREREG (§8) ---> форвард-тест на живых данных
-                          |-- подтвердилась ----> ADOPT (с номером пререга)
-                          `-- не подтвердилась -> запись в кладбище -> STOP
+  `-- All passed ---> PREREG (§8) ---> forward test on live data
+                          |-- confirmed --------> ADOPT (with the prereg number)
+                          `-- not confirmed ----> graveyard entry -> STOP
 ```
 
-Канонические развилки:
+Canonical forks:
 
-- **Если premise не существует** → DATA-BLOCKED, stop. Инфраструктуру не строим.
-- **Если null не бьёт** → NULL-DEATH, stop. Сначала чинится пайплайн, не гипотеза.
-- **Если incremental t < 2** → REPACKAGING (INCREMENTAL-DEATH), stop.
-- **Если robustness < 5/7** → ROBUSTNESS-DEATH, stop.
-- **Если WF shrink > 2×** → OVERFIT-DEATH, stop.
-- **Если calendar t падает < 2** → INCREMENTAL-DEATH (calendar variant), stop.
-- **Если всё прошло** → prereg → forward → adopt или reject. Третьего нет.
+- **If the premise does not exist** → DATA-BLOCKED, stop. No infrastructure gets
+  built.
+- **If the null is not beaten** → NULL-DEATH, stop. The pipeline is fixed first,
+  not the hypothesis.
+- **If incremental t < 2** → REPACKAGING (INCREMENTAL-DEATH), stop.
+- **If robustness < 5/7** → ROBUSTNESS-DEATH, stop.
+- **If WF shrink > 2×** → OVERFIT-DEATH, stop.
+- **If calendar t drops below 2** → INCREMENTAL-DEATH (calendar variant), stop.
+- **If everything passed** → prereg → forward → adopt or reject. There is no
+  third option.
 
-Любой STOP заканчивается записью в кладбище по форме §8. Отсутствие записи —
-нарушение протокола, а не милосердие.
-
----
-
-## §7 Чего НЕ делать — 8 запретов
-
-1. **НЕТ календарных терминов в скоринге.** Ни месяц, ни год, ни ярлык режима
-   не входят в функцию сигнала. Календарный приор не переносится на новые дни
-   (§3, закон 5); проверка — этап 7.
-2. **НЕТ тюнинга параметров после данных.** Любое изменение после взгляда на
-   результат = новая гипотеза, весь pipeline с этапа 1. Одна выборка — одно
-   обещание.
-3. **НЕТ «один прогон и готово».** Всегда батарея (этап 5) и null-контроль
-   (этап 2). Одиночный прогон статистически неотличим от удачного
-   подглядывания.
-4. **НЕТ акционных факторов без проверки знака.** В крипте премия за риск
-   отрицательна (§3, закон 4): знак из литературы по акциям — предположение,
-   а не факт.
-5. **НЕТ сигналов без cost-модели.** Cost-линия считается до статистики
-   (§3, закон 3): эффект меньше издержек мёртв при любом t.
-6. **НЕТ инфраструктуры под DATA-BLOCKED сигналы.** Нет данных — нет пайплайна.
-   Строить движок под непроверяемую гипотезу — инвестировать в собственную
-   могилу.
-7. **НЕТ режимной статистики без предикт-теста.** Описание ≠ предсказание
-   (§3, закон 1): любая описательная статистика обязана доказать форвард-силу
-   на новых днях.
-8. **НЕТ тестов на перекрывающихся форвардных доходностях.** Перекрытие
-   раздувает t: эффективная выборка короче видимой. Неперекрывающиеся окна
-   либо честная коррекция кластеризации, плюс declustering этапа 5.
+Every STOP ends with a graveyard entry in the §8 form. A missing entry is a
+protocol violation, not an act of mercy.
 
 ---
 
-## §8 Протокол кладбища и пререгистрации
+## §7 What NOT to Do — 8 Prohibitions
 
-### 8.1. Запись в кладбище — обязательные поля
-
-1. Название гипотезы (анонимизированное) и дата смерти.
-2. Этап смерти и тип смерти из таксономии §4.
-3. Минимальные цифры: raw t; incremental t (если дошли); проваленный тест.
-4. Причина смерти одной строкой.
-5. «Воскрешение»: какие новые данные или условия сделали бы пересмотр
-   возможным.
-6. «Противорецидив»: какой запрет §7 нарушался бы при повторном заходе.
-
-### 8.2. Правила кладбища
-
-- Смерть финальна для формулировки. Та же идея с изменённой конструкцией —
-  это новая гипотеза: pipeline с этапа 1 и новая пререгистрация.
-- Перед стартом новой гипотезы агент обязан прочитать релевантные записи
-  кладбища. Повторная смерть по той же причине фиксируется отдельно и считается
-  ошибкой процесса, а не гипотезы.
-
-### 8.3. Пререгистрация — обязательные поля
-
-1. Гипотеза: что, где, знак, горизонт.
-2. Конструкция: портфель или регрессия; все пороги и параметры заморожены.
-3. Cost-модель: линия издержек на круговую сделку.
-4. Форвард-окно: длина и критерий успеха (например, `|t| >= 2` на
-   неперекрывающихся форвардных доходностях).
-5. Правило adopt/reject, сформулированное до старта форварда.
-
-### 8.4. Правило капитала
-
-Только пререгистрированные гипотезы имеют право на форвард-капитал. Только
-запись в кладбище закрывает мёртвую гипотезу. Принятая стратегия без номера
-пререгистрации не существует.
+1. **NO calendar terms in scoring.** No month, no year, no regime label enters
+   the signal function. A calendar edge does not transfer to new days
+   (§3, law 5); the check is stage 7.
+2. **NO parameter tuning after the data.** Any change after seeing the result =
+   a new hypothesis, the entire pipeline from stage 1. One sample — one promise.
+3. **NO "one run and done".** Always the battery (stage 5) and the null control
+   (stage 2). A single run is statistically indistinguishable from a lucky peek.
+4. **NO equity factors without a sign check.** In crypto the risk premium is
+   negative (§3, law 4): a sign from the equities literature is an assumption,
+   not a fact.
+5. **NO signals without a cost model.** The cost line is computed before
+   statistics (§3, law 3): an effect smaller than its costs is dead at any t.
+6. **NO infrastructure for DATA-BLOCKED signals.** No data — no pipeline.
+   Building an engine for an untestable hypothesis is investing in your own
+   grave.
+7. **NO regime statistics without a prediction test.** Description ≠ prediction
+   (§3, law 1): every descriptive statistic must prove forward strength on new
+   days.
+8. **NO tests on overlapping forward returns.** Overlap inflates t: the
+   effective sample is shorter than the visible one. Non-overlapping windows, or
+   an honest clustering correction, plus the stage-5 declustering.
 
 ---
 
-*Конец документа. Порядок этапов обязателен, кладбище — продукт, вердикт —
-только по протоколу.*
+## §8 The Graveyard and Preregistration Protocol
+
+### 8.1. Graveyard Entry — Required Fields
+
+1. Hypothesis name (anonymized) and date of death.
+2. Stage of death and death type from the §4 taxonomy.
+3. The minimal numbers: raw t; incremental t (if reached); the failed test.
+4. Cause of death in one line.
+5. "Resurrection": what new data or conditions would make a reopen possible.
+6. "Anti-recidivism": which §7 prohibition a re-entry would violate.
+
+### 8.2. Graveyard Rules
+
+- Death is final for the formulation. The same idea with a modified construction
+  is a new hypothesis: pipeline from stage 1 and a new preregistration.
+- Before starting a new hypothesis, the agent must read the relevant graveyard
+  entries. A repeat death for the same reason is logged separately and counts as
+  a process error, not a hypothesis error.
+
+### 8.3. Preregistration — Required Fields
+
+1. Hypothesis: what, where, sign, horizon.
+2. Construction: portfolio or regression; all thresholds and parameters frozen.
+3. Cost model: the cost line per round trip.
+4. Forward window: length and the success criterion (e.g. `|t| >= 2` on
+   non-overlapping forward returns).
+5. The adopt/reject rule, formulated before the forward starts.
+
+### 8.4. The Capital Rule
+
+Only preregistered hypotheses earn the right to forward capital. Only a graveyard
+entry closes a dead hypothesis. An adopted strategy without a preregistration
+number does not exist.
+
+---
+
+*End of document. Stage order is mandatory, the graveyard is the product, the
+verdict comes only from the protocol.*
