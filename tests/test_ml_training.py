@@ -1464,6 +1464,33 @@ def test_dsr_extreme_thin_book_is_tiny_but_finite() -> None:
             stats["std"] ** 2,
             n_trials=5,
         )
-    # measured 4.16e-20 on this stream: the CDF tail underflows to a
-    # tiny finite value -- honest, no overflow, no fabricated 0.0
+    # measured 4.16e-20 on this stream: an honest extreme CDF-tail
+    # value -- finite, representable, no overflow, no fabricated 0.0
     assert math.isfinite(dsr) and 0.0 < dsr < 1e-15
+
+
+def test_dsr_cdf_tail_representable_at_demo_depth() -> None:
+    """The ~1e-129-scale tail of the registry demo is representable.
+
+    CASE 4 (full registry, extratrees at 21 events) recorded a DSR of
+    ~2e-129.  This test pins the SAME mechanism at a comparable depth:
+    a dead stream whose z lands near -22 keeps the CDF tail finite and
+    strictly positive -- representable, not underflow, not fabricated
+    0/1 -- with no runtime warnings.
+    """
+    import warnings
+
+    stream = np.linspace(-0.055, -0.045, 21)
+    stats = stream_stats(stream)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        dsr = deflated_sharpe_value(
+            stats["sr"],
+            21,
+            stats["skew"],
+            stats["kurt_pearson"],
+            stats["std"] ** 2,
+            n_trials=5,
+        )
+    assert math.isfinite(dsr)
+    assert 0.0 < dsr < 1e-15

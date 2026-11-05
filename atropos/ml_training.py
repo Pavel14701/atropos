@@ -592,7 +592,9 @@ def deflated_sharpe_value(
     The return value is a probability ``Phi(z)`` in ``[0, 1]``; a value
     of exactly ``1.0`` is the saturation cap (``z`` large enough that
     the normal CDF rounds to one), not an anomaly -- for the frozen
-    demo worlds with z ~ 9-12 saturation is the expected reading.
+    demo worlds with z ~ 9-12 saturation is the expected reading.  Tiny
+    values on dead books are honest extreme CDF-tail values (finite,
+    representable), not artifacts.
 
     Bailey & Lopez de Prado (2014); the value returned is the CDF
     ``Phi(z)``.  Thin validated alias: the deflation math lives in

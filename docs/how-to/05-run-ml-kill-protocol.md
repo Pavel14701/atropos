@@ -301,8 +301,8 @@ survivor out of an undecided run.
 One reading note on `deflated_sharpe`: it is a CDF probability in
 [0, 1]. A value of exactly `1.0` is the saturation cap (z large enough
 that the normal CDF rounds to one — common for strong demo worlds),
-and tiny values like `1e-129` are honest CDF-tail underflow for a dead
-book, not numerical faults.
+and tiny values like `1e-129` are honest extreme CDF-tail values for
+a dead book -- finite and representable, not numerical faults.
 
 ### Add data and re-run
 

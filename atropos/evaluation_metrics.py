@@ -363,7 +363,8 @@ def deflated_sharpe_from_moments(
     result is a probability: ``1.0`` is the saturation cap (``z`` large
     enough that the normal CDF rounds to one), a common reading for
     strong demo worlds, and tiny values like ``1e-129`` are honest
-    underflow of the CDF tail for dead streams, not numerical faults.
+    extreme CDF-tail values -- finite and representable, not numerical
+    faults.
     (``n_trials <= 1`` carries no multiple-testing penalty:
     ``sr0 = 0``, DSR degenerates to the probabilistic Sharpe ratio).
 

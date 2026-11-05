@@ -56,6 +56,12 @@ born under full law:
   `tests/test_api_contract.py` — adding a key means updating the
   snapshot deliberately.
 
+**Documentation language.** All documentation is English-only by
+decision: the pre-translation Russian versions of FRAMEWORK.md,
+METHODOLOGY.md, TEMPLATES.md, CASES_AND_FLAGS.md, contributor
+notes and the how-to guides were replaced (not mirrored) in the
+translation wave. Do not re-introduce Russian prose.
+
 ## Adding an ML model (the registry)
 
 The ML engine's fleet is open, and the contract tests sweep every
