@@ -11,7 +11,7 @@
 
 ## When to use the ML chain, not rule-based
 
-The framework kills hypotheses with two chains. Rule-based
+The library kills hypotheses with two chains. Rule-based
 (`run_full_pipeline`, how-to 02) takes a finished rule — `signal` →
 outcome — and runs it through seven adversarial stages. The ML chain
 (`run_ml_kill_protocol`) takes a feature space — `features` → a binary

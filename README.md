@@ -1,7 +1,9 @@
 # Atropos
 
-Atropos is a hypothesis-killing framework for quantitative research: a
-candidate signal enters a 7-stage adversarial pipeline — null controls,
+Atropos is a hypothesis-killing **library** for quantitative research:
+you import it into your own research pipeline, call its functions on
+your data, and get back verdict dicts you act on. A candidate signal
+enters a 7-stage adversarial pipeline — null controls,
 specification curve, robustness battery, walk-forward, Monte Carlo risk,
 predictive evaluation, cross-sectional tests — and leaves with exactly
 one verdict. The goal is not to confirm your idea but to kill it

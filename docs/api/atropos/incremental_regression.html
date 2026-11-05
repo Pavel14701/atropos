@@ -205,7 +205,7 @@ crashing or killing the hypothesis on zero observations.</p>
 </span><span id="L-87"><a href="#L-87"><span class="linenos"> 87</span></a><span class="sd">    is saturated (``n_rows &lt;= n_cols``) or rank-deficient, every</span>
 </span><span id="L-88"><a href="#L-88"><span class="linenos"> 88</span></a><span class="sd">    statistic is NaN and ``rank_deficient`` is True.  A pseudo-inverse</span>
 </span><span id="L-89"><a href="#L-89"><span class="linenos"> 89</span></a><span class="sd">    alone would fabricate plausible-looking minimum-norm t-stats</span>
-</span><span id="L-90"><a href="#L-90"><span class="linenos"> 90</span></a><span class="sd">    exactly in the collinear cases the framework must flag, so callers</span>
+</span><span id="L-90"><a href="#L-90"><span class="linenos"> 90</span></a><span class="sd">    exactly in the collinear cases the library must flag, so callers</span>
 </span><span id="L-91"><a href="#L-91"><span class="linenos"> 91</span></a><span class="sd">    must treat ``rank_deficient`` (or a non-finite ``t``) as</span>
 </span><span id="L-92"><a href="#L-92"><span class="linenos"> 92</span></a><span class="sd">    INCONCLUSIVE, never as evidence for or against the hypothesis.</span>
 </span><span id="L-93"><a href="#L-93"><span class="linenos"> 93</span></a><span class="sd">    """</span>

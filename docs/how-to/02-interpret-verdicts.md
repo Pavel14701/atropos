@@ -68,7 +68,7 @@ Individual stage-1 controls and the stage-7 overall return
 `INCONCLUSIVE` when a check is not computable (e.g. the signal is
 exactly collinear with a control — "collinear with controls"). Upstairs
 this surfaces as a stage WARN, not a kill: "could not check" ≠ "killed".
-That is the meaning of INCONCLUSIVE across the whole framework — too
+That is the meaning of INCONCLUSIVE across the whole library — too
 little data or non-computability does not kill a hypothesis.
 
 The seven stages in order: 1 `null_control_suite` (6 null controls),
@@ -80,7 +80,7 @@ The seven stages in order: 1 `null_control_suite` (6 null controls),
 
 ## The ML chain (run_ml_kill_protocol)
 
-The framework has a second kill chain — a walk-forward ML engine over a
+The library has a second kill chain — a walk-forward ML engine over a
 feature dataset (`features` → binary `target`), not `signal` → outcome.
 It has its own verdict vocabulary: three, not nine. How to assemble the
 dataset and run it — how-to 05
@@ -107,7 +107,7 @@ The four gates and their thresholds (`checks.*` in the config):
 
 Each gate entry is `{check, enabled, triggered, inconclusive,
 reason}`. The INCONCLUSIVE semantics are the same as across the whole
-framework: "could not check" ≠ "killed" (the typical case is incremental
+library: "could not check" ≠ "killed" (the typical case is incremental
 without `battery_controls`). Careful: SURVIVES with a non-computable
 incremental means the incremental edge is undemonstrated, not passed.
 The `DEAD(<gate>)` verdict names the first triggered gate in the order

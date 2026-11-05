@@ -89,7 +89,7 @@ entry automatically — a new model is born under full law:
 
 ## Adding a hypothesis (the user workflow)
 
-The framework's whole point; walk the doctrine, not around it:
+The library's whole point; walk the doctrine, not around it:
 
 1. **Prereg before data.** Build the params dict (name, hypothesis,
    construction, nulls, kill criteria, power calc, spec hash), freeze it
@@ -106,7 +106,7 @@ The framework's whole point; walk the doctrine, not around it:
    conditions (no graveyard yet? scaffold it with `atropos init`). Formats and the full pipeline doctrine: `FRAMEWORK.md`
    (§2 pipeline, §8 graveyard protocol) and `TEMPLATES.md`.
 
-## For framework developers
+## For library developers
 
 The developer rulebook (review standards, test layers, perf budgets)
 lives in `contributor/AGENTS.md`. Deep methodology docs
