@@ -12,6 +12,14 @@
   checks — incremental EV vs a linear battery, cost line, importance
   stability, deflated Sharpe. Verdicts: `SURVIVES`, `DEAD(<gate>)`,
   `UNDERPOWERED` (undecided — reported, not a kill).
+- Documented-kill demo case (`atropos.ml_training`): the module demo
+  gains a fifth, asserted case — a statistics-calibrated reproduction
+  of a documented tombstone (VRP-panic conditional short straddle,
+  closed donor corpus): a synthetic world calibrated to the
+  tombstone's marginal statistics (per-trade EV, negative conditional
+  lift, panic-window VRP proxy) must come back `DEAD(...)` with both
+  documented cause-of-death gates triggered (cost line +
+  incremental); pinned by `test_vrp_panic_tombstone_reproduction`.
 - Ensemble composite (`atropos.ml_ensemble`): `run_ensemble_report`
   combines registry members as `mean` / `weighted` / `rank_mean` /
   `stacking` over a past-only out-of-fold score matrix ("no stacking

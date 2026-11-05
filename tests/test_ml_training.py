@@ -32,6 +32,8 @@ from atropos.ml_training import (
     _gate_deflated_sharpe,
     _merge_config,
     _validate_config,
+    _verify_vrp_panic_demo,
+    _vrp_panic_world,
     assign_folds,
     decluster_count,
     deflated_sharpe_value,
@@ -1108,6 +1110,42 @@ def test_run_verdict_follows_first_non_surviving_model() -> None:
 
 
 # ---------------------------------------------------------------------------
+# documented-kill reproduction (VRP-panic tombstone)
+# ---------------------------------------------------------------------------
+def test_vrp_panic_tombstone_reproduction() -> None:
+    """Case-5 world reproduces a documented kill at test scale.
+
+    A statistics-calibrated reproduction of a documented tombstone
+    (closed donor corpus; conditional short straddle at IV30>p90,
+    calibrated to the tombstone's marginal statistics) must come back
+    DEAD with the documented cause-of-death PAIR: cost_line (the
+    taken book's per-trade EV stays in the tombstone band, nowhere
+    near the profit bar) AND incremental (the documented conditional
+    lift is negative -- conditioning adds nothing over the linear
+    battery).  The world builder pins its own calibration asserts;
+    ``_verify_vrp_panic_demo`` is the demo's assert block, reused here
+    verbatim so the test and the demo cannot drift apart.  Shipped
+    seed at this reduced-capacity config (60 trees, 150 bootstrap
+    draws): DEAD(incremental), n_events 614, EV -6.19%, implied book
+    t -10.23 vs the documented t -10.03.
+    """
+    world = _vrp_panic_world()
+    report = run_ml_kill_protocol(
+        world["features"],
+        world["target"],
+        world["exec_returns"],
+        world["times_us"],
+        config={
+            "threshold_grid": (0.20, 0.25, 0.30),
+            "bootstrap_b": 150,
+            "model_params": {"gbm": {"n_estimators": 60}},
+        },
+        battery_controls=world["battery_controls"],
+    )
+    _verify_vrp_panic_demo(report, world)
+
+
+# ---------------------------------------------------------------------------
 # config deep-merge (regression: the review's main bug)
 # ---------------------------------------------------------------------------
 def test_deep_merge_keeps_unset_model_param_defaults() -> None:
@@ -1404,3 +1442,28 @@ def test_ensemble_params_reload_does_not_overwrite() -> None:
     importlib.reload(ml_ensemble)
     assert DEFAULT_TRAINING_CONFIG["model_params"]["ensemble"] == before
     assert MODEL_REGISTRY["ensemble"] is ml_ensemble.make_ensemble
+
+
+def test_dsr_extreme_thin_book_is_tiny_but_finite() -> None:
+    """A 21-event dead book: DSR underflows honestly, no instability.
+
+    Mirrors the full-registry demo (extratrees at 21 events reported
+    DSR ~ 2e-129): the CDF tail must return a tiny finite value without
+    overflow warnings or fabricated 0/1 flip, and the companion gate
+    stays a clean trigger.
+    """
+    stream = np.linspace(-0.02, -0.01, 21)
+    stats = stream_stats(stream)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # any RuntimeWarning fails
+        dsr = deflated_sharpe_value(
+            stats["sr"],
+            21,
+            stats["skew"],
+            stats["kurt_pearson"],
+            stats["std"] ** 2,
+            n_trials=5,
+        )
+    # measured 4.16e-20 on this stream: the CDF tail underflows to a
+    # tiny finite value -- honest, no overflow, no fabricated 0.0
+    assert math.isfinite(dsr) and 0.0 < dsr < 1e-15

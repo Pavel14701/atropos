@@ -47,9 +47,13 @@ entries with no engine changes.
 Run ``python -m atropos.ml_training`` for the synthetic verification
 cases: a planted nonlinear edge must SURVIVES for the tree models
 while the linear battery stays blind (incremental gate), pure noise
-must not survive, a thin sample must come back UNDERPOWERED, and the
+must not survive, a thin sample must come back UNDERPOWERED, the
 full eight-model registry must complete one comparison pass with
-SURVIVES the majority outcome.
+SURVIVES the majority outcome, and a statistics-calibrated
+reproduction of a documented tombstone (closed donor corpus: the
+VRP-panic conditional short straddle, calibrated to the tombstone's
+marginal statistics) must come back ``DEAD(...)`` with both
+documented cause-of-death gates triggered (cost line + incremental).
 """
 
 from __future__ import annotations
@@ -78,6 +82,7 @@ from sklearn.preprocessing import StandardScaler
 
 from atropos._utils import (
     purge_embargo_mask,
+    sane_variance_mask,
     validate_int,
     validate_number,
 )
@@ -266,14 +271,25 @@ def rolling_z(values: np.ndarray, window: int) -> np.ndarray:
         scale = float(np.abs(values_arr[finite_mask]).max())
         if 0.0 < scale < 1e-150 or scale > 1e150:
             values_arr = values_arr / scale
-    series = pd.Series(values_arr)
-    mean = series.rolling(window, min_periods=window).mean()
-    std = series.rolling(window, min_periods=window).std()
-    zed = (series - mean) / std
-    # a window with sd == 0 (constant values, or dust that underflowed
-    # to exactly 0.0) has no z by contract -- NaN, never +-inf
-    zed = zed.where(std > 0)
-    return zed.to_numpy(dtype=float)
+    if values_arr.size < window:
+        return np.full(values_arr.size, np.nan)
+    # two-pass std (mean first, then squared deviations) instead of
+    # pandas' rolling one-pass form: the one-pass variance is
+    # catastrophically cancellative -- a mathematically constant
+    # window returns positive rounding dust at one magnitude and
+    # exactly 0 at another, fabricating a 0.0 z at the first scale and
+    # NaN at the second (scale invariance broken).  Two-pass
+    # deviations are exactly 0 at every scale; per-window computation
+    # also makes outputs independent of appended future rows.
+    windows = np.lib.stride_tricks.sliding_window_view(values_arr, window)
+    means = windows.mean(axis=1)
+    stds = np.sqrt(windows.var(axis=1, ddof=1))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        zed_tail = (values_arr[window - 1 :] - means) / stds
+    usable = sane_variance_mask(means, stds)
+    zed_tail = np.where(usable, zed_tail, np.nan)
+    warmup = np.full(window - 1, np.nan)
+    return np.concatenate([warmup, zed_tail])
 
 
 def ev_of_taken(exec_vals: np.ndarray, taken: np.ndarray) -> float:
@@ -572,6 +588,11 @@ def deflated_sharpe_value(
     n_trials: int = 5,
 ) -> float:
     """Deflated Sharpe ratio (CDF form) of a per-trade EV stream.
+
+    The return value is a probability ``Phi(z)`` in ``[0, 1]``; a value
+    of exactly ``1.0`` is the saturation cap (``z`` large enough that
+    the normal CDF rounds to one), not an anomaly -- for the frozen
+    demo worlds with z ~ 9-12 saturation is the expected reading.
 
     Bailey & Lopez de Prado (2014); the value returned is the CDF
     ``Phi(z)``.  Thin validated alias: the deflation math lives in
@@ -2204,8 +2225,93 @@ def _demo_world(
     }
 
 
+def _vrp_panic_world(
+    n_rows: int = 1600,
+    seed: int = 41,
+) -> dict[str, Any]:
+    """Statistics-calibrated world for the documented VRP-panic kill.
+
+    Honest marking: this is a statistics-calibrated reproduction of a
+    documented tombstone (closed donor corpus) -- NOT a re-test of the
+    original data, which are not available.  The synthetic hourly
+    corpus is calibrated to the tombstone's documented MARGINAL
+    statistics so the engine can be shown to reproduce the documented
+    verdict from those statistics alone: unconditional per-trade EV
+    ``-6.43%`` (the tombstone's control book, n=253); panic events
+    (top decile of the VRP proxy) worse by ~1.56pp per trade (the
+    documented negative conditional lift -- panic is WORSE than
+    average); panic-window median IV30-RV7 ~ ``+12.1`` vol points
+    (VRP on paper, never monetized); per-trade sd ``0.15 = |EV| *
+    sqrt(n) / 10`` at the demo book size, so the taken book's implied
+    t lands near the documented ``-10``.  The return structure is
+    LINEAR in the proxy, so the linear battery sees everything the
+    model sees -- the tombstone's INCREMENTAL point: conditioning
+    adds nothing beyond the known linear structure.  Features:
+    ``iv_rv_gap_z`` (causal z of the IV30-RV7 proxy, the conditioning
+    signal), ``iv_level_z`` / ``rv7_z`` (noise); battery controls
+    ``momentum`` / ``mean_reversion`` (noise).  The panic window is
+    marked like the donor screen: corpus-level p90 of the proxy.
+    Calibration is on MARGINAL statistics only, so a world seed other
+    than the shipped one can echo ``DEAD(cost_line)`` instead of
+    ``DEAD(incremental)`` (roughly a quarter of realizations): which
+    of the pair the verdict echoes is book noise, the PAIR is the
+    contract.
+
+    Returns:
+        Dataset dict of the engine contract (``features`` / ``target``
+        / ``exec_returns`` / ``times_us`` / ``battery_controls``)
+        plus ``calibration`` -- realized world statistics feeding the
+        demo's tombstone-vs-engine table.
+    """
+    warmup = 168  # causal z window; the NaN head is sliced off below
+    rng = np.random.default_rng(seed)
+    # IV30-RV7 proxy in vol points: N(4.95, 4.3) puts the top-decile
+    # median at ~+12.1pt, the tombstone's panic-window figure
+    gap_pt = 4.95 + 4.3 * rng.standard_normal(n_rows + warmup)
+    gap_z = rolling_z(gap_pt, warmup)[warmup:]
+    gap_pt = gap_pt[warmup:]
+    panic_mask = gap_z > float(np.quantile(gap_z, 0.90))
+    # executable returns: the control-book EV, a LINEAR panic penalty
+    # spreading the documented -1.56pp conditional lift over the z
+    # range (slope = -0.0156 / E[z | panic window]; the realized
+    # rolling-z tail is heavier than a Gaussian's), and straddle-scale
+    # per-trade noise calibrated to the tombstone's t ~ -10 at the
+    # demo book size: sd = |EV| * sqrt(n) / 10
+    exec_ret = -0.0643 - 0.0069 * gap_z + 0.15 * rng.standard_normal(n_rows)
+    feature_frame = pd.DataFrame(
+        {
+            "iv_rv_gap_z": gap_z,
+            "iv_level_z": rng.standard_normal(n_rows),
+            "rv7_z": rng.standard_normal(n_rows),
+            "momentum": rng.standard_normal(n_rows),
+            "mean_reversion": rng.standard_normal(n_rows),
+        }
+    )
+    stamps = (
+        int(np.datetime64("2024-01-01T00:00:00", "us").astype(np.int64))
+        + np.arange(n_rows, dtype=np.int64) * _HOUR_US
+    )
+    labels = (exec_ret > DEFAULT_TRAINING_CONFIG["profit_bar"]).astype(
+        np.int64
+    )
+    calibration = {
+        "sd_trade": 0.15,
+        "n_panic": int(panic_mask.sum()),
+        "panic_median_gap_pt": float(np.median(gap_pt[panic_mask])),
+        "panic_lift": float(exec_ret[panic_mask].mean() - exec_ret.mean()),
+    }
+    return {
+        "features": feature_frame,
+        "target": labels,
+        "exec_returns": exec_ret,
+        "times_us": stamps,
+        "battery_controls": ["momentum", "mean_reversion"],
+        "calibration": calibration,
+    }
+
+
 def run_all_examples() -> None:
-    """Verify the engine on four synthetic worlds (asserted demo).
+    """Verify the engine on five synthetic worlds (asserted demo).
 
     Case 1: planted nonlinear edge, two tree models in one pass --
     both must clear every gate (SURVIVES) while the linear battery
@@ -2214,7 +2320,10 @@ def run_all_examples() -> None:
     UNDERPOWERED (reported, not a gate failure); case 4: the FULL
     registry in one comparison pass on reduced capacities -- every
     entry reported, every probability valid, SURVIVES the majority
-    verdict.
+    verdict; case 5: a statistics-calibrated reproduction of a
+    documented tombstone (closed donor corpus) must come back
+    ``DEAD(...)`` with BOTH documented cause-of-death gates
+    triggered (cost line + incremental).
     """
     print("=" * 78)
     print("CASE 1: planted nonlinear edge, models=['gbm', 'rf']")
@@ -2295,8 +2404,37 @@ def run_all_examples() -> None:
     )
     _print_report(full_report)
     print()
+    print("=" * 78)
+    print(
+        "CASE 5: documented-kill reproduction (VRP panic) -- "
+        "statistics-calibrated reproduction of a documented tombstone "
+        "(closed donor corpus)"
+    )
+    print("=" * 78)
+    panic = _vrp_panic_world()
+    panic_report = run_ml_kill_protocol(
+        panic["features"],
+        panic["target"],
+        panic["exec_returns"],
+        panic["times_us"],
+        config={
+            # frozen low-side grid: on an all-negative-EV world the
+            # default 0.30-0.70 grid lets the argmax chase degenerate
+            # thin books (a handful of trades, huge per-book noise);
+            # the low grid keeps the taken book powered so the gates
+            # can speak -- the same frozen-grid discipline a
+            # preregistered short-vol direction run would use
+            "threshold_grid": (0.20, 0.25, 0.30),
+            "model_params": {"gbm": {"n_estimators": 120}},
+        },
+        battery_controls=panic["battery_controls"],
+    )
+    _print_report(panic_report)
+    _print_vrp_panic_refs(panic_report, panic)
+    print()
     _verify_demo(report, noise_report, thin_report)
     _verify_full_registry_demo(full_report, full)
+    _verify_vrp_panic_demo(panic_report, panic)
 
 
 def _print_report(report: dict[str, Any]) -> None:
@@ -2306,6 +2444,21 @@ def _print_report(report: dict[str, Any]) -> None:
         f"n_rows={report['n_rows']}  n_events={report['n_events']} "
         f"(min {report['n_min_events']}, powered={report['powered']})"
     )
+    # the powered rule is non-obvious with a multi-model registry: it
+    # requires EVERY model to clear the event floor, so a single thin
+    # secondary flags the whole run as undecided even when the primary
+    # is well-powered -- say so instead of leaving a contradiction
+    underpowered = [
+        f"{name} ({entry['n_events']})"
+        for name, entry in report["models"].items()
+        if entry["verdict"] == "UNDERPOWERED"
+    ]
+    if not report["powered"] and underpowered:
+        print(
+            "  powered=False because these registry models are below "
+            f"the event floor: {', '.join(underpowered)}; "
+            "SURVIVES of other models is per-model, not run-level"
+        )
     print(
         f"baseline EV={_fmt_bp(report['ev_baseline'])}  "
         f"battery EV={_fmt_bp(report['ev_battery'])}"
@@ -2336,6 +2489,13 @@ def _fmt_bp(value: float | None) -> str:
     if value is None:
         return "n/a"
     return f"{value * 1e4:.1f}bp"
+
+
+def _fmt_pct(value: float | None) -> str:
+    """Percent formatting for the tombstone-reproduction table."""
+    if value is None:
+        return "n/a"
+    return f"{value * 100:.2f}%"
 
 
 def _verify_demo(
@@ -2415,6 +2575,93 @@ def _verify_full_registry_demo(
         name: entry["verdict"] for name, entry in report["models"].items()
     }
     print("full-registry verification checks passed")
+
+
+def _print_vrp_panic_refs(
+    report: dict[str, Any], world: dict[str, Any]
+) -> None:
+    """Tombstone-vs-engine table for the reproduction demo (output only).
+
+    Every engine number is printed next to the documented statistic it
+    was calibrated against, so the reproduction is auditable at a
+    glance; the implied book t is engine arithmetic (EV over the
+    calibrated per-trade sd), not a new engine output.
+    """
+    calibration = world["calibration"]
+    sd = float(calibration["sd_trade"])
+    ev = report["ev_model"]
+    n_events = int(report["n_events"])
+    implied_t = (
+        report["ev_model"] / sd * math.sqrt(n_events)
+        if ev is not None
+        else math.nan
+    )
+    t_battery = report["incremental"]["gbm"]["t_vs_battery"]
+    print("tombstone (closed donor corpus, VRP-panic entry):")
+    print(
+        "  panic straddle -7.98%/trade (t -10.03, n=23, hit 0%); "
+        "control -6.43%/trade (n=253)"
+    )
+    print(
+        "  conditional lift -1.56%/trade (Welch t -1.89): panic "
+        "WORSE than average"
+    )
+    print(
+        "  panic median IV30-RV7 +12.1pt: VRP on paper, never "
+        "monetized; COD cost + incremental"
+    )
+    print("engine reproduction (statistics-calibrated world):")
+    print(
+        f"  taken book EV {_fmt_pct(ev)} (n_events {n_events}, "
+        f"implied t {implied_t:.2f})"
+    )
+    print(
+        f"  incremental t vs battery {t_battery:.2f} "
+        f"(<= 2.0 -> no incremental edge)"
+    )
+    print(
+        "  realized corpus: panic median gap "
+        f"{calibration['panic_median_gap_pt']:+.1f}pt, lift "
+        f"{calibration['panic_lift'] * 100:+.2f}pp "
+        "(same sign as the documented -1.56pp; within panic-window "
+        "sample noise)"
+    )
+    print(
+        f"  verdict {report['verdict']}: cost_line and incremental "
+        "both triggered -- the documented COD pair"
+    )
+
+
+def _verify_vrp_panic_demo(
+    report: dict[str, Any], world: dict[str, Any]
+) -> None:
+    """Assert the tombstone-reproduction contract (fails loudly on drift).
+
+    The documented kill must reproduce structurally: a POWERED run
+    whose taken book carries the documented economics (per-trade EV in
+    the tombstone band, not merely any loss) and dies with BOTH
+    documented cause-of-death gates triggered -- ``cost_line`` (the
+    -7.98%/trade straddle economics never clear the profit bar) and
+    ``incremental`` (the conditioning adds nothing over the linear
+    battery; the documented lift is negative).  The verdict echoes the
+    FIRST triggered gate, so the echoed name can be either of the pair
+    (book noise decides at demo scale): the COD match is the pair, not
+    the name.  The world carries its own calibration asserts (panic
+    worse than average, panic-window proxy median at the documented
+    level).
+    """
+    assert report["verdict"].startswith("DEAD("), report["verdict"]
+    assert report["powered"] is True
+    entry = report["models"]["gbm"]
+    assert entry["ev"] is not None and -0.10 < entry["ev"] < -0.03
+    gates = {gate["check"]: gate for gate in entry["kills"]}
+    assert gates["cost_line"]["triggered"] is True
+    assert gates["incremental"]["triggered"] is True
+    assert 300 <= report["n_events"] <= 1200, report["n_events"]
+    calibration = world["calibration"]
+    assert calibration["panic_lift"] < 0  # panic worse than average
+    assert 10.0 < calibration["panic_median_gap_pt"] < 14.0
+    print("tombstone-reproduction verification checks passed")
 
 
 if __name__ == "__main__":

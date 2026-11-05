@@ -107,7 +107,7 @@ both survive, INCONCLUSIVE when the data cannot decide.
 ```bash
 uv run python -m atropos.ensemble_pipeline   # 10 cases, verdict matrix
 uv run python -m atropos.track_record        # live PnL vs prereg
-uv run python -m atropos.ml_training         # planted edge, 8-model registry
+uv run python -m atropos.ml_training         # planted edge, 8-model registry, documented-kill reproduction (VRP panic, calibrated to a closed-corpus tombstone)
 uv run python -m atropos.kill_chain          # rule x ML unified verdict
 ```
 
@@ -118,8 +118,10 @@ Every module ships a runnable demo: `uv run python -m atropos.<module>`.
 1. `docs/how-to/` — step-by-step guides, including the ML kill
    protocol (`run_ml_kill_protocol`).
 2. `GLOSSARY.md` — prereg, kill criteria, COD, graveyard.
-3. `FRAMEWORK.md` §1-3 — philosophy, pipeline, six laws (in Russian;
-   code and demos are English).
+3. `FRAMEWORK.md` §1-3 — philosophy, pipeline, six laws.
+
+Committed demo transcripts (what the demos actually print) live in
+`docs/examples/`.
 
 ## For AI agents
 

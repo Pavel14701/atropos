@@ -1,0 +1,120 @@
+# Executed: uv run python -m atropos.ml_training
+# Deterministic (frozen seeds). The VERDICTS are the contract;
+# float details may differ across BLAS builds.
+# VRP case 5 is calibrated to a documented tombstone of the closed
+# donor corpus -- a reproduction demo, not a re-test.
+
+==============================================================================
+CASE 1: planted nonlinear edge, models=['gbm', 'rf']
+==============================================================================
+verdict     : SURVIVES
+n_rows=7000  n_events=933 (min 500, powered=True)
+baseline EV=73.5bp  battery EV=74.1bp
+  model gbm      verdict=SURVIVES                     EV=85.6bp DSR=1.0 rho=0.7999999999999999 events=933
+    incremental          pass
+    cost_line            pass
+    importance_stability pass
+    deflated_sharpe      pass
+  model rf       verdict=SURVIVES                     EV=95.0bp DSR=1.0 rho=1.0 events=620
+    incremental          pass
+    cost_line            pass
+    importance_stability pass
+    deflated_sharpe      pass
+
+==============================================================================
+CASE 2: pure noise (must NOT survive)
+==============================================================================
+verdict     : DEAD(incremental)
+n_rows=7000  n_events=1058 (min 500, powered=True)
+baseline EV=-0.6bp  battery EV=10.4bp
+  model logit    verdict=DEAD(incremental)            EV=-0.6bp DSR=0.10666643686425992 rho=-0.19999999999999998 events=1058
+    incremental          TRIGGERED
+    cost_line            TRIGGERED
+    importance_stability TRIGGERED
+    deflated_sharpe      TRIGGERED
+
+==============================================================================
+CASE 3: thin sample (must be UNDERPOWERED)
+==============================================================================
+verdict     : UNDERPOWERED
+n_rows=480  n_events=30 (min 500, powered=False)
+  powered=False because these registry models are below the event floor: gbm (30); SURVIVES of other models is per-model, not run-level
+baseline EV=72.9bp  battery EV=60.2bp
+  model gbm      verdict=UNDERPOWERED                 EV=63.7bp DSR=0.9982496714402846 rho=0.39999999999999997 events=30
+    incremental          pass
+    cost_line            pass
+    importance_stability TRIGGERED
+    deflated_sharpe      pass
+
+==============================================================================
+CASE 4: full registry, reduced capacities (one CV pass)
+==============================================================================
+verdict     : UNDERPOWERED
+n_rows=9000  n_events=1169 (min 500, powered=False)
+  powered=False because these registry models are below the event floor: extratrees (21), logit (281), qda (263); SURVIVES of other models is per-model, not run-level
+baseline EV=79.7bp  battery EV=79.5bp
+  model extratrees verdict=UNDERPOWERED                 EV=142.0bp DSR=1.9594956107204674e-129 rho=1.0 events=21
+    incremental          pass
+    cost_line            pass
+    importance_stability pass
+    deflated_sharpe      TRIGGERED
+  model gbm      verdict=SURVIVES                     EV=87.0bp DSR=1.0 rho=0.7999999999999999 events=1169
+    incremental          pass
+    cost_line            pass
+    importance_stability pass
+    deflated_sharpe      pass
+  model hist_gbm verdict=SURVIVES                     EV=86.2bp DSR=1.0 rho=0.7999999999999999 events=1144
+    incremental          pass
+    cost_line            pass
+    importance_stability pass
+    deflated_sharpe      pass
+  model knn      verdict=DEAD(incremental)            EV=63.5bp DSR=1.0 rho=0.7999999999999999 events=2260
+    incremental          TRIGGERED
+    cost_line            pass
+    importance_stability pass
+    deflated_sharpe      pass
+  model logit    verdict=UNDERPOWERED                 EV=79.7bp DSR=0.0006624102898286581 rho=0.7999999999999999 events=281
+    incremental          pass
+    cost_line            pass
+    importance_stability pass
+    deflated_sharpe      TRIGGERED
+  model mlp      verdict=SURVIVES                     EV=84.6bp DSR=1.0 rho=1.0 events=1285
+    incremental          pass
+    cost_line            pass
+    importance_stability pass
+    deflated_sharpe      pass
+  model qda      verdict=UNDERPOWERED                 EV=119.6bp DSR=0.12441165597686843 rho=0.7999999999999999 events=263
+    incremental          pass
+    cost_line            pass
+    importance_stability pass
+    deflated_sharpe      TRIGGERED
+  model rf       verdict=SURVIVES                     EV=95.2bp DSR=1.0 rho=0.7999999999999999 events=793
+    incremental          pass
+    cost_line            pass
+    importance_stability pass
+    deflated_sharpe      pass
+
+==============================================================================
+CASE 5: documented-kill reproduction (VRP panic) -- statistics-calibrated reproduction of a documented tombstone (closed donor corpus)
+==============================================================================
+verdict     : DEAD(incremental)
+n_rows=1600  n_events=588 (min 500, powered=True)
+baseline EV=-525.5bp  battery EV=-578.8bp
+  model gbm      verdict=DEAD(incremental)            EV=-616.6bp DSR=8.377467580274679e-17 rho=-0.5 events=588
+    incremental          TRIGGERED
+    cost_line            TRIGGERED
+    importance_stability TRIGGERED
+    deflated_sharpe      TRIGGERED
+tombstone (closed donor corpus, VRP-panic entry):
+  panic straddle -7.98%/trade (t -10.03, n=23, hit 0%); control -6.43%/trade (n=253)
+  conditional lift -1.56%/trade (Welch t -1.89): panic WORSE than average
+  panic median IV30-RV7 +12.1pt: VRP on paper, never monetized; COD cost + incremental
+engine reproduction (statistics-calibrated world):
+  taken book EV -6.17% (n_events 588, implied t -9.97)
+  incremental t vs battery -30.60 (<= 2.0 -> no incremental edge)
+  realized corpus: panic median gap +12.1pt, lift -0.59pp (same sign as the documented -1.56pp; within panic-window sample noise)
+  verdict DEAD(incremental): cost_line and incremental both triggered -- the documented COD pair
+
+all verification checks passed
+full-registry verification checks passed
+tombstone-reproduction verification checks passed
