@@ -1,96 +1,100 @@
-# How-to 03. Чтение и пополнение кладбища гипотез
+# How-to 03. Reading and growing the hypothesis graveyard
 
-> **Estimated time:** 10 минут
+> **Estimated time:** 10 minutes
 >
-> **You will need:** ваш проект с развёрнутым фреймворком и хотя бы
-> одна запись на кладбище. Код atropos не нужен — только git, grep и
-> csv. Раскладки ещё нет? Сгенерируйте скелет: `atropos init`.
+> **You will need:** your project with the framework deployed and at
+> least one graveyard entry. No atropos code needed — just git, grep,
+> and csv. No layout yet? Generate the skeleton: `atropos init`.
 
-## Зачем
+## Why
 
-Закон 6 фреймворка: **каждая гипотеза получает вердикт**. Без
-надгробия гипотеза считается открытой, а открытое накапливает
-дубликаты. Кладбище — не музей неудач, а **продукт процесса**: это
-накопленная база знаний о том, какие семейства гипотез уже закрыты и
-при каких условиях закрытие можно пересматривать.
+Law 6 of the framework: **every hypothesis gets a verdict**. Without a
+tombstone a hypothesis counts as open, and open items accumulate
+duplicates. The graveyard is not a museum of failures but a **product of
+the process**: the accumulated knowledge base of which hypothesis
+families are already closed and under what conditions a closure may be
+revisited.
 
-Важно понимать границу: репозиторий `atropos` — это инструменты
-убийства (пайплайн, контроли, генератор prereg). Само кладбище —
-**методологический артефакт вашего проекта**: он живёт в вашей
-раскладке `hypotheses/`, а не в библиотеке.
+It is important to understand the boundary: the `atropos` repository is
+the killing toolkit (the pipeline, the controls, the prereg generator).
+The graveyard itself is a **methodological artifact of your project**:
+it lives in your `hypotheses/` layout, not in the library.
 
-Если раскладки ещё нет, сгенерируйте скелет: `atropos init` — команда
-создаёт `GRAVEYARD.md`, `hypotheses/INDEX.csv` и `hypotheses/README.md`,
-только если их нет; существующие файлы не перезаписываются.
+If there is no layout yet, generate the skeleton: `atropos init` — the
+command creates `GRAVEYARD.md`, `hypotheses/INDEX.csv`, and
+`hypotheses/README.md` only if they are missing; existing files are
+never overwritten.
 
-## Раскладка каталога (по METHODOLOGY.md)
+## The directory layout (per METHODOLOGY.md)
 
 ```text
 [PROJECT_ROOT]/
 ├── hypotheses/
-│   ├── preregistrations/      # H-NNNN: пререгистрации (до данных)
-│   ├── code/                  # H-NNNN: код тестов
-│   ├── graveyard/             # H-NNNN: надгробия (вердикты), append-only
-│   └── INDEX.csv              # реестр всех гипотез
+│   ├── preregistrations/      # H-NNNN: preregs (before data)
+│   ├── code/                  # H-NNNN: test code
+│   ├── graveyard/             # H-NNNN: tombstones (verdicts), append-only
+│   └── INDEX.csv              # registry of all hypotheses
 └── ...
 ```
 
-Правило идентичности: одна гипотеза = один `H-NNNN` = минимум три
-артефакта (prereg, code, tombstone).
+The identity rule: one hypothesis = one `H-NNNN` = at least three
+artifacts (prereg, code, tombstone).
 
-## Структура надгробия (tombstone)
+## Tombstone structure
 
-Обязательные поля (по протоколу кладбища фреймворка):
+Required fields (per the framework's graveyard protocol):
 
-1. **ID и вердикт** — `H-NNNN` и `KILLED | SURVIVED | INCONCLUSIVE`,
-   дата вердикта, автор.
-2. **COD — cause of death** — стадия и тип смерти. Тип берётся из
-   таксономии пайплайна atropos: `REPACKAGING`, `ARTIFACT`, `DEAD`,
-   `NO_OOS_EDGE`, `COST_DEATH`, `RISK`, `CS_NO_EDGE` (или `SURVIVED` /
-   `INCONCLUSIVE` для невзятых записей).
-3. **Prediction** — что предсказывалось (фальсифицируемое, из prereg).
-4. **Минимальные цифры** — фактическое значение метрики против порога
-   (raw t; incremental t, если дошли; проваленный тест), снимок данных,
-   seed.
-5. **Причина смерти одной строкой** — чтение на будущее.
-6. **Resurrection conditions** — какие новые данные или условия
-   сделали бы пересмотр возможным.
-7. **Не пробовать снова** — какой запрет нарушил бы повторный заход.
+1. **ID and verdict** — `H-NNNN` and `KILLED | SURVIVED | INCONCLUSIVE`,
+   the verdict date, the author.
+2. **COD (cause of death)** — the stage and the type of death. The type
+   comes from the atropos pipeline taxonomy: `REPACKAGING`, `ARTIFACT`,
+   `DEAD`, `NO_OOS_EDGE`, `COST_DEATH`, `RISK`, `CS_NO_EDGE` (or
+   `SURVIVED` / `INCONCLUSIVE` for entries that were not killed).
+3. **Prediction** — what was predicted (falsifiable, from the prereg).
+4. **The minimal numbers** — the actual metric value against the
+   threshold (raw t; incremental t if reached; the failed test), the
+   data snapshot, the seed.
+5. **Cause of death in one line** — for future readers.
+6. **Resurrection conditions** — which new data or conditions would make
+   a revisit possible.
+7. **Do not try again** — which prohibition a second attempt would
+   violate.
 
-Пример записи (из демо-раскладки этого how-to):
+An example entry (from this how-to's demo layout):
 
 ```markdown
 # H-0002 — KILLED (COST_DEATH)
-- Гипотеза: cross-sectional imbalance spread на топ-20 символов
-- Prediction: net-of-cost SR p5 > 0 при 10bps round-trip
-- COD: stage 5, monte-carlo — net SR p5=-0.52 при breakeven 8bps
-- Вердикт: KILLED, 2026-03-02, снимок 2026-02-01, seed 0
-- Resurrection conditions: издержки < 8bps one-way (maker-исполнение)
-  ИЛИ горизонт удержания >= 5 дней на том же сигнале
-- Не пробовать снова: тот же сигнал с taker-исполнением
+- Hypothesis: cross-sectional imbalance spread on the top-20 symbols
+- Prediction: net-of-cost SR p5 > 0 at 10bps round-trip
+- COD: stage 5, monte-carlo — net SR p5=-0.52 against a breakeven of 8bps
+- Verdict: KILLED, 2026-03-02, snapshot 2026-02-01, seed 0
+- Resurrection conditions: costs < 8bps one-way (maker execution)
+  OR a holding horizon >= 5 days on the same signal
+- Do not try again: the same signal with taker execution
 ```
 
-Строка реестра `INDEX.csv`:
+The `INDEX.csv` registry row:
 
 ```csv
 h_id,title,tags,prereg_date,snapshot,verdict,verdict_date,tombstone_path
 H-0002,xs-imbalance-spread,cross-sectional|costs|orderflow,2026-02-20,2026-02-01,KILLED,2026-03-02,graveyard/H-0002.md
 ```
 
-## Как искать перед новой гипотезой (graveyard check)
+## How to search before a new hypothesis (the graveyard check)
 
-Стадия 2 пайплайна, обязательная до пререгистрации. Идентичность
-гипотез — это совпадение **prediction + kill-критерия**, а не
-заголовка: одна и та же идея под новым названием — дубликат, `KILLED`
-не выдвигается повторно без новой механики. Ищите тремя способами:
+Pipeline stage 2, mandatory before the prereg. Hypothesis identity is a
+match of **prediction + kill criterion**, not of the title: the same
+idea under a new name is a duplicate; a `KILLED` hypothesis is not
+re-proposed without a new mechanism. Search three ways:
 
-1. **По тегам** — теги обязательны в prereg, ищите по ним в реестре:
+1. **By tags** — tags are mandatory in the prereg; search the registry
+   by them:
 
 ```bash
 grep -i "orderflow" hypotheses/INDEX.csv
 ```
 
-Фактический вывод на демо-раскладке этого how-to (3 надгробия:
+Example output on this how-to's demo layout (3 tombstones:
 H-0001 orderflow/daily, H-0002 cross-sectional/costs, H-0003 funding):
 
 ```text
@@ -98,90 +102,93 @@ H-0001,overnight-ofi-edge,orderflow|momentum|daily,2026-02-01,2026-01-15,KILLED,
 H-0002,xs-imbalance-spread,cross-sectional|costs|orderflow,2026-02-20,2026-02-01,KILLED,2026-03-02,graveyard/H-0002.md
 ```
 
-2. **По COD / семейству смерти** — какие конструкции уже умирали так же:
+2. **By COD / death family** — which constructions already died the same
+   way:
 
 ```bash
 grep -il "momentum_control\|REPACKAGING" hypotheses/graveyard/*.md
 ```
 
-Фактический вывод:
+Example output:
 
 ```text
 hypotheses/graveyard/H-0001.md
 ```
 
-3. **Чтение найденного** — у кандидата в дубликаты сверяете prediction
-   и kill-критерий:
+3. **Reading what you found** — for a duplicate candidate, compare the
+   prediction and the kill criterion:
 
 ```bash
 sed -n '1,4p' hypotheses/graveyard/H-0001.md
 ```
 
-Фактический вывод:
+Example output:
 
 ```text
 # H-0001 — KILLED (REPACKAGING)
-- Гипотеза: overnight order-flow imbalance предсказывает next-day return
-- Prediction: |t| >= 2 после контролов mom7/mom30 на 500 obs
-- COD (cause of death): stage 1, momentum_control — t=0.73 после mom7+mom30
+- Hypothesis: overnight order-flow imbalance predicts the next-day return
+- Prediction: |t| >= 2 after mom7/mom30 controls on 500 obs
+- COD (cause of death): stage 1, momentum_control — t=0.73 after mom7+mom30
 ```
 
-Результаты поиска фиксируются в новой пререгистрации: что искали, по
-каким тегам, что нашли («FOUND_NOTHING» или «DUPLICATE_OF_H-XXXX»).
-«Я помню, что не проверяли» — не основание.
+The search results are recorded in the new prereg: what was searched, by
+which tags, what was found ("FOUND_NOTHING" or "DUPLICATE_OF_H-XXXX").
+"I remember it was never tested" is not acceptable evidence.
 
-## Как читать resurrection conditions
+## How to read resurrection conditions
 
-Воскрешение — не «появился новый аргумент», а «изменились данные или
-условия, записанные в надгробии ДО этого момента». Практические
-правила:
+Resurrection is not "a new argument appeared" but "the data or
+conditions recorded in the tombstone BEFORE this point changed".
+Practical rules:
 
-- **Новый снимок данных ≠ новый аргумент.** Снимок легитимен, только
-  если tombstone прямо называет его класс в resurrection conditions
-  (например: «>= 180 дней funding-истории» или «полные глубины
-  стакана»). Тот же снимок с той же конструкцией = та же мёртвая
-  гипотеза.
-- **Новое условие исполнения** (издержки, горизонт) легитимно, только
-  если оно в списке resurrection conditions (как «maker-исполнение» в
-  H-0002). Иначе это result shopping — подгонка под желаемый исход.
-- **Изменённая конструкция = новая гипотеза.** Та же идея с другим
-  окном/порогом/нормализацией не «воскрешает» старую: это новый
-  `H-NNNN`, новая пререгистрация, пайплайн со стадии 1. Повторная
-  смерть по той же причине — ошибка процесса, а не гипотезы, и
-  фиксируется отдельно.
-- **INCONCLUSIVE-записи** — не могилы: гипотеза открыта, переоткрытие
-  на новом снимке допустимо по её собственному resurrection-условию
-  («набрать недостающие данные»).
+- **A new data snapshot ≠ a new argument.** A snapshot is legitimate
+  only if the tombstone explicitly names its class in the resurrection
+  conditions (e.g. ">= 180 days of funding history" or "full order-book
+  depths"). The same snapshot with the same construction = the same dead
+  hypothesis.
+- **A new execution condition** (costs, horizon) is legitimate only if
+  it is in the resurrection-conditions list (like "maker execution" in
+  H-0002). Otherwise it is result shopping — tuning toward the desired
+  outcome.
+- **A changed construction = a new hypothesis.** The same idea with a
+  different window/threshold/normalization does not "resurrect" the old
+  one: it is a new `H-NNNN`, a new prereg, the pipeline from stage 1.
+  Dying again for the same reason is a process error, not a hypothesis
+  error, and is recorded separately.
+- **INCONCLUSIVE entries are not graves:** the hypothesis is open;
+  reopening on a new snapshot is allowed per its own resurrection
+  condition ("collect the missing data").
 
-## Как добавить своё надгробие (append-only)
+## How to add your own tombstone (append-only)
 
-1. Напишите `hypotheses/graveyard/H-NNNN.md` по структуре выше.
-   `NNNN` — следующий свободный номер.
-2. Добавьте строку в `hypotheses/INDEX.csv` (формат — выше).
-3. Никогда не редактируйте и не удаляйте существующие надгробия —
-   кладбище append-only. Ошибка в записи лечится новой записью со
-   ссылкой на старую, а не правкой старой.
+1. Write `hypotheses/graveyard/H-NNNN.md` following the structure above.
+   `NNNN` is the next free number.
+2. Add a row to `hypotheses/INDEX.csv` (the format is above).
+3. Never edit or delete existing tombstones — the graveyard is
+   append-only. An error in an entry is fixed by a new entry referencing
+   the old one, not by editing the old one.
 
-Добавление записи (фактический прогон на демо-раскладке):
+Adding an entry (an actual run on the demo layout):
 
 ```bash
 cat > hypotheses/graveyard/H-0004.md <<'EOF'
 # H-0004 — KILLED (ARTIFACT)
-- Гипотеза: volume-spike reversal на 5m-барах
-- Prediction: mean event-day return в топ-5% объёма < 0 при p < 0.05
-- COD: stage 1, placebo_placebo — p=0.61, случайные дни дают то же
-- Вердикт: KILLED, 2026-04-05, снимок 2026-03-15, seed 7
-- Resurrection conditions: новый снимок с tick-точными объёмами
-  (текущий snapshot агрегирует двойной печатью)
-- Не пробовать снова: тот же event-сет на агрегированных объёмах
+- Hypothesis: volume-spike reversal on 5m bars
+- Prediction: mean event-day return in the top-5% volume bucket < 0 at p < 0.05
+- COD: stage 1, placebo_placebo — p=0.61, random days give the same
+- Verdict: KILLED, 2026-04-05, snapshot 2026-03-15, seed 7
+- Resurrection conditions: a new snapshot with tick-accurate volumes
+  (the current snapshot aggregates with double counting)
+- Do not try again: the same event set on aggregated volumes
 EOF
 printf '%s\n' \
   'H-0004,volume-spike-reversal,microstructure|volume|events,2026-03-25,2026-03-15,KILLED,2026-04-05,graveyard/H-0004.md' \
   >> hypotheses/INDEX.csv
 ```
 
-Сверка реестра с каталогом кладбища (CI-проверка из методологии:
-у каждой записи с tombstone есть строка реестра, и наоборот):
+Reconciling the registry with the graveyard directory (a CI check from
+the methodology: every entry with a tombstone has a registry row, and
+vice versa):
 
 ```python
 import csv
@@ -196,31 +203,31 @@ print("tombstone missing from index:", sorted(buried - listed) or "none")
 assert listed == buried
 ```
 
-Фактический вывод после добавления H-0004:
+Example output after adding H-0004:
 
 ```text
 in index but no tombstone: none
 tombstone missing from index: none
 ```
 
-В CI это транслируется в отдельный шаг (вместе с lint пререгистраций);
-ночная задача может пересчитывать `SURVIVED`-гипотезы на новом снимке —
-проверка, что выжившие не умерли на свежих данных.
+In CI this becomes a separate step (together with prereg lint); a
+nightly job can re-run `SURVIVED` hypotheses on a new snapshot — a check
+that the survivors have not died on fresh data.
 
-## Чек-лист
+## Checklist
 
-- [ ] Graveyard check перед каждой новой гипотезой: теги → COD →
-      сверка prediction + kill-критерия; результаты — в prereg.
-- [ ] Tombstone содержит все обязательные поля, включая COD из
-      таксономии пайплайна и resurrection conditions.
-- [ ] Строка добавлена в `INDEX.csv`, реестр совпадает с каталогом.
-- [ ] Существующие надгробия не редактировались (append-only).
-- [ ] Незакрытых гипотез нет дольше лимита открытых дней — вердикт
-      обязателен для каждой `H-NNNN`, включая свои неудобные.
+- [ ] Graveyard check before every new hypothesis: tags → COD → compare
+      prediction + kill criterion; the results go into the prereg.
+- [ ] The tombstone contains all required fields, including the COD from
+      the pipeline taxonomy and the resurrection conditions.
+- [ ] A row added to `INDEX.csv`; the registry matches the directory.
+- [ ] Existing tombstones were not edited (append-only).
+- [ ] No hypothesis stays open past the open-days limit — a verdict is
+      mandatory for every `H-NNNN`, including your own inconvenient ones.
 
-## Что дальше
+## What next
 
-- Как получить вердикт для tombstone — how-to 02
+- How to get a verdict for the tombstone — how-to 02
   (`docs/how-to/02-interpret-verdicts.md`).
-- Как оформить prereg с результатами graveyard check — how-to 01
+- How to write a prereg with the graveyard-check results — how-to 01
   (`docs/how-to/01-preregister.md`).

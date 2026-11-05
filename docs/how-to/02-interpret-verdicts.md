@@ -1,154 +1,154 @@
-# How-to 02. Чтение вердиктов пайплайна
+# How-to 02. Reading pipeline verdicts
 
-> **Estimated time:** 15 минут (примеры суммарно считаются ~5 секунд)
+> **Estimated time:** 15 minutes (the examples take ~5 seconds in total)
 >
-> **You will need:** репозиторий atropos с настроенным окружением
-> (`uv sync`), Python 3.11+; pandas/numpy идут зависимостями. Данные
-> своих гипотез подставляете свои — здесь примеры синтетические.
+> **You will need:** the atropos repository with a set-up environment
+> (`uv sync`), Python 3.11+; pandas/numpy come as dependencies. Bring
+> your own hypothesis data — the examples here are synthetic.
 
-## Зачем
+## Why
 
-`run_full_pipeline` прогоняет сигнал через до семи adversarial-стадий и
-возвращает ровно один вердикт. Этот how-to — переводчик: что означает
-каждый вердикт, какая стадия его вынесла, и что делать дальше.
-Самодостаточно: читать `FRAMEWORK.md` не нужно. Ниже — и словарь
-второй цепочки убийств, ML (`run_ml_kill_protocol`: три вердикта,
-четыре гейта), и unified-матрица, когда прогоняются обе.
+`run_full_pipeline` runs a signal through up to seven adversarial stages
+and returns exactly one verdict. This how-to is the decoder: what each
+verdict means, which stage issued it, and what to do next.
+Self-contained: no need to read `FRAMEWORK.md`. Below you also get the
+vocabulary of the second kill chain, ML (`run_ml_kill_protocol`: three
+verdicts, four gates), and the unified matrix for when both run.
 
-Импорт (пакет `atropos` не реэкспортирует функции наверх — используйте
-путь модуля):
+Import (the `atropos` package does not re-export functions at the top
+level — use the module path):
 
 ```python
 from atropos.ensemble_pipeline import run_full_pipeline
 ```
 
-Вход: `data` — словарь с `returns` (forward-доходности) и `signal`
-(тот же индекс); опционально `features` (DataFrame известных
-контролей), `mom7`/`mom30`, `hypothesis` (строка-описание). Для
-cross-sectional режима: `panel_signal`/`panel_returns` (DataFrame:
-строки — даты, столбцы — активы). Второй аргумент — `hypothesis_config`
-(overrides поверх `DEFAULT_CONFIG`).
+Input: `data` — a dict with `returns` (forward returns) and `signal`
+(same index); optional `features` (a DataFrame of known controls),
+`mom7`/`mom30`, `hypothesis` (a description string). For the
+cross-sectional mode: `panel_signal`/`panel_returns` (a DataFrame: rows
+are dates, columns are assets). The second argument is
+`hypothesis_config` (overrides on top of `DEFAULT_CONFIG`).
 
-Выход — словарь с ключами:
+The output is a dict with keys:
 
-| Ключ | Содержимое |
-|------|-----------|
-| `overall_verdict` | один из 9 вердиктов (таблица ниже) |
-| `killed_by_stage` | номер стадии-убийцы или `None` |
-| `kill_reason` | причина одной строкой (или `None`) |
-| `stages` | список из 7 словарей `{stage, name, status, summary, results}` |
-| `config` | JSON-совместимая копия фактического конфига |
-| `n_obs`, `date_range`, `hypothesis`, `runtime_seconds` | контекст прогона |
+| Key | Contents |
+|-----|----------|
+| `overall_verdict` | one of the 9 verdicts (table below) |
+| `killed_by_stage` | the killing stage number, or `None` |
+| `kill_reason` | the reason in one line (or `None`) |
+| `stages` | a list of 7 dicts `{stage, name, status, summary, results}` |
+| `config` | a JSON-compatible copy of the actual config |
+| `n_obs`, `date_range`, `hypothesis`, `runtime_seconds` | run context |
 
-## 9 вердиктов
+## The 9 verdicts
 
-| Вердикт | Кто выносит | Что значит | Что делать дальше |
-|---------|-------------|------------|-------------------|
-| `SURVIVES` | все стадии PASS | «пока не убито» — **не подтверждение**, а отсутствие убийства | записать tombstone SURVIVED; использовать как обоснование; мониторить на новых снимках |
-| `SURVIVES_WITH_WARNINGS` | все стадии PASS, есть WARN | выжила с оговорками (неопределившиеся контролы, turnover, deflated Sharpe) | выписать WARN-и в tombstone; решить, совместимы ли оговорки с решением |
-| `REPACKAGING` | стадия 1 (momentum/known-features) или 2 | сигнал добавляет ничего сверх известного момента/фич — переупаковка | не пересматривать без новой механики; новая конструкция = новая гипотеза |
-| `ARTIFACT` | стадия 1 (остальные контроли) | эффект = артефакт выравнивания / плацебо / концентрации по подпериодам / календаря | проверить механику данных; воскресление — только по условиям tombstone |
-| `DEAD` | стадия 3 | правило нетрейдится или катастрофа батареи робастности (7 тестов) | правило нереализуемо в текущем виде; другое правило = новая гипотеза |
-| `NO_OOS_EDGE` | стадия 4 или 6 | нет out-of-sample эджа (walk-forward / purged CV) | не возвращаться на тех же данных; новый снимок — по условиям tombstone |
-| `COST_DEATH` | стадия 5 | gross-конверт проходит, а net-of-cost Sharpe нет: эдж съеден издержками | пересматривать только экономику исполнения (maker-режим, реже ребаланс); условия — в tombstone |
-| `RISK` | стадия 5 | breach риск-конверта: mDD-хвост ИЛИ gross Sharpe-пол | несовместимо с риск-мандатом; другой скейлинг/мандат = новая гипотеза |
-| `CS_NO_EDGE` | стадия 7 | cross-sectional тесты провалены (IC / net spread / монотонность квантилей) | для панельных семейств: семейство закрыто в этой формулировке |
+| Verdict | Issued by | What it means | What to do next |
+|---------|-----------|---------------|-----------------|
+| `SURVIVES` | all stages PASS | "not killed yet" — **not confirmation**, but the absence of a kill | record a SURVIVED tombstone; use it as justification; monitor on new snapshots |
+| `SURVIVES_WITH_WARNINGS` | all stages PASS, WARNs present | survived with caveats (undecided controls, turnover, deflated Sharpe) | write the WARNs into the tombstone; decide whether the caveats are compatible with the decision |
+| `REPACKAGING` | stage 1 (momentum/known-features) or 2 | the signal adds nothing beyond known momentum/features — repackaging | do not revisit without a new mechanism; a new construction = a new hypothesis |
+| `ARTIFACT` | stage 1 (the other controls) | the effect is an artifact of alignment / placebo / sub-period concentration / calendar | check the data mechanics; resurrection only via the tombstone conditions |
+| `DEAD` | stage 3 | the rule is untradeable or a catastrophic robustness-battery failure (7 tests) | the rule is unimplementable as-is; a different rule = a new hypothesis |
+| `NO_OOS_EDGE` | stage 4 or 6 | no out-of-sample edge (walk-forward / purged CV) | do not return on the same data; a new snapshot only per the tombstone conditions |
+| `COST_DEATH` | stage 5 | the gross envelope passes but net-of-cost Sharpe does not: costs ate the edge | revisit only the execution economics (maker mode, less frequent rebalancing); conditions in the tombstone |
+| `RISK` | stage 5 | a risk-envelope breach: the mDD tail OR the gross Sharpe floor | incompatible with the risk mandate; different sizing/mandate = a new hypothesis |
+| `CS_NO_EDGE` | stage 7 | cross-sectional tests failed (IC / net spread / quantile monotonicity) | for panel families: the family is closed in this formulation |
 
-## Статусы стадий
+## Stage statuses
 
-| Статус | Значение |
-|--------|----------|
-| `PASS` | стадия пройдена |
-| `WARN` | пройдена с оговоркой: какие-то проверки внутри стадии не определились или на грани (см. `summary`) |
-| `FAIL` | гипотеза убита на этой стадии; все следующие стадии — `SKIPPED` |
-| `SKIPPED` | стадия не запускалась: убита раньше, ИЛИ опциональная стадия без данных для неё (стадия 7 без панели; стадии 1–6 в panel-only режиме) |
+| Status | Meaning |
+|--------|---------|
+| `PASS` | the stage passed |
+| `WARN` | passed with a caveat: some checks inside the stage came back undecided or borderline (see `summary`) |
+| `FAIL` | the hypothesis was killed at this stage; all following stages are `SKIPPED` |
+| `SKIPPED` | the stage did not run: killed earlier, OR an optional stage without data for it (stage 7 without a panel; stages 1–6 in panel-only mode) |
 
-`INCONCLUSIVE` — **не** статус стадии: он живёт внутри результатов.
-Отдельные контроли стадии 1 и overall стадии 7 возвращают
-`INCONCLUSIVE`, когда проверка невычислима (например, сигнал в точности
-коллинеарен контролю — «collinear with controls»). Наверх это
-транслируется как WARN стадии, не как kill: «не смогли проверить» ≠
-«убито». Это и есть смысл INCONCLUSIVE во всём фреймворке — мало
-данных или невычислимость не убивают гипотезу.
+`INCONCLUSIVE` is **not** a stage status: it lives inside the results.
+Individual stage-1 controls and the stage-7 overall return
+`INCONCLUSIVE` when a check is not computable (e.g. the signal is
+exactly collinear with a control — "collinear with controls"). Upstairs
+this surfaces as a stage WARN, not a kill: "could not check" ≠ "killed".
+That is the meaning of INCONCLUSIVE across the whole framework — too
+little data or non-computability does not kill a hypothesis.
 
-Семь стадий по порядку: 1 `null_control_suite` (6 null-контролей),
+The seven stages in order: 1 `null_control_suite` (6 null controls),
 2 `incremental_regression` (specification curve), 3
-`robustness_battery` (7 тестов), 4 `walkforward_framework`,
-5 `monte_carlo` (конверт Sharpe/mDD net-of-cost), 6
+`robustness_battery` (7 tests), 4 `walkforward_framework`,
+5 `monte_carlo` (the net-of-cost Sharpe/mDD envelope), 6
 `predictive_model_eval` (purged CV, deflated Sharpe), 7
-`cross_sectional` (опциональная, при наличии панели).
+`cross_sectional` (optional, when a panel is present).
 
-## ML-цепочка (run_ml_kill_protocol)
+## The ML chain (run_ml_kill_protocol)
 
-У фреймворка вторая цепочка убийств — walk-forward ML-движок поверх
-признакового датасета (`features` → бинарный `target`), а не
-`signal` → исход. У неё собственный словарь вердиктов: три, а не
-девять. Как собрать датасет и прогнать — how-to 05
-(`docs/how-to/05-run-ml-kill-protocol.md`); здесь — переводчик.
+The framework has a second kill chain — a walk-forward ML engine over a
+feature dataset (`features` → binary `target`), not `signal` → outcome.
+It has its own verdict vocabulary: three, not nine. How to assemble the
+dataset and run it — how-to 05
+(`docs/how-to/05-run-ml-kill-protocol.md`); this section is the decoder.
 
 ```python
 from atropos.ml_training import run_ml_kill_protocol
 ```
 
-| Вердикт | Кто выносит | Что значит | Что делать дальше |
-|---------|-------------|------------|-------------------|
-| `SURVIVES` | каждая запрошенная модель прошла все включённые гейты при `n_events >= n_min_events` | «пока не убито» — не подтверждение, а отсутствие убийства | записать tombstone SURVIVED с числами (EV, DSR, rho, n_events); мониторить на новых снимках |
-| `DEAD(<gate>)` | первый сработавший гейт первой невыжившей модели | эдж не пережил этот гейт; имя в скобках — причина | читать `reason` записи гейта в `kills` / `models[name]["kills"]`; resurrection-условия — в tombstone |
-| `UNDERPOWERED` | у модели `n_events < n_min_events` (дефолт 500 declustered-событий) | **undecided, not a kill**: выборка не запитывает ни одно гейт-решение, флаги гейтов — информационные | добрать данных и перегнать; в unified-матрице это INCONCLUSIVE, не смерть |
+| Verdict | Issued by | What it means | What to do next |
+|---------|-----------|---------------|-----------------|
+| `SURVIVES` | every requested model passed all enabled gates at `n_events >= n_min_events` | "not killed yet" — not confirmation, but the absence of a kill | record a SURVIVED tombstone with the numbers (EV, DSR, rho, n_events); monitor on new snapshots |
+| `DEAD(<gate>)` | the first triggered gate of the first model that did not survive | the edge did not survive this gate; the name in brackets is the cause | read the `reason` of the gate entry in `kills` / `models[name]["kills"]`; resurrection conditions in the tombstone |
+| `UNDERPOWERED` | the model has `n_events < n_min_events` (default 500 declustered events) | **undecided, not a kill**: the sample cannot power any gate decision, gate flags are informational | add data and re-run; in the unified matrix this is INCONCLUSIVE, not death |
 
-Четыре гейта и их пороги (`checks.*` в конфиге):
+The four gates and their thresholds (`checks.*` in the config):
 
-| Гейт | Что ловит | Дефолтный порог |
-|------|-----------|-----------------|
-| `incremental` | переупаковку линейной части: paired-bootstrap t разницы EV взятых сделок модели и логит-батареи (фичи + ваши `battery_controls`) | `incremental_t` = 2.0 |
-| `cost_line` | книгу, не окупающую издержки: merged-OOS EV взятых сделок ниже плиты | `profit_bar` = 0.0040 (40bp) |
-| `importance_stability` | «сигнал из шума»: per-fold permutation-ранжировки признаков не воспроизводятся | `importance_rho_min` = 0.5 |
-| `deflated_sharpe` | множественное тестирование: deflated Sharpe дневного EV-потока | `dsr_min` = 0.95 |
+| Gate | What it catches | Default threshold |
+|------|-----------------|-------------------|
+| `incremental` | repackaging of the linear part: the paired-bootstrap t of the EV difference between the model's taken trades and the logit battery (features + your `battery_controls`) | `incremental_t` = 2.0 |
+| `cost_line` | a book that fails to pay its costs: merged-OOS EV of taken trades below the bar | `profit_bar` = 0.0040 (40bp) |
+| `importance_stability` | "signal out of noise": per-fold permutation rankings of the features do not reproduce | `importance_rho_min` = 0.5 |
+| `deflated_sharpe` | multiple testing: the deflated Sharpe of the daily EV stream | `dsr_min` = 0.95 |
 
-Каждая запись гейта — `{check, enabled, triggered, inconclusive,
-reason}`. Семантика INCONCLUSIVE та же, что во всём фреймворке:
-«не смогли проверить» ≠ «убито» (типовой случай — incremental без
-`battery_controls`). Осторожно: SURVIVES при невычислимом
-incremental означает, что инкрементальный эдж не доказан, а не
-пройден. Вердикт `DEAD(<gate>)` называет первый сработавший гейт по
-порядку `incremental` → `cost_line` → `importance_stability` →
-`deflated_sharpe`, а не «самую громкую» причину.
+Each gate entry is `{check, enabled, triggered, inconclusive,
+reason}`. The INCONCLUSIVE semantics are the same as across the whole
+framework: "could not check" ≠ "killed" (the typical case is incremental
+without `battery_controls`). Careful: SURVIVES with a non-computable
+incremental means the incremental edge is undemonstrated, not passed.
+The `DEAD(<gate>)` verdict names the first triggered gate in the order
+`incremental` → `cost_line` → `importance_stability` →
+`deflated_sharpe`, not the "loudest" cause.
 
-## Обе цепочки (run_full_kill_chain)
+## Both chains (run_full_kill_chain)
 
-Rule-конвейер и ML-движок можно прогнать одной обёрткой
-(`rule_data` + опциональный `ml_dataset`); это тонкий агрегатор без
-своих гейтов: `unified` — чистая функция двух вердиктов, и kill
-любой цепочки решает всё. «Жива» = `SURVIVES` /
-`SURVIVES_WITH_WARNINGS`; `[...]` — `unified["source"]`.
+The rule pipeline and the ML engine can be run through one wrapper
+(`rule_data` + optional `ml_dataset`); it is a thin aggregator with no
+gates of its own: `unified` is a pure function of the two verdicts, and
+a kill by either chain decides everything. "Alive" = `SURVIVES` /
+`SURVIVES_WITH_WARNINGS`; `[...]` is `unified["source"]`.
 
 ```python
 from atropos.kill_chain import run_full_kill_chain
 ```
 
-| rule-вердикт | ml-вердикт | unified |
+| Rule verdict | ML verdict | unified |
 |--------------|------------|---------|
-| жива | (не запускалась) | `SURVIVES` |
-| kill | (не запускалась) | `KILLED` [rule] |
-| жива | `SURVIVES` | `SURVIVES` |
-| жива | `DEAD(...)` | `KILLED` [ml] |
-| жива | `UNDERPOWERED` | `INCONCLUSIVE` [ml] |
+| alive | (not run) | `SURVIVES` |
+| kill | (not run) | `KILLED` [rule] |
+| alive | `SURVIVES` | `SURVIVES` |
+| alive | `DEAD(...)` | `KILLED` [ml] |
+| alive | `UNDERPOWERED` | `INCONCLUSIVE` [ml] |
 | kill | `SURVIVES` | `KILLED` [rule] |
 | kill | `DEAD(...)` | `KILLED` [rule+ml] |
 | kill | `UNDERPOWERED` | `KILLED` [rule] |
 
-ML `UNDERPOWERED` транслируется в INCONCLUSIVE — undecided is not
-death: новый снимок с большей мощностью может решить гипотезу. Как
-собрать оба датасета и что делать с каждым исходом — how-to 05;
-справочник: `docs/api/atropos/kill_chain.html`.
+ML `UNDERPOWERED` maps to INCONCLUSIVE — undecided is not death: a new
+snapshot with more power may decide the hypothesis. How to assemble both
+datasets and what to do with each outcome — how-to 05; reference:
+`docs/api/atropos/kill_chain.html`.
 
-## Разобранные примеры (все прогоны фактические)
+## Worked examples (all runs are real)
 
-### Пример 1: настоящий эдж → SURVIVES
+### Example 1: a real edge → SURVIVES
 
-Синтетический мир: скрытый AR(0.5)-драйвер предсказывает forward-return,
-сигнал = драйвер + 30% «кровотечения» момента, момент — конфаундер в
-доходности. Так выглядит честно посаженный эдж.
+A synthetic world: a hidden AR(0.5) driver predicts the forward return;
+the signal = driver + 30% momentum "bleed"; momentum is a confounder in
+the returns. This is what an honestly planted edge looks like.
 
 ```python
 import numpy as np
@@ -186,7 +186,7 @@ for st in res["stages"]:
     print(f"  {st['stage']} {st['name']:<24} {st['status']:<7} {st['summary'][:95]}")
 ```
 
-Фактический вывод:
+Example output:
 
 ```text
 verdict      : SURVIVES
@@ -200,14 +200,14 @@ killed_by    : None
   7 cross_sectional          SKIPPED not run: optional stage (no panel data)
 ```
 
-Как читать: все серии-стадии PASS, панельных данных нет — стадия 7
-SKIPPED как опциональная (`killed_by_stage=None`, поэтому summary у
-SKIPPED именно «optional stage», а не «killed earlier»). SURVIVES здесь
-означает «пока не убито», не «доказано»: слабое эдж-качество в ваших
-реальных данных будет выглядеть гораздо скромнее этих синтетических
-чисел, и это нормально.
+How to read: every serial stage is PASS and there is no panel data —
+stage 7 is SKIPPED as optional (`killed_by_stage=None`, which is why the
+SKIPPED summary says "optional stage", not "killed earlier"). SURVIVES
+here means "not killed yet", not "proven": weak edge quality on your
+real data will look far more modest than these synthetic numbers, and
+that is normal.
 
-### Пример 2: чистый шум → убита на стадии 1
+### Example 2: pure noise → killed at stage 1
 
 ```python
 import numpy as np
@@ -233,7 +233,7 @@ for name, ctl in s1["results"].items():
     print(f"  {name:<24} {ctl['verdict']:<13} p={ctl['p_value']:.4f}")
 ```
 
-Фактический вывод:
+Example output:
 
 ```text
 verdict      : REPACKAGING
@@ -248,35 +248,39 @@ kill_reason  : the new signal adds nothing beyond known momentum / known feature
   calendar_control         FAIL          p=0.5000
 ```
 
-Как читать: шум не проходит ни один контроль (p-values ~0.5 — ровно
-то, что должно быть под нулём). Вердикт стадии 1 уточняется: если среди
-провалившихся есть `momentum_control` или `known_features_control`,
-итог — `REPACKAGING`, иначе `ARTIFACT`. Шум проваливает и их тоже
-(инкрементального t после контролов у него нет), поэтому REPACKAGING.
-Стадии 2–7 — SKIPPED («not run: candidate killed earlier»): пайплайн
-убивает на первом FAIL и не тратит ресурс на труп.
+How to read: noise passes no control (p-values ~0.5 — exactly what
+should happen under the null). The stage-1 verdict is refined: if
+`momentum_control` or `known_features_control` is among the failures,
+the verdict is `REPACKAGING`, otherwise `ARTIFACT`. Noise fails those
+too (it has no incremental t after controls), hence REPACKAGING.
+Stages 2–7 are SKIPPED ("not run: candidate killed earlier"): the
+pipeline kills on the first FAIL and does not spend resources on a
+corpse.
 
-### Пример 3: COST_DEATH против RISK — матрица стадии 5
+### Example 3: COST_DEATH vs RISK — the stage-5 matrix
 
-Один и тот же настоящий эдж (пример 1), две разные экономики. Стадия 5
-считает bootstrap-конверт Sharpe и max-drawdown net-of-cost и
-разбирает причину breach по матрице:
+The same real edge (example 1), two different economies. Stage 5
+computes the bootstrap envelope of Sharpe and max drawdown net-of-cost
+and attributes the breach with a matrix:
 
-- **mDD-брешь** (хвост просадки хуже лимита) → всегда `RISK`;
-- **gross Sharpe-пол тоже пробит** (эджа нет даже до издержек) → `RISK`;
-- **только net Sharpe пробит при проходящем gross и целом хвосте mDD**
-  → `COST_DEATH` (в `results` стадии будет `cost_breach=True`).
+- **An mDD breach** (the drawdown tail is worse than the limit) → always
+  `RISK`;
+- **The gross Sharpe floor is also breached** (no edge even before
+  costs) → `RISK`;
+- **Only the net Sharpe is breached while the gross passes and the mDD
+  tail is intact** → `COST_DEATH` (`cost_breach=True` in the stage's
+  `results`).
 
-То есть mDD-брешь доминирует: COST_DEATH возможен только при целом
-хвосте просадок.
+That is, the mDD breach dominates: COST_DEATH is possible only with an
+intact drawdown tail.
 
 ```python
 from atropos.ensemble_pipeline import run_full_pipeline
 
-# ... make_planted_edge как в примере 1 ...
+# ... make_planted_edge as in example 1 ...
 edge = make_planted_edge()
 
-# (a) тот же эдж, но тонкие доходности (~2bp/день) + запретительные 140bps
+# (a) the same edge but thin returns (~2bp/day) + prohibitive 140bps
 thin = dict(edge)
 thin["returns"] = edge["returns"] * 0.02
 res_cost = run_full_pipeline(thin, {"cost": {"cost_bps": 140.0}})
@@ -287,7 +291,7 @@ s5 = res_cost["stages"][4]
 print("  stage 5    :", s5["status"], "|", s5["summary"])
 print("  cost_breach:", s5["results"]["cost_breach"])
 
-# (b) полная амплитуда эджа, но строгий риск-мандат: хвост mDD не хуже -5%
+# (b) full edge amplitude but a strict risk mandate: mDD tail no worse than -5%
 res_risk = run_full_pipeline(edge, {"mc": {"worst_allowed_mdd_p5": -0.05}})
 print("RISK case")
 print("  verdict    :", res_risk["overall_verdict"],
@@ -297,7 +301,7 @@ print("  stage 5    :", s5["status"], "|", s5["summary"])
 print("  cost_breach:", s5["results"]["cost_breach"])
 ```
 
-Фактический вывод:
+Example output:
 
 ```text
 COST_DEATH case
@@ -311,43 +315,43 @@ RISK case
   cost_breach: False
 ```
 
-Как читать: в случае (a) gross-конверт проходит с огромным запасом
-(gross p5=3.85) — эдж настоящий, но 140bps one-way съедают его целиком
-(net p5=-0.52). Причина смертельна, но «экономическая»: `COST_DEATH`
-говорит «меняйте исполнение, а не сигнал». В случае (b) при дефолтных
-издержках хвост просадки (mDD p5=-15.7%) пробивает мандат -5% —
-`cost_breach=False`, вердикт `RISK`: даже бесплатный по издержкам эдж
-несовместим с этим риск-мандатом. Одинаковая стадия — противоположные
-рецепты: это и есть задача атрибуции причины внутри стадии 5.
+How to read: in case (a) the gross envelope passes with a huge margin
+(gross p5=3.85) — the edge is real, but 140bps one-way eat it entirely
+(net p5=-0.52). The cause is lethal but "economic": `COST_DEATH` says
+"fix the execution, not the signal". In case (b), at default costs, the
+drawdown tail (mDD p5=-15.7%) breaches the -5% mandate —
+`cost_breach=False`, verdict `RISK`: even a cost-free edge is
+incompatible with this risk mandate. Same stage, opposite prescriptions:
+that is the point of cause attribution inside stage 5.
 
-### Пример 4: REPACKAGING на стадии 1 vs стадия 2
+### Example 4: REPACKAGING at stage 1 vs stage 2
 
-Уточнение вердикта `REPACKAGING` (см. пример 2): он выносится и когда
-фактор-контроли стадии 1 провалены (`momentum_control` /
-`known_features_control`), и когда умирает specification curve стадии 2
-(«ни одна разумная спецификация не держит |t| >= 2» → переупаковка
-известной информации). Различить просто: `killed_by_stage` равен 1 или
-2; в `stages[0]["repackaging"]` лежит bool-флаг первого случая.
+Refining the `REPACKAGING` verdict (see example 2): it is issued both
+when the stage-1 factor controls fail (`momentum_control` /
+`known_features_control`) and when the stage-2 specification curve dies
+("no reasonable specification holds |t| >= 2" → repackaging of known
+information). Telling them apart is simple: `killed_by_stage` is 1 or 2;
+`stages[0]["repackaging"]` holds the bool flag for the first case.
 
-## Консервативная философия в одном абзаце
+## The conservative philosophy in one paragraph
 
-PASS стадии — не подтверждение гипотезы, а отсутствие убийства на этой
-стадии; `SURVIVES` = «пока не убито». INCONCLUSIVE («не смогли
-проверить»: коллинеарность, мало дат в панели, degenerate-вход) — не
-kill: недостающие данные не хоронят гипотезу, а оставляют её открытой
-до нового снимка. FPR-контроли калиброваны (~0.95 fail-rate под чистым
-шумом), стадии выстроены defense-in-depth от дешёвых убийств к
-дорогим. Первый FAIL решает всё — то, что идёт после него, SKIPPED и
-не создаёт видимость «почти прошло».
+A stage PASS is not confirmation of the hypothesis but the absence of a
+kill at that stage; `SURVIVES` = "not killed yet". INCONCLUSIVE ("could
+not check": collinearity, too few panel dates, degenerate input) is not
+a kill: missing data does not bury a hypothesis, it leaves it open until
+a new snapshot. The FPR controls are calibrated (~0.95 fail rate under
+pure noise), and the stages are ordered defense-in-depth from cheap
+kills to expensive ones. The first FAIL decides everything — everything
+after it is SKIPPED, so no "almost passed" illusion is created.
 
-## Что дальше
+## What next
 
-- Как получить ML-вердикт и прогнать обе цепочки разом — how-to 05
+- How to get an ML verdict and run both chains at once — how-to 05
   (`docs/how-to/05-run-ml-kill-protocol.md`).
-- Как оформить вердикт в tombstone — how-to 03
+- How to turn a verdict into a tombstone — how-to 03
   (`docs/how-to/03-read-graveyard.md`).
-- Как расширить null-контроли стадии 1 — how-to 04
+- How to extend the stage-1 null controls — how-to 04
   (`docs/how-to/04-add-null-control.md`).
-- Справочник: `docs/api/atropos/ensemble_pipeline.html`,
-  `DEFAULT_CONFIG` — там же; ML-движок —
+- Reference: `docs/api/atropos/ensemble_pipeline.html`,
+  `DEFAULT_CONFIG` — same place; the ML engine —
   `docs/api/atropos/ml_training.html`.

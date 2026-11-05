@@ -1,85 +1,89 @@
-# How-to 04. Добавление нового null-контроля в stage 1
+# How-to 04. Adding a new null control to stage 1
 
-> **Estimated time:** 45–60 минут (контроль + тесты + калибровка)
+> **Estimated time:** 45–60 minutes (the control + tests + calibration)
 >
-> **You will need:** репозиторий atropos с окружением (`uv sync`),
-> права на правку `atropos/**` (в отличие от how-to 01–03), чистые
-> `uv run ruff check .`, `uv run mypy` (strict) и `uv run pytest -q`.
-> Это контрибьюторский how-to: он меняет код библиотеки.
+> **You will need:** the atropos repository with an environment
+> (`uv sync`), write access to `atropos/**` (unlike how-tos 01–03),
+> clean `uv run ruff check .`, `uv run mypy` (strict), and
+> `uv run pytest -q`. This is a contributor how-to: it changes library
+> code.
 
-## Что такое null-контроль и какой у него контракт
+## What a null control is and what its contract is
 
-Stage 1 (`atropos.null_control_suite`) — шесть adversarial-контролей:
+Stage 1 (`atropos.null_control_suite`) is six adversarial controls:
 `shuffled_permutation`, `placebo_placebo`, `momentum_control`,
 `known_features_control`, `subperiod_stability`, `calendar_control`.
-Каждый возвращает словарь строго одного вида (схема, не код):
+Each returns a dict of exactly one shape (the schema, not code):
 
 ```text
 {
-    "stat": float,        # статистика контроля (t, корреляция, доля...)
-    "p_value": float,     # p-value этой статистики
+    "stat": float,        # the control's statistic (t, correlation, share...)
+    "p_value": float,     # the p-value of that statistic
     "verdict": "PASS" | "FAIL" | "INCONCLUSIVE",
-    # ...контроль-специфичные ключи (n, r2, HC0, ...)...
-    "reason": str,        # опционально: почему вычислить не удалось
+    # ...control-specific keys (n, r2, HC0, ...)...
+    "reason": str,        # optional: why it could not be computed
 }
 ```
 
-Семантика:
+Semantics:
 
-- **PASS** — гипотеза пережила этот контроль. Порог жёсткий:
-  `PASS` требует `p_value < 0.05` строго (`p_value == 0.05` — FAIL).
-- **FAIL** — контроль убил гипотезу.
-- **INCONCLUSIVE** — контроль **невычислим**, чаще всего design
-  rank-deficient (сигнал в точности коллинеарен контролю). Это не PASS
-  и не FAIL: pseudo-inverse сфабриковал бы правдоподобный t-stat ровно
-  в тех случаях, которые suite и должен ловить. Текущая конвенция
-  `reason` — `"collinear with controls"`.
+- **PASS** — the hypothesis survived this control. The threshold is
+  strict: `PASS` requires `p_value < 0.05` strictly
+  (`p_value == 0.05` is FAIL).
+- **FAIL** — the control killed the hypothesis.
+- **INCONCLUSIVE** — the control is **not computable**, most often a
+  rank-deficient design (the signal is exactly collinear with a
+  control). This is neither PASS nor FAIL: a pseudo-inverse would
+  fabricate a plausible t-stat exactly in the cases the suite exists to
+  catch. The current `reason` convention is `"collinear with controls"`.
 
-INCONCLUSIVE-семантика важна и для пустого выравнивания:
-`atropos._utils.align_inputs` при пустом результате dropna возвращает
-пустые массивы (не бросает исключение) — публичный контроль обязан
-перевести это в честный INCONCLUSIVE, а не упасть в глубине регрессии
-и не молча убить гипотезу на нуле наблюдений.
+The INCONCLUSIVE semantics also matter for an empty alignment:
+`atropos._utils.align_inputs` returns empty arrays when the dropna
+result is empty (it does not raise) — a public control must translate
+this into an honest INCONCLUSIVE, not crash deep inside the regression
+and not silently kill the hypothesis on zero observations.
 
-## Шаги добавления
+## The steps to add one
 
-1. **Контроль** — функция в `atropos/null_control_suite.py`, экспорт
-   через `__all__` (алфавитный порядок).
-2. **Регистрация в оркестраторе** — `atropos/ensemble_pipeline.py`,
-   функция `_stage_1_null_controls`: импорт, вызов в словарь
-   `results`, и три места, где зашита старая конфигурация:
-   - строка summary жёстко делит на 6:
-     `f"{len(results) - len(failed)}/6 controls passed"` — обновить
-     делитель (или вычислять из `len(results)`);
-   - `_KILL_REASONS[1]` перечисляет семейства контролей в прозе
-     («alignment / placebo / concentration / calendar») — дополнить;
-   - уточнение вердикта: если ваш контроль ловит переупаковку, его имя
-     надо добавить в кортеж `("momentum_control", "known_features_control")`
-     в `repackaging = ...` — иначе его FAIL даст `ARTIFACT`, а не
+1. **The control** — a function in `atropos/null_control_suite.py`,
+   exported via `__all__` (alphabetical order).
+2. **Registration in the orchestrator** — `atropos/ensemble_pipeline.py`,
+   the `_stage_1_null_controls` function: the import, the call into the
+   `results` dict, and three places where the old configuration is
+   hard-coded:
+   - the summary line hard-divides by 6:
+     `f"{len(results) - len(failed)}/6 controls passed"` — update the
+     divisor (or compute it from `len(results)`);
+   - `_KILL_REASONS[1]` lists the control families in prose
+     ("alignment / placebo / concentration / calendar") — extend it;
+   - verdict refinement: if your control catches repackaging, its name
+     must be added to the tuple
+     `("momentum_control", "known_features_control")` in
+     `repackaging = ...` — otherwise its FAIL yields `ARTIFACT`, not
      `REPACKAGING`.
-3. **Демо ассертит** — `run_all_examples()` в конце
-   `null_control_suite.py` это layer-0 тест: посаженный эдж печатает
-   PASS по всем контролям, а хвост демо это **ассертит**, плюс
-   trash-кейсы. Ваш контроль обязан участвовать в обоих блоках.
-4. **Юнит-тесты** — `tests/test_null_control_suite.py`: посаженный
-   случай → PASS; trash-случай → FAIL или INCONCLUSIVE; граничные
-   случаи (строгость порога, degenerate-вход).
-5. **Калибровочный тест (FPR под нулём)** —
+3. **The demo asserts** — `run_all_examples()` at the end of
+   `null_control_suite.py` is a layer-0 test: the planted edge prints
+   PASS on every control and the demo tail **asserts** it, plus trash
+   cases. Your control must participate in both blocks.
+4. **Unit tests** — `tests/test_null_control_suite.py`: the planted
+   case → PASS; a trash case → FAIL or INCONCLUSIVE; edge cases
+   (threshold strictness, degenerate input).
+5. **The calibration test (FPR under the null)** —
    `tests/test_calibration.py::test_null_controls_fail_fraction_under_pure_noise`:
-   под чистым шумом контроль должен FAIL примерно в 95% сидов (PASS
-   требует p < 0.05), окно ассерта `[0.85, 1.0]` на 150 сидах.
-   Добавьте свой контроль в цикл и в словарь `fails`. Если ваш PASS-гейт
-   устроен иначе (как у `subperiod_stability`, где гейт — знаковая
-   консистентность + cap концентрации), обосновайте своё окно в
-   докстринге теста и pinned измерением.
+   under pure noise the control must FAIL in roughly 95% of seeds (PASS
+   requires p < 0.05), with the assert window `[0.85, 1.0]` over 150
+   seeds. Add your control to the loop and to the `fails` dict. If your
+   PASS gate works differently (like `subperiod_stability`, whose gate
+   is sign consistency + a concentration cap), justify your own window
+   in the test docstring and with a pinned measurement.
 
-## Мини-пример: скелет контроля (прогнанный)
+## Mini example: a control skeleton (actually run)
 
-Контроль-пример `convexity_control`: убивает «эдж», который является
-артефактом выпуклости — регрессия `outcome ~ const + signal + signal²`,
-статистика — t линейного члена после квадратичного. Скелет показывает
-все обязательные элементы контракта: helpers из `_utils`,
-INCONCLUSIVE на degenerate-входе, строгий порог.
+The example control `convexity_control`: kills an "edge" that is an
+artifact of convexity — the regression `outcome ~ const + signal +
+signal²`, the statistic is the t of the linear term after the quadratic.
+The skeleton shows every required element of the contract: helpers from
+`_utils`, INCONCLUSIVE on a degenerate input, the strict threshold.
 
 ```python
 """Skeleton example control: does a linear edge survive its own square?
@@ -122,8 +126,8 @@ def convexity_control(outcome: Any, signal: Any) -> dict[str, Any]:
     return result
 ```
 
-Демо-блок к нему (посаженный эдж / trash / degenerate / калибровка) —
-фактический вывод прогона:
+Its demo block (planted edge / trash / degenerate / calibration) —
+example output of the run:
 
 ```text
 linear edge   : PASS stat=11.40
@@ -133,56 +137,59 @@ null FAIL fraction: 97/100 = 0.97
 skeleton demo OK
 ```
 
-Что здесь видно:
+What this shows:
 
-- линейный эдж проходит (t=11.40 после квадратичного члена);
-- чистая выпуклость умирает (линейный член не нужен: t=-1.26 → FAIL);
-- нулевая дисперсия сигнала → rank-deficient design → INCONCLUSIVE с
-  `reason`, а не сфабрикованный t;
-- под чистым шумом FAIL в 97/100 сидов — калибровка ~0.95 держится.
+- the linear edge passes (t=11.40 after the quadratic term);
+- pure convexity dies (the linear term is not needed: t=-1.26 → FAIL);
+- zero signal variance → a rank-deficient design → INCONCLUSIVE with a
+  `reason`, not a fabricated t;
+- under pure noise FAIL in 97/100 seeds — the ~0.95 calibration holds.
 
-## Мета-ловушки (проверяется CI)
+## Meta-traps (checked by CI)
 
-- **Никаких приватных копий хелперов.** Выравнивание и OLS — только из
-  `atropos._utils` (`align_inputs`, `ols_hc0`). Копия `_align` в
-  модуле — это дрейф поведения между копиями: первый же рефактор
-  выравнивания разъедет ваш контроль относительно остальных. Пустое
-  выравнивание (см. выше) переводится в INCONCLUSIVE.
-- **Демо ассертит, а не просто печатает.** `run_all_examples()` —
-  layer-0 верификация: регрессия роняет демо, а не печатает тихо
-  неверный вердикт. Ваш контроль добавляется и в печать, и в ассерты.
-- **Докстринг-контракт** (`tests/test_docstring_contract.py`): каждая
-  функция, экспортированная через `__all__`, обязана нести `>>>`
-  пример в докстринге; доктесты реально исполняются; `Raises:
-  ValueError` должен быть обеспечен реальным `raise`; `Args:` обязан
-  совпадать с `inspect.signature`.
-- **Имена**: однобуквенные идентификаторы запрещены везде, кроме `_` —
-  проверяется AST-тестом (`tests/test_conventions.py`), ruff это не
-  ловит.
-- **Стиль и типы**: `ruff` (78 колонок, pydocstyle, perflint, E741),
-  `mypy` strict — ноль предупреждений; тесты гипотезного кода не ходят
-  в сеть и не зависят от времени.
-- **Никаких lookahead-лагов**: лаги строятся через `shift` (NaN-голова
-  падает в выравнивании), никогда `np.roll` — он заворачивает хвост в
-  голову и протекает будущим в лаг.
+- **No private copies of helpers.** Alignment and OLS come only from
+  `atropos._utils` (`align_inputs`, `ols_hc0`). A `_align` copy in your
+  module is behavioral drift between copies: the first alignment
+  refactor will split your control from the rest. An empty alignment
+  (see above) is translated into INCONCLUSIVE.
+- **The demo asserts, it does not just print.** `run_all_examples()` is
+  layer-0 verification: a regression breaks the demo instead of quietly
+  printing a wrong verdict. Your control is added to both the prints and
+  the asserts.
+- **The docstring contract** (`tests/test_docstring_contract.py`): every
+  function exported via `__all__` must carry a `>>>` example in its
+  docstring; doctests are actually executed; `Raises: ValueError` must
+  be backed by a real `raise`; `Args:` must match `inspect.signature`.
+- **Names**: single-letter identifiers are banned everywhere except `_` —
+  enforced by the AST test (`tests/test_conventions.py`); ruff does not
+  catch this.
+- **Style and types**: `ruff` (78 columns, pydocstyle, perflint, E741),
+  `mypy` strict — zero warnings; tests of hypothesis code never touch
+  the network and never depend on wall-clock time.
+- **No lookahead lags**: lags are built with `shift` (the NaN head falls
+  out in alignment), never `np.roll` — it wraps the tail into the head
+  and leaks the future into the lag.
 
-## Чек-лист
+## Checklist
 
-- [ ] Контроль возвращает `{stat, p_value, verdict, ...}` с INCONCLUSIVE
-      на невычислимом входе и `reason="collinear with controls"`.
-- [ ] Порог жёсткий: PASS ⇔ `p_value < 0.05`.
-- [ ] Хелперы из `atropos._utils`, локальных копий нет.
-- [ ] Регистрация в `_stage_1_null_controls` + делитель summary +
-      текст `_KILL_REASONS[1]` + (если ловит repackaging) кортеж
-      уточнения вердикта.
-- [ ] Демо печатает и **ассертит** новый контроль, trash-кейс включён.
-- [ ] Юнит-тесты в `tests/test_null_control_suite.py`.
-- [ ] FPR-калибровка в `tests/test_calibration.py` под нулём ~0.95.
-- [ ] `uv run ruff check .`, `uv run mypy`, `uv run pytest -q` — чисто.
+- [ ] The control returns `{stat, p_value, verdict, ...}` with
+      INCONCLUSIVE on a non-computable input and
+      `reason="collinear with controls"`.
+- [ ] The threshold is strict: PASS ⇔ `p_value < 0.05`.
+- [ ] Helpers from `atropos._utils`; no local copies.
+- [ ] Registered in `_stage_1_null_controls` + the summary divisor + the
+      `_KILL_REASONS[1]` text + (if it catches repackaging) the
+      verdict-refinement tuple.
+- [ ] The demo prints and **asserts** the new control; a trash case is
+      included.
+- [ ] Unit tests in `tests/test_null_control_suite.py`.
+- [ ] FPR calibration in `tests/test_calibration.py`, ~0.95 under the
+      null.
+- [ ] `uv run ruff check .`, `uv run mypy`, `uv run pytest -q` — clean.
 
-## Что дальше
+## What next
 
-- Как вердикты стадии 1 читаются в отчёте пайплайна — how-to 02
+- How the stage-1 verdicts read in the pipeline report — how-to 02
   (`docs/how-to/02-interpret-verdicts.md`).
-- Справочник по существующим контролям:
+- Reference for the existing controls:
   `docs/api/atropos/null_control_suite.html`.

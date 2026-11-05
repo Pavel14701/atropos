@@ -1,45 +1,49 @@
-# contributor/ — контекст разработчика Atropos
+# contributor/ — Atropos developer context
 
-Здесь живёт dev-дисциплина проекта: конвенции кода, ворота качества
-(pytest / ruff / mypy) и правила работы агента в этом репозитории.
-Это НЕ инструкция по использованию фреймворка — см. ссылки внизу.
+This is where the project's dev discipline lives: code conventions, the
+quality gates (pytest / ruff / mypy), and the rules for agents working
+in this repository. This is NOT a guide to using the framework — see
+the links at the bottom.
 
-## Файлы
+## Files
 
-- `AGENTS.md` — универсальные инструкции агента: пайплайн гипотез,
-  6 законов + dev-дисциплина (uv, ruff, mypy, AST-тест конвенций).
-- `CLAUDE.md` — Claude-спецификация поверх `AGENTS.md`: привязка правил
-  к конкретным инструментам (Read/Write/Edit/Bash), надстройка, не замена.
+- `AGENTS.md` — universal agent instructions: the hypothesis pipeline,
+  the 6 laws, plus dev discipline (uv, ruff, mypy, the AST conventions
+  test).
+- `CLAUDE.md` — a Claude specification layered on `AGENTS.md`: binds the
+  rules to concrete tools (Read/Write/Edit/Bash); an add-on, not a
+  replacement.
 
-## Ворота качества (запускать из корня репозитория)
+## Quality gates (run from the repository root)
 
 ```bash
-uv run python -m pytest --tb=no        # тесты: rc=0 обязателен
-uv run python -m ruff check .          # линт: 78 колонок, докстринги, E741, PERF
-uv run python -m ruff format --check . # форматирование
-uv run python -m mypy                  # типы: strict, весь код и тесты
+uv run python -m pytest --tb=no        # tests: rc=0 is mandatory
+uv run python -m ruff check .          # lint: 78 columns, docstrings, E741, PERF
+uv run python -m ruff format --check . # formatting
+uv run python -m mypy                  # types: strict, all code and tests
 ```
 
-## Паттерн запуска: изоляция и без flakiness
+## Run pattern: isolation and no flakiness
 
-- Не комбинировать `-q` с pipe (`| head`, `| grep`): сводка pytest
-  глотается, и провал видно только по rc. Либо полный вывод, либо
-  явный capture кода возврата (`rc=$?`), на который и ориентируйтесь.
-- Тесты не ходят в сеть и не зависят от внешнего времени — только
-  зафиксированные снимки данных и seed.
+- Do not combine `-q` with a pipe (`| head`, `| grep`): the pytest
+  summary gets swallowed and a failure is only visible via the return
+  code. Either full output, or an explicit capture of the return code
+  (`rc=$?`) — and judge by that.
+- Tests never touch the network and never depend on wall-clock time —
+  only frozen data snapshots and seeds.
 
-## Почему запрещены однобуквенные идентификаторы
+## Why single-letter identifiers are banned
 
-Имя длиной 1 ничего не сообщает читателю; ruff ловит только `l/I/O`
-(E741), остальные однобуквенные имена банит AST-тест
-`tests/test_conventions.py` (сканирует `atropos/*.py` и `tests/*.py`).
-Единственное исключение — выброс `_`. У TypedDict-полей whitelist
-строго `{"n", "B"}` (исторический public API `bootstrap_ci`): любое
-другое однобуквенное поле (`q`) банируется как обычная переменная.
+A 1-character name tells the reader nothing; ruff only catches `l/I/O`
+(E741), the remaining single-letter names are banned by the AST test
+`tests/test_conventions.py` (it scans `atropos/*.py` and `tests/*.py`).
+The only exception is the `_` throwaway. TypedDict fields have a strict
+whitelist of `{"n", "B"}` (the historical public API of `bootstrap_ci`):
+any other single-letter field (`q`) is banned like an ordinary variable.
 
-## Куда дальше
+## Where to go next
 
-- Использование фреймворка с ИИ-агентом → `atropos/agent/`
-  (pip-пакет) или команда `atropos agent-context`.
-- Методология → `FRAMEWORK.md`, разворачивание → `METHODOLOGY.md`.
-- Шаблоны (prereg, post-mortem, брифинг агента) → `TEMPLATES.md`.
+- Using the framework with an AI agent → `atropos/agent/`
+  (a pip package) or the `atropos agent-context` command.
+- Methodology → `FRAMEWORK.md`; deployment → `METHODOLOGY.md`.
+- Templates (prereg, post-mortem, agent briefing) → `TEMPLATES.md`.

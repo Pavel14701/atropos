@@ -1,57 +1,55 @@
-# How-to 05. ML-kill-протокол: walk-forward гейты над feature-датасетом
+# How-to 05. The ML kill protocol: walk-forward gates over a feature dataset
 
-> **Estimated time:** 30–40 минут (прогоны сниппетов суммарно ~2
-> минуты)
+> **Estimated time:** 30–40 minutes (the snippet runs take ~2 minutes in
+> total)
 >
-> **You will need:** репозиторий atropos с настроенным окружением
-> (`uv sync`), Python 3.11+; scikit-learn идёт зависимостью проекта.
-> Данные своих гипотез подставляете свои — здесь синтетический
-> seeded-мир (воспроизводим байт-в-байт). Сниппеты выполняются
-> подряд в одной сессии: начиная с шага 4 они переиспользуют
-> переменные шага 3.
+> **You will need:** the atropos repository with a set-up environment
+> (`uv sync`), Python 3.11+; scikit-learn comes as a project dependency.
+> Bring your own hypothesis data — here it is a synthetic seeded world
+> (reproducible byte-for-byte). The snippets run in sequence in one
+> session: from step 4 on they reuse the variables of step 3.
 
-## Когда ML-цепочка, а не rule-based
+## When to use the ML chain, not rule-based
 
-Фреймворк убивает гипотезы двумя цепочками. Rule-based
-(`run_full_pipeline`, how-to 02) принимает готовое правило —
-`signal` → исход — и прогоняет его через семь adversarial-стадий.
-ML-цепочка (`run_ml_kill_protocol`) принимает признаковое
-пространство — `features` → бинарный `target` — и проверяет,
-порождает ли оно исполнимые сделки, которые переживают четыре гейта
-в expanding-block walk-forward CV (purge + embargo между train и
-test).
+The framework kills hypotheses with two chains. Rule-based
+(`run_full_pipeline`, how-to 02) takes a finished rule — `signal` →
+outcome — and runs it through seven adversarial stages. The ML chain
+(`run_ml_kill_protocol`) takes a feature space — `features` → a binary
+`target` — and checks whether it produces executable trades that survive
+four gates in expanding-block walk-forward CV (purge + embargo between
+train and test).
 
 | | rule-based (`run_full_pipeline`) | ML (`run_ml_kill_protocol`) |
 |---|---|---|
-| Вход | `signal` + `returns`: правило → исход | `features` (DataFrame) + `target` 0/1: признаки → классификатор |
-| Что заморожено в prereg | конструкция правила: пороги, окна, нормализация | сетка порогов вероятности, гейты и их пороги, экономика (`profit_bar`, издержки), модель и её параметры |
-| Кто решает | 7 стадий: null-контроли, specification curve, батарея робастности, walk-forward, MC-конверт, purged CV, cross-sectional | 4 гейта над out-of-sample книгой: `incremental`, `cost_line`, `importance_stability`, `deflated_sharpe` |
-| Типичный вопрос | «этот сигнал торгуется net-of-cost OOS?» | «в признаках есть сигнал сверх линейной батареи, и он выживает после всех гейтов?» |
-| Вердикты | 9: `SURVIVES` … `CS_NO_EDGE` | 3: `SURVIVES` / `DEAD(<gate>)` / `UNDERPOWERED` |
+| Input | `signal` + `returns`: a rule → an outcome | `features` (a DataFrame) + a 0/1 `target`: features → a classifier |
+| What is frozen in the prereg | the rule construction: thresholds, windows, normalization | the probability-threshold grid, the gates and their thresholds, the economics (`profit_bar`, costs), the model and its parameters |
+| Who decides | 7 stages: null controls, the specification curve, the robustness battery, walk-forward, the MC envelope, purged CV, cross-sectional | 4 gates over the out-of-sample book: `incremental`, `cost_line`, `importance_stability`, `deflated_sharpe` |
+| Typical question | "is this signal tradeable net-of-cost OOS?" | "is there signal in the features beyond the linear battery, and does it survive all the gates?" |
+| Verdicts | 9: `SURVIVES` … `CS_NO_EDGE` | 3: `SURVIVES` / `DEAD(<gate>)` / `UNDERPOWERED` |
 
-Практическое правило: гипотеза формулируется как конкретное правило
-входа/выхода — rule-based; эффект по построению нелинейный
-(взаимодействия признаков, режимы) или правило ещё не сформулировано,
-а есть только признаки — ML-цепочка. Не уверены — прогоните обе:
-`run_full_kill_chain` (раздел ниже) агрегирует оба вердикта, и
-убийство любой цепочки убивает гипотезу.
+Rule of thumb: if the hypothesis is stated as a concrete entry/exit rule
+— rule-based; if the effect is nonlinear by construction (feature
+interactions, regimes) or no rule is formulated yet and there are only
+features — the ML chain. Unsure — run both: `run_full_kill_chain`
+(section below) aggregates the two verdicts, and a kill by either chain
+kills the hypothesis.
 
-Самодостаточно: читать `FRAMEWORK.md` перед этим how-to не нужно.
+Self-contained: no need to read `FRAMEWORK.md` before this how-to.
 
-Импорт (пакет `atropos` не реэкспортирует функции наверх —
-используйте пути модулей):
+Import (the `atropos` package does not re-export functions at the top
+level — use module paths):
 
 ```python
 from atropos.ml_training import run_ml_kill_protocol
 ```
 
-## Шаг 1. Пререгистрация — та же дисциплина
+## Step 1. Preregistration — the same discipline
 
-ML-гипотеза регистрируется тем же `generate_prereg`, что и
-rule-based (полный разбор — how-to 01), до первого обращения к
-данным. Удобная опора: четыре гейта движка — это готовые
-kill-критерии, их достаточно переписать в prereg дословно, с
-дефолтными порогами из `DEFAULT_TRAINING_CONFIG`.
+An ML hypothesis is registered with the same `generate_prereg` as a
+rule-based one (full walkthrough — how-to 01), before the first data
+touch. A convenient anchor: the engine's four gates are ready-made kill
+criteria — just copy them into the prereg verbatim, with the default
+thresholds from `DEFAULT_TRAINING_CONFIG`.
 
 ```python
 from atropos.prereg_generator import generate_prereg, validate_prereg
@@ -96,7 +94,7 @@ doc = generate_prereg(params, date="2026-11-05")
 print("\n".join(doc.splitlines()[:4]))
 ```
 
-Фактический вывод:
+Example output:
 
 ```text
 []
@@ -106,17 +104,17 @@ print("\n".join(doc.splitlines()[:4]))
 - **Spec hash:** `b2c3d4e5`
 ```
 
-Заметьте: `N_required: 500` в power-расчёте — это тот же пол
-независимых событий, что `n_min_events: 500` движка; четыре
-kill-критерия зеркалят четыре гейта шага 5. Файл
-`PREREG_<name>_<date>.md` закоммитьте до выгрузки данных (шаг 4
-how-to 01).
+Note: `N_required: 500` in the power calc is the same floor of
+independent events as the engine's `n_min_events: 500`; the four kill
+criteria mirror the four gates of step 5. Commit the
+`PREREG_<name>_<date>.md` file before the data pull (step 4 of how-to
+01).
 
-## Шаг 2. Graveyard check
+## Step 2. The graveyard check
 
-Кладбище проверяется до выдвижения гипотезы (how-to 03). Если
-раскладки ещё нет — сгенерируйте скелет: команда создаёт только
-отсутствующие файлы и никогда не перезаписывает существующие.
+The graveyard is checked before the hypothesis is proposed (how-to 03).
+If there is no layout yet — generate the skeleton: the command creates
+only missing files and never overwrites existing ones.
 
 ```bash
 uv run atropos init
@@ -124,7 +122,7 @@ grep -i "quadrant\|classifier\|ensemble" hypotheses/INDEX.csv \
   || echo "no matches: graveyard check clean"
 ```
 
-Фактический вывод на пустой раскладке (Windows; на POSIX пути с `/`):
+Example output on an empty layout (Windows; POSIX paths use `/`):
 
 ```text
   created GRAVEYARD.md
@@ -134,32 +132,31 @@ init: workspace ready; files are never overwritten - edit them manually after in
 no matches: graveyard check clean
 ```
 
-Повторный `uv run atropos init` на той же раскладке печатает
-`skipped (exists)` для каждого из трёх файлов и ничего не меняет —
-команда идемпотентна (прогнано). Результат поиска («FOUND_NOTHING»)
-вписывается в prereg.
+A repeated `uv run atropos init` on the same layout prints
+`skipped (exists)` for each of the three files and changes nothing — the
+command is idempotent (ran). The search result ("FOUND_NOTHING") goes
+into the prereg.
 
-## Шаг 3. Собрать датасет: контракт + мини-синтетика
+## Step 3. Assemble the dataset: the contract + mini synthetics
 
-Датасет — четыре компонента, валидируемые до любого `fit` (ошибка
-`ValueError` называется по имени компонента):
+The dataset is four components, validated before any `fit` (the
+`ValueError` names the component):
 
-| Компонент | Контракт | Пример ошибки валидации |
+| Component | Contract | Example validation error |
 |---|---|---|
-| `features` | DataFrame float-колонок, хронологические строки; колонки из `battery_controls` исключаются из фич моделей и добавляются линейной батарее | `feature columns must be finite floats (no NaN/inf)` |
-| `target` | 1-D целые, ровно 0/1 — по строке на событие | `target must be binary 0/1, got [0, 2]` |
-| `exec_returns` | 1-D конечные float; издержки **вычтены вызывающим** (`exec = fwd - cost`; `cost_rt` в конфиге — справочная запись для вызывающего, движок сам ничего не вычитает) | `exec_returns must be 1-D finite floats` |
-| `times_us` | int64 микросекунды, монотонно неубывающие (ось walk-forward) | `times_us must be monotonically non-decreasing` |
-| `battery_controls` | имена колонок `features` | `battery_controls not found in features: ['mom30']` |
+| `features` | a DataFrame of float columns, rows in chronological order; columns listed in `battery_controls` are excluded from the models' features and fed to the linear battery | `feature columns must be finite floats (no NaN/inf)` |
+| `target` | 1-D integers, exactly 0/1 — one row per event | `target must be binary 0/1, got [0, 2]` |
+| `exec_returns` | 1-D finite floats; costs are **subtracted by the caller** (`exec = fwd - cost`; `cost_rt` in the config is a reference entry for the caller, the engine itself subtracts nothing) | `exec_returns must be 1-D finite floats` |
+| `times_us` | int64 microseconds, monotonically non-decreasing (the walk-forward axis) | `times_us must be monotonically non-decreasing` |
+| `battery_controls` | names of `features` columns | `battery_controls not found in features: ['mom30']` |
 
-Дубликаты штампов не ошибка: они схлопываются при подсчёте
-независимых событий — `decluster_count` считает кластеры с зазором
-не меньше часа, а не строки.
+Duplicate stamps are not an error: they collapse when counting
+independent events — `decluster_count` counts clusters with a gap of at
+least an hour, not rows.
 
-Мини-синтетика этого how-to: hourly µs-штампы, посаженная
-нелинейность — взаимодействие `tanh(f1*f2/2)`, невидимое для любых
-линейных моделей, — плюс мягкий линейный `f3` (его батарея видит)
-и шум.
+This how-to's mini synthetics: hourly µs stamps, a planted
+nonlinearity — the interaction `tanh(f1*f2/2)`, invisible to any linear
+model — plus a soft linear `f3` (the battery sees it) and noise.
 
 ```python
 import numpy as np
@@ -196,18 +193,18 @@ print(features.shape, round(float(target.mean()), 3),
       target.dtype, bool((np.diff(times_us) >= 0).all()))
 ```
 
-Фактический вывод:
+Example output:
 
 ```text
 (1500, 6) 0.264 int64 True
 ```
 
-Свои данные должны удовлетворять тому же контракту: каждый ряд —
-событие с известным exec-исходом; типичная ошибка — забыть вычесть
-издержки из `exec_returns` (движок увидит эдж, которого нет:
-гейты откалиброваны под уже-нетто доходности).
+Your own data must satisfy the same contract: every row is an event with
+a known exec outcome; the typical mistake is forgetting to subtract
+costs from `exec_returns` (the engine will see an edge that does not
+exist: the gates are calibrated for already-net returns).
 
-Валидация до fit — четыре типовые ошибки (прогон на мире выше):
+Validation before fit — four typical errors (run on the world above):
 
 ```python
 cases = {}
@@ -229,7 +226,7 @@ for label, (feats, tgt, ex, ts, bat) in cases.items():
         print(f"{label}: {err}")
 ```
 
-Фактический вывод:
+Example output:
 
 ```text
 NaN feature: feature columns must be finite floats (no NaN/inf)
@@ -238,7 +235,7 @@ non-monotone times: times_us must be monotonically non-decreasing
 missing control: battery_controls not found in features: ['mom30']
 ```
 
-## Шаг 4. Один прогон
+## Step 4. One run
 
 ```python
 report = run_ml_kill_protocol(
@@ -267,7 +264,7 @@ for fold in report["folds"]:
           f"purge+embargo dropped={fold['n_dropped_purge_embargo']}")
 ```
 
-Фактический вывод (~2 секунды):
+Example output (~2 seconds):
 
 ```text
 verdict     : UNDERPOWERED
@@ -285,16 +282,29 @@ DSR: 0.9999999825663033  rho: 0.7999999999999999
   fold 5: train=1226 test=251 purge+embargo dropped=23
 ```
 
-Как читать. Структура CV при `k_blocks=6`: пять тестовых блоков по
-250 строк; самый старый блок никогда не тестируется (ему не на чём
-учиться); перед каждым тест-блоком purge + embargo выкидывают по
-23 train-строки. Все четыре гейта пройдены — но независимых событий
-249 < 500: решать нечем, вердикт `UNDERPOWERED`. Это **не смерть и
-не выживание** (таблица в шаге 5): флаги гейтов при недоборе
-событий — информационные. Честный ответ — добрать данных и
-перегнать.
+How to read. The CV structure at `k_blocks=6`: five test blocks of 250
+rows each; the oldest block is never tested (it has nothing to train
+on); before each test block, purge + embargo drop 23 train rows. All
+four gates passed — but there are only 249 independent events < 500:
+nothing to decide with, verdict `UNDERPOWERED`. This is **neither death
+nor survival** (the table in step 5): at an event shortfall the gate
+flags are informational. The honest answer is to add data and re-run.
 
-### Добрать данных и перегнать
+With a multi-model run (`"models": [...]`) the `powered` flag speaks
+for the whole run: it requires EVERY registry model to clear the event
+floor, so one thin secondary (say, 21 events) flags the run as
+undecided even when the primary cleared it comfortably with 1169
+events. The demo output names the offending models explicitly;
+per-model `SURVIVES` verdicts stay per-model — never cherry-pick a
+survivor out of an undecided run.
+
+One reading note on `deflated_sharpe`: it is a CDF probability in
+[0, 1]. A value of exactly `1.0` is the saturation cap (z large enough
+that the normal CDF rounds to one — common for strong demo worlds),
+and tiny values like `1e-129` are honest CDF-tail underflow for a dead
+book, not numerical faults.
+
+### Add data and re-run
 
 ```python
 features, target, exec_returns, times_us = build_world(6000)
@@ -322,7 +332,7 @@ print("battery     :", report["battery"])
 print("dsr_detail  :", report["dsr_detail"])
 ```
 
-Фактический вывод (~6 секунд):
+Example output (~6 seconds):
 
 ```text
 verdict     : SURVIVES
@@ -335,49 +345,51 @@ battery     : {'available': True, 'ev': 0.007034659597109983, 'n_events': 191}
 dsr_detail  : {'n_days': 209, 'var_sr': 0.44557527574926054, 'sr': {'gbm': 1.9903409535233292, 'baseline': 0.8501631731846993, 'battery': 0.8188189422471551}}
 ```
 
-Как читать: 843 независимых взятых сделки — пол в 500 преодолён,
-гейт-решениям есть опереться. `incremental` — paired-bootstrap t
-разницы EV против батареи: 139.0 при пороге 2.0 (на синтетическом
-мире запас огромный, в реальных данных он будет на порядки скромнее
-— и это нормально). `deflated_sharpe` считается по дневному
-EV-потоку: 209 дней, скидка на множественное тестирование — через
-дисперсию SR всей семьи потоков прогона (`var_sr`, `dsr_detail`).
-Батарея и baseline в этом отчёте — логиты (фичи + контроли и фичи
-без контролов соответственно); их узкие книги (191/193 события) —
-норма: логит не умеет срезать высокоуверенную подкнигу.
+How to read: 843 independent taken trades — the 500 floor is cleared,
+the gate decisions have something to stand on. `incremental` is the
+paired-bootstrap t of the EV difference against the battery: 139.0
+against a threshold of 2.0 (on a synthetic world the margin is huge; on
+real data it will be orders of magnitude more modest — and that is
+normal). `deflated_sharpe` is computed on the daily EV stream: 209
+days, with the multiple-testing discount coming from the SR variance of
+the whole family of the run's streams (`var_sr`, `dsr_detail`). The
+battery and baseline in this report are logits (features + controls and
+features without controls, respectively); their narrow books (191/193
+events) are the norm: a logit cannot cut out a high-confidence
+sub-book.
 
-Отчёт несёт 18 ключей: вердикты (`verdict`, `kills`, `models`,
-`powered`, `n_min_events`), масштаб (`n_rows`, `n_events`, `folds`),
-линейные компараторы (`baseline`, `battery`, `incremental`,
-`ev_model`, `ev_baseline`, `ev_battery`), DSR-семья (`dsr_detail`,
-`deflated_sharpe`, `importance_stability`) и json-safe копия
-фактического конфига (`config`). Плоские ключи алиасят первичную
-модель (`config["model"]`); вердикты остальных моделей живут в
-`report["models"][name]` — движок никогда не выбирает между ними
-(см. раздел «Модели»).
+The report carries 18 keys: verdicts (`verdict`, `kills`, `models`,
+`powered`, `n_min_events`), scale (`n_rows`, `n_events`, `folds`),
+linear comparators (`baseline`, `battery`, `incremental`, `ev_model`,
+`ev_baseline`, `ev_battery`), the DSR family (`dsr_detail`,
+`deflated_sharpe`, `importance_stability`), and a json-safe copy of the
+actual config (`config`). The flat keys alias the primary model
+(`config["model"]`); the other models' verdicts live in
+`report["models"][name]` — the engine never chooses between them (see
+the "Models" section).
 
-## Шаг 5. Интерпретация
+## Step 5. Interpretation
 
-### Три вердикта
+### The three verdicts
 
-| Вердикт | Кто выносит | Что значит | Что делать |
+| Verdict | Issued by | What it means | What to do |
 |---|---|---|---|
-| `SURVIVES` | каждая запрошенная модель прошла все включённые гейты при `n_events >= n_min_events` | «пока не убито» — не подтверждение, а отсутствие убийства | tombstone SURVIVED с числами; мониторить на новых снимках |
-| `DEAD(<gate>)` | первый сработавший гейт первой невыжившей модели | эдж не пережил этот гейт; имя в скобках — причина | читать таблицу гейтов: смертельная причина или «экономическая»; resurrection-условия — в tombstone |
-| `UNDERPOWERED` | у модели `n_events < n_min_events` (дефолт 500) | **undecided, not a kill**: выборка не может запитать ни одно гейт-решение, флаги гейтов — информационные | добрать данных (шаг 4: 249 событий → перегон на 6000 строках → решаемый прогон); в unified-матрице это INCONCLUSIVE |
+| `SURVIVES` | every requested model passed all enabled gates at `n_events >= n_min_events` | "not killed yet" — not confirmation, but the absence of a kill | a SURVIVED tombstone with the numbers; monitor on new snapshots |
+| `DEAD(<gate>)` | the first triggered gate of the first non-surviving model | the edge did not survive this gate; the name in brackets is the cause | read the gate table: a lethal cause or an "economic" one; resurrection conditions in the tombstone |
+| `UNDERPOWERED` | the model has `n_events < n_min_events` (default 500) | **undecided, not a kill**: the sample cannot power any gate decision, gate flags are informational | add data (step 4: 249 events → a re-run on 6000 rows → a decidable run); in the unified matrix this is INCONCLUSIVE |
 
-### Четыре гейта
+### The four gates
 
-| Гейт | Что ловит | Конфигурация (`checks.*` и рядом) |
+| Gate | What it catches | Configuration (`checks.*` and nearby) |
 |---|---|---|
-| `incremental` | переупаковку линейной части: paired-bootstrap t разницы EV взятых сделок модели и логит-батареи (фичи + ваши `battery_controls`) не выше порога | `incremental: true`, порог `incremental_t` (2.0) |
-| `cost_line` | книгу, не окупающую издержки: merged-OOS EV взятых сделок ниже плиты | `cost_line: true`, `profit_bar` (0.0040 = 40bp) |
-| `importance_stability` | «сигнал из шума»: per-fold permutation-ранжировки признаков не воспроизводятся (медианная парная Spearman ниже плиты) | `importance_stability: true`, `importance_rho_min` (0.5) |
-| `deflated_sharpe` | множественное тестирование: deflated Sharpe (Bailey & Lopez de Prado 2014) дневного EV-потока ниже floor | `deflated_sharpe: true`, `dsr_min` (0.95), `n_trials_ds` (5) |
+| `incremental` | repackaging of the linear part: the paired-bootstrap t of the EV difference between the model's taken trades and the logit battery (features + your `battery_controls`) not above the threshold | `incremental: true`, threshold `incremental_t` (2.0) |
+| `cost_line` | a book that fails to pay its costs: merged-OOS EV of taken trades below the bar | `cost_line: true`, `profit_bar` (0.0040 = 40bp) |
+| `importance_stability` | "signal out of noise": per-fold permutation rankings of the features do not reproduce (the median pairwise Spearman below the bar) | `importance_stability: true`, `importance_rho_min` (0.5) |
+| `deflated_sharpe` | multiple testing: the deflated Sharpe (Bailey & Lopez de Prado 2014) of the daily EV stream below the floor | `deflated_sharpe: true`, `dsr_min` (0.95), `n_trials_ds` (5) |
 
-Каждая запись гейта — `{check, enabled, triggered, inconclusive,
-reason}`. `INCONCLUSIVE` — «не смогли проверить», не kill. Типовой
-случай: incremental без `battery_controls`.
+Each gate entry is `{check, enabled, triggered, inconclusive,
+reason}`. `INCONCLUSIVE` — "could not check", not a kill. The typical
+case: incremental without `battery_controls`.
 
 ```python
 no_battery = run_ml_kill_protocol(
@@ -391,20 +403,20 @@ print("verdict:", no_battery["verdict"], "| battery:", no_battery["battery"])
 print(no_battery["kills"][0])
 ```
 
-Фактический вывод:
+Example output:
 
 ```text
 verdict: SURVIVES | battery: {'available': False, 'ev': None, 'n_events': 0}
 {'check': 'incremental', 'enabled': True, 'triggered': False, 'inconclusive': True, 'reason': 'battery controls not supplied: incremental edge over a linear battery is not decidable in this run'}
 ```
 
-Как читать: формально `SURVIVES` — ни один гейт не сработал. Но
-incremental INCONCLUSIVE: инкрементальный эдж над линейной батареей
-в этом прогоне **не доказан**, а не пройден. Такой прогон не годится
-как обоснование гипотезы — подавите `battery_controls` осознанно или
-не подавляйте вовсе.
+How to read: formally `SURVIVES` — no gate triggered. But incremental is
+INCONCLUSIVE: the incremental edge over the linear battery is
+**undemonstrated** in this run, not passed. Such a run is unfit as
+justification for the hypothesis — drop `battery_controls` deliberately
+or do not drop them at all.
 
-### Шум обязан умереть: DEAD(<gate>)
+### Noise must die: DEAD(<gate>)
 
 ```python
 rng_noise = np.random.default_rng(7)
@@ -426,7 +438,7 @@ print("EV model (bp):", round(noise_report["ev_model"] * 1e4, 2),
       " n_events:", noise_report["n_events"])
 ```
 
-Фактический вывод:
+Example output:
 
 ```text
 verdict: DEAD(cost_line)
@@ -434,52 +446,52 @@ triggered: ['cost_line', 'importance_stability', 'deflated_sharpe']
 EV model (bp): -0.17  n_events: 2864
 ```
 
-Как читать: чистый шум под логитом торгует широкую книгу (2864
-события — мощность есть, подделка UNDERPOWERED исключена), EV
-−0.17bp не окупает плиту 40bp. Вердикт называет **первый сработавший
-гейт по порядку** (`incremental` → `cost_line` →
-`importance_stability` → `deflated_sharpe`), а не «самую громкую»
-причину: incremental у этой пары модель/батарея не сработал — обе
-руки торгуют почти одинаковые широкие книги, и bootstrap-разница их
-EV на этом сиде вышла чуть в пользу модели. Остальные три гейта
-ловят шум независимо; для смерти достаточно любого одного.
+How to read: pure noise under a logit trades a wide book (2864 events —
+there is power, a fake UNDERPOWERED is ruled out), and an EV of −0.17bp
+does not pay the 40bp bar. The verdict names the **first triggered gate
+in order** (`incremental` → `cost_line` → `importance_stability` →
+`deflated_sharpe`), not the "loudest" cause: incremental did not trigger
+for this model/battery pair — both arms trade nearly identical wide
+books, and the bootstrap difference of their EVs on this seed came out
+slightly in the model's favor. The other three gates catch noise
+independently; any one of them is enough for death.
 
-## Модели: реестр ×8 + ensemble
+## Models: the registry of 8 + ensemble
 
-| Имя | Ось смещения (bias axis) |
+| Name | Bias axis |
 |---|---|
-| `logit` | линейный компаратор (он же baseline- и battery-рука) |
-| `gbm` | бустинг, точные сплиты (дефолт движка) |
-| `hist_gbm` | бустинг, гистограммные сплиты |
-| `rf` | бэггинг, оптимизированные сплиты |
-| `extratrees` | бэггинг, случайные сплиты (декорреляция) |
-| `mlp` | нейросеть (32×16, adam) |
-| `knn` | локальное соседство (distance-weighted) |
-| `qda` | генеративная квадратичная поверхность |
+| `logit` | the linear comparator (also the baseline and battery arm) |
+| `gbm` | boosting, exact splits (the engine default) |
+| `hist_gbm` | boosting, histogram splits |
+| `rf` | bagging, optimized splits |
+| `extratrees` | bagging, random splits (decorrelation) |
+| `mlp` | a neural network (32×16, adam) |
+| `knn` | local neighborhoods (distance-weighted) |
+| `qda` | a generative quadratic surface |
 
-Девятое имя, `ensemble`, появляется в реестре только после импорта
-`atropos.ml_ensemble` — это документированный side effect:
+The ninth name, `ensemble`, appears in the registry only after importing
+`atropos.ml_ensemble` — a documented side effect:
 
 ```python
-import atropos.ml_ensemble  # noqa: F401  (side effect, см. «Ловушки»)
+import atropos.ml_ensemble  # noqa: F401  (side effect, see "Traps")
 from atropos.ml_training import MODEL_REGISTRY
 
 print(sorted(MODEL_REGISTRY))
 ```
 
-Фактический вывод:
+Example output:
 
 ```text
 ['ensemble', 'extratrees', 'gbm', 'hist_gbm', 'knn', 'logit', 'mlp', 'qda', 'rf']
 ```
 
-Несколько моделей сравниваются в одном CV-проходе (`models` вместо
-`model`); движок никогда не выбирает между ними — вердикты лежат в
-`report["models"]`, а вердикт прогона эхом первого невыжившего.
-Ансамбль настраивается плоскими kwargs в
-`model_params["ensemble"]` (члены, веса, правило комбинации
-`mean`/`weighted`/`rank_mean`/`stacking`; honest past-only OOF —
-см. докстринг модуля):
+Several models are compared in one CV pass (`models` instead of
+`model`); the engine never chooses between them — the verdicts live in
+`report["models"]`, and the run verdict echoes the first non-survivor.
+The ensemble is configured with flat kwargs in
+`model_params["ensemble"]` (members, weights, the combination rule
+`mean`/`weighted`/`rank_mean`/`stacking`; honest past-only OOF — see the
+module docstring):
 
 ```python
 report = run_ml_kill_protocol(
@@ -503,7 +515,7 @@ for name, entry in report["models"].items():
           f"events={entry['n_events']}")
 ```
 
-Фактический вывод (~15 секунд):
+Example output (~15 seconds):
 
 ```text
 run verdict: SURVIVES
@@ -511,10 +523,10 @@ run verdict: SURVIVES
   ensemble  SURVIVES                  EV=87.4bp  events=664
 ```
 
-Config-оверрайды мержатся по ключам на всех уровнях: указать
-`{"checks": {"dsr_min": 0.95}}` — значит явным образом заморозить
-дефолтный floor, не трогая остальные гейты. Пример: тот же прогон,
-но моделью `rf` с её дефолтными параметрами:
+Config overrides are merged key-by-key at every level: specifying
+`{"checks": {"dsr_min": 0.95}}` means explicitly freezing the default
+floor without touching the other gates. Example: the same run but with
+the `rf` model and its default parameters:
 
 ```python
 rf_report = run_ml_kill_protocol(
@@ -544,75 +556,76 @@ print("rf sharp run  :", rf_report["verdict"],
       " EV:", round(rf_report["ev_model"] * 1e4, 1), "bp")
 ```
 
-Фактический вывод:
+Example output:
 
 ```text
 rf default run: UNDERPOWERED  n_events: 100
 rf sharp run  : SURVIVES  n_events: 537  EV: 90.2 bp
 ```
 
-Как читать: дефолтный `rf` (`min_samples_leaf=50`) берёт узкую
-книгу — 100 независимых событий < 500, `UNDERPOWERED` не про качество
-модели, а про мощность её книги; более мелкие листья дают 537
-событий и решаемый прогон. Ёмкость модели — такая же часть
-замороженной конструкции, как сетка порогов: фиксируйте её в prereg.
+How to read: the default `rf` (`min_samples_leaf=50`) takes a narrow
+book — 100 independent events < 500; `UNDERPOWERED` is not about model
+quality but about the power of its book; finer leaves give 537 events
+and a decidable run. Model capacity is as much a part of the frozen
+construction as the threshold grid: fix it in the prereg.
 
-## Ловушки
+## Traps
 
-- **Не подгоняйте `threshold_grid` после данных.** Сетка
-  (0.30…0.70, шаг 0.05) и пороги гейтов — часть конструкции,
-  замороженная в prereg (шаг 1). Порог каждого фолда честно
-  выбирается по train-фолду (argmax EV по сетке); сузили сетку или
-  подвинули `profit_bar` после взгляда на OOS — это новая гипотеза
-  с новым prereg, не правка старой.
-- **UNDERPOWERED — не смерть.** «undecided»: добавить данных и
-  перегнать (шаг 4). Но и не выживание: в кладбище пишется
-  INCONCLUSIVE, в unified-матрице это `INCONCLUSIVE [ml]`; флаги
-  гейтов при недоборе событий не интерпретируются.
-- **`battery_controls` — известные линейные контроли.** Моментумы,
-  известные факторы — то, что «объяснило бы» эффект линейно. Они
-  исключаются из фич-набора моделей и добавляются логит-батарее;
-  не кладите туда целевые конструкты. Без них incremental
-  INCONCLUSIVE и прогон формально SURVIVES при недоказанном
-  инкрементальном эдже (сниппет в шаге 5).
-- **Импорт `atropos.ml_ensemble` — side effect.** Без него
-  `model="ensemble"` падает до любого fit:
+- **Do not tune `threshold_grid` after the data.** The grid
+  (0.30…0.70, step 0.05) and the gate thresholds are part of the
+  construction frozen in the prereg (step 1). Each fold's threshold is
+  chosen honestly on the train fold (argmax EV over the grid); narrowing
+  the grid or moving `profit_bar` after a look at OOS is a new
+  hypothesis with a new prereg, not an edit of the old one.
+- **UNDERPOWERED is not death.** "Undecided": add data and re-run
+  (step 4). But it is not survival either: the graveyard gets
+  INCONCLUSIVE, the unified matrix yields `INCONCLUSIVE [ml]`; at an
+  event shortfall the gate flags are not interpreted.
+- **`battery_controls` are known linear controls.** Momentums, known
+  factors — what would "explain" the effect linearly. They are excluded
+  from the models' feature set and fed to the logit battery; do not put
+  your target constructs there. Without them incremental is
+  INCONCLUSIVE and the run is formally SURVIVES with an undemonstrated
+  incremental edge (the snippet in step 5).
+- **Importing `atropos.ml_ensemble` is a side effect.** Without it,
+  `model="ensemble"` fails before any fit:
   `ValueError: unknown model 'ensemble': available ['extratrees',
-  'gbm', 'hist_gbm', 'knn', 'logit', 'mlp', 'qda', 'rf']` (прогнано);
-  с ним в реестре девятое имя. Держите импорт явным наверху скрипта.
-  И помните: `rank_mean`/`normalize_scores` выпрямляют распределение
-  скоров в равномерное — селективный порог перестаёт отбирать узкую
-  книгу. На мире этого how-to rank_mean-ансамбль из `[gbm, rf]`
-  торгует всю книгу (1500 событий, EV 62.4bp) и умирает на
-  `incremental`, тогда как дефолтный `mean` поверх вероятностей
-  выживает (87.4bp) — дефолт не случайность (прогнано; см.
-  `DEFAULT_ENSEMBLE_CONFIG`).
-- **Движок не выбирает модель.** `models: [...]` — сравнение, не
-  турнир: у каждого члена свой вердикт в `report["models"]`, а
-  вердикт прогона — эхо первого невыжившего. «Лучшей» модели нет и
-  быть не может: выбор по OOS — та же подгонка, что и правка сетки.
+  'gbm', 'hist_gbm', 'knn', 'logit', 'mlp', 'qda', 'rf']` (ran); with
+  it, the registry has the ninth name. Keep the import explicit at the
+  top of the script. And remember: `rank_mean`/`normalize_scores`
+  flatten the score distribution toward uniform — a selective threshold
+  stops selecting a narrow book. On this how-to's world, a rank_mean
+  ensemble of `[gbm, rf]` trades the whole book (1500 events,
+  EV 62.4bp) and dies at `incremental`, while the default `mean` over
+  probabilities survives (87.4bp) — the default is no accident (ran;
+  see `DEFAULT_ENSEMBLE_CONFIG`).
+- **The engine does not pick a model.** `models: [...]` is a comparison,
+  not a tournament: each member has its own verdict in
+  `report["models"]`, and the run verdict echoes the first
+  non-survivor. There is no and can be no "best" model: selecting on
+  OOS is the same tuning as editing the grid.
 
-## Обе цепочки разом: run_full_kill_chain
+## Both chains at once: run_full_kill_chain
 
-Обёртка всегда гонит rule-конвейер (7 стадий) по `rule_data`
-(`returns` + `signal`) и, если дан `ml_dataset` (`features`,
-`target`, `exec_returns`, `times_us`), ML-движок по нему. Это тонкий
-агрегатор, не третий движок: никаких новых гейтов, `unified` —
-чистая функция двух вердиктов (source: `rule` / `ml` / `rule+ml`).
+The wrapper always runs the rule pipeline (7 stages) on `rule_data`
+(`returns` + `signal`) and, if an `ml_dataset` is given (`features`,
+`target`, `exec_returns`, `times_us`), the ML engine on it. It is a thin
+aggregator, not a third engine: no new gates, `unified` is a pure
+function of the two verdicts (source: `rule` / `ml` / `rule+ml`).
 
-| rule-вердикт | ml-вердикт | unified |
+| Rule verdict | ML verdict | unified |
 |---|---|---|
-| жива | (не запускалась) | `SURVIVES` |
-| kill | (не запускалась) | `KILLED` [rule] |
-| жива | `SURVIVES` | `SURVIVES` |
-| жива | `DEAD(...)` | `KILLED` [ml] |
-| жива | `UNDERPOWERED` | `INCONCLUSIVE` [ml] |
+| alive | (not run) | `SURVIVES` |
+| kill | (not run) | `KILLED` [rule] |
+| alive | `SURVIVES` | `SURVIVES` |
+| alive | `DEAD(...)` | `KILLED` [ml] |
+| alive | `UNDERPOWERED` | `INCONCLUSIVE` [ml] |
 | kill | `SURVIVES` | `KILLED` [rule] |
 | kill | `DEAD(...)` | `KILLED` [rule+ml] |
 | kill | `UNDERPOWERED` | `KILLED` [rule] |
 
-(«жива» = `SURVIVES` / `SURVIVES_WITH_WARNINGS`; kill — любой другой
-rule-вердикт; `[...]` — `unified["source"]`.)
+("alive" = `SURVIVES` / `SURVIVES_WITH_WARNINGS`; kill — any other rule
+verdict; `[...]` is `unified["source"]`.)
 
 ```python
 from atropos.kill_chain import run_full_kill_chain
@@ -634,44 +647,56 @@ print("rule:", out["rule"]["overall_verdict"], "| ml:", out["ml"]["verdict"])
 print("unified:", u["verdict"], "[", u["source"], "]", "|", u["reason"])
 ```
 
-Фактический вывод (самый долгий сниппет гайда, ~полминуты):
+Example output (the guide's longest snippet, ~half a minute):
 
 ```text
 rule: REPACKAGING | ml: SURVIVES
 unified: KILLED [ rule ] | rule chain killed: REPACKAGING
 ```
 
-Как читать: rule-цепочка убила шум как переупаковку на стадии 1,
-ML-цепочка на посаженном нелинейном мире выжила — но kill любой
-цепочки решает всё: `KILLED [rule]`. Чтобы увидеть `unified
-SURVIVES`, живыми должны быть обе цепочки (все четыре квадранта
-матрицы прогнаны и заассерены в демо модуля:
+How to read: the rule chain killed the noise as repackaging at stage 1;
+the ML chain survived on the planted nonlinear world — but a kill by
+either chain decides everything: `KILLED [rule]`. To see
+`unified SURVIVES`, both chains must be alive (all four quadrants of the
+matrix are run and asserted in the module's demo:
 `uv run python -m atropos.kill_chain`).
 
-## Чек-лист
+## Module demo: a documented-kill reproduction
 
-- [ ] Prereg с четырьмя гейтами как kill-критериями закоммичен ДО
-      данных (закон 1); `validate_prereg` вернул `[]`.
-- [ ] Graveyard check вписан в prereg (how-to 03).
-- [ ] Датасет прошёл валидацию контракта: конечные float-фичи,
-      бинарный target, монотонные int64 µs; издержки вычтены из
-      `exec_returns` вызывающим.
-- [ ] `battery_controls` — известные линейные контроли; incremental
-      в отчёте не INCONCLUSIVE.
-- [ ] `n_events >= n_min_events` — иначе UNDERPOWERED: добрать
-      данных, флаги гейтов не интерпретировать.
-- [ ] `threshold_grid`, `checks.*`, `model_params` не менялись
-      после первого взгляда на OOS (закон 4/5).
-- [ ] Вердикт записан в tombstone (how-to 03) с числами: EV, DSR,
-      rho, n_events и fold-статистика — минимальные цифры записи.
+`uv run python -m atropos.ml_training` runs five asserted cases; the
+fifth is a statistics-calibrated reproduction of a documented
+tombstone (closed donor corpus, "VRP-panic"): a synthetic world
+calibrated to the tombstone's marginal statistics must come back
+`DEAD(...)` with both documented cause-of-death gates triggered
+(cost_line + incremental).
 
-## Что дальше
+The committed transcript of the full module demo (all five cases, including this one) lives in `docs/examples/ml_training_demo.log`; regenerate it with `uv run python -m atropos.ml_training`.
 
-- Чтение rule-вердиктов — how-to 02
+## Checklist
+
+- [ ] The prereg with the four gates as kill criteria is committed
+      BEFORE the data (law 1); `validate_prereg` returned `[]`.
+- [ ] The graveyard check is written into the prereg (how-to 03).
+- [ ] The dataset passed the contract validation: finite float features,
+      a binary target, monotone int64 µs; costs subtracted from
+      `exec_returns` by the caller.
+- [ ] `battery_controls` are known linear controls; incremental in the
+      report is not INCONCLUSIVE.
+- [ ] `n_events >= n_min_events` — otherwise UNDERPOWERED: add data, do
+      not interpret the gate flags.
+- [ ] `threshold_grid`, `checks.*`, `model_params` were not changed
+      after the first look at OOS (laws 4/5).
+- [ ] The verdict is recorded in a tombstone (how-to 03) with the
+      numbers: EV, DSR, rho, n_events, and fold statistics — the entry's
+      minimal numbers.
+
+## What next
+
+- Reading the rule verdicts — how-to 02
   (`docs/how-to/02-interpret-verdicts.md`).
-- Tombstone и реестр кладбища — how-to 03
+- Tombstones and the graveyard registry — how-to 03
   (`docs/how-to/03-read-graveyard.md`).
-- Пререгистрация — how-to 01 (`docs/how-to/01-preregister.md`).
-- Справочник: `docs/api/atropos/ml_training.html` (движок и
+- Preregistration — how-to 01 (`docs/how-to/01-preregister.md`).
+- Reference: `docs/api/atropos/ml_training.html` (the engine and
   `DEFAULT_TRAINING_CONFIG`), `docs/api/atropos/ml_ensemble.html`,
   `docs/api/atropos/kill_chain.html`, `docs/api/atropos/workspace.html`.

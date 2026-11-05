@@ -1,60 +1,59 @@
-# How-to 01. Пререгистрация гипотезы: от params до PREREG-файла
+# How-to 01. Preregistering a hypothesis: from params to the PREREG file
 
-> **Estimated time:** 10 минут
+> **Estimated time:** 10 minutes
 >
-> **You will need:** репозиторий atropos с настроенным окружением
-> (`uv sync` выполнен), Python 3.11+. Доступ к данным для этого how-to
-> **не нужен** — и до конца шага 4 **запрещён** (закон 1: preregister
-> before data).
+> **You will need:** the atropos repository with a set-up environment
+> (`uv sync` done), Python 3.11+. Data access is **not needed** for this
+> how-to — and is **forbidden** until the end of step 4 (law 1:
+> preregister before data).
 
-## Зачем
+## Why
 
-Пререгистрация — это заморозка protocol ДО данных: предсказание,
-конструкция, нули и kill-критерии записываются до первого обращения к
-данным, и коммит файла становится хешем протокола. Инструмент —
-`atropos.prereg_generator`: он не даст зарегистрировать «мягкий»
-kill-критерий без оператора и числа.
+A preregistration is a freeze of the protocol BEFORE the data:
+prediction, construction, nulls, and kill criteria are written down
+before the first data touch, and committing the file becomes the
+protocol's hash. The tool is `atropos.prereg_generator`: it will not let
+you register a "soft" kill criterion without an operator and a number.
 
-Самодостаточно: читать `FRAMEWORK.md` перед этим how-to не нужно.
+Self-contained: no need to read `FRAMEWORK.md` before this how-to.
 
-Импорт (пакет `atropos` не реэкспортирует функции наверх — используйте
-пути модулей):
+Import (the `atropos` package does not re-export functions at the top
+level — use module paths):
 
 ```python
 from atropos.prereg_generator import generate_prereg, validate_prereg
 ```
 
-## Шаг 1. Собрать `params` — 7 обязательных полей
+## Step 1. Assemble `params` — 7 required fields
 
-| Поле | Тип | Что это |
-|------|-----|---------|
-| `name` | `str` | короткое имя гипотезы (slug, попадёт в заголовок) |
-| `hypothesis` | `str` | предсказание одной фразой: что, знак, горизонт |
-| `construction` | `str` или `list[str]` | как строится сигнал: пороги, окна, нормализация |
-| `nulls` | `str` или `list[str]` | нулевые объяснения эффекта (repackaging, концентрация, …) |
-| `kill_criteria` | непустой `list` из `str`/`dict` | числовые пороги убийства — см. ниже |
-| `power_calc` | `str`, `list[str]` или `dict` | расчёт мощности: N, alpha, power |
-| `hash` | `str` | хеш замороженной спецификации |
+| Field | Type | What it is |
+|-------|------|------------|
+| `name` | `str` | short hypothesis name (a slug; goes into the title) |
+| `hypothesis` | `str` | the prediction in one phrase: what, sign, horizon |
+| `construction` | `str` or `list[str]` | how the signal is built: thresholds, windows, normalization |
+| `nulls` | `str` or `list[str]` | null explanations of the effect (repackaging, concentration, …) |
+| `kill_criteria` | non-empty `list` of `str`/`dict` | numeric kill thresholds — see below |
+| `power_calc` | `str`, `list[str]`, or `dict` | power calculation: N, alpha, power |
+| `hash` | `str` | hash of the frozen spec |
 
-Kill-критерий — жёсткое направленное правило, двумя способами:
+A kill criterion is a hard directional rule, in two forms:
 
-- **строка**: оператор + число внутри текста, напр.
-  `"IC < 0.05 on 500 obs"` или `"share of PnL from best subperiod > 0.6"`;
-- **dict**: `{"criterion": str, "threshold": число, "comparison": one of
-  < <= > >= == ~}` — `comparison` **обязателен**, дефолта нет.
+- **string**: an operator plus a number inside the text, e.g.
+  `"IC < 0.05 on 500 obs"` or `"share of PnL from best subperiod > 0.6"`;
+- **dict**: `{"criterion": str, "threshold": number, "comparison": one of
+  < <= > >= == ~}` — `comparison` is **required**, there is no default.
 
-Голое число в прозе («wait 200 days») не замораживает ничего и будет
-отклонено. Оператор `~` допускается только как явный
-диагностический/приближённый маркер; для жёстких убийств используйте
-направленные операторы.
+A bare number in prose ("wait 200 days") freezes nothing and will be
+rejected. The `~` operator is allowed only as an explicit
+diagnostic/approximate marker; for hard kills use directional operators.
 
-## Шаг 2. Прогнать `validate_prereg` до пустого списка
+## Step 2. Run `validate_prereg` down to an empty list
 
-Функция возвращает список проблем; `[]` = валидно. Никогда не переходите
-к генерации, пока список не пуст — `generate_prereg` на невалидных
-params бросает `ValueError`.
+The function returns a list of problems; `[]` = valid. Never proceed to
+generation while the list is non-empty — `generate_prereg` raises
+`ValueError` on invalid params.
 
-### Валидный пример (фактический вывод)
+### Valid example (example output)
 
 ```python
 from atropos.prereg_generator import validate_prereg
@@ -90,13 +89,13 @@ print(problems)
 assert problems == []
 ```
 
-Фактический вывод:
+Example output:
 
 ```text
 []
 ```
 
-### Невалидный пример 1 — проза вместо критерия (фактический вывод)
+### Invalid example 1 — prose instead of a criterion (example output)
 
 ```python
 bad_wait = {
@@ -107,16 +106,16 @@ bad_wait = {
 print(validate_prereg(bad_wait))
 ```
 
-Фактический вывод:
+Example output:
 
 ```text
 ["kill_criteria[0]: no comparison operator bound to a numeric threshold found in 'wait 200 days before final check' (e.g. 'IC < 0.05')"]
 ```
 
-«Подождём ещё 200 дней» — это не kill-критерий: нет оператора,
-связанного с числом, значит порог можно двигать после данных.
+"Wait another 200 days" is not a kill criterion: no operator is bound to
+a number, so the threshold can be moved after the data.
 
-### Невалидный пример 2 — dict без `comparison` (фактический вывод)
+### Invalid example 2 — a dict without `comparison` (example output)
 
 ```python
 bad_dict = dict(bad_wait)
@@ -126,29 +125,29 @@ bad_dict["kill_criteria"] = [
 print(validate_prereg(bad_dict))
 ```
 
-Фактический вывод:
+Example output:
 
 ```text
 ["kill_criteria[0]: missing required 'comparison' (one of ['<', '<=', '==', '>', '>=', '~'])"]
 ```
 
-Порог без направления — мягкий выключатель: непонятно, убивает `2.0`
-при `t < 2` или при `t > 2`. Поэтому `comparison` обязателен и не
-подставляется по умолчанию.
+A threshold without direction is a soft switch: it is unclear whether
+`2.0` kills at `t < 2` or at `t > 2`. Hence `comparison` is required and
+never defaulted.
 
-## Шаг 3. Сгенерировать документ
+## Step 3. Generate the document
 
 ```python
 from atropos.prereg_generator import generate_prereg, validate_prereg
 
-# ... params как в шаге 2 ...
+# ... params as in step 2 ...
 
 assert validate_prereg(params) == []
 doc = generate_prereg(params, date="2026-11-03")
 print(doc)
 ```
 
-Фактический вывод (сокращённо; полный документ — на вашем прогоне):
+Example output (abridged; the full document is from your run):
 
 ```markdown
 # Preregistration: overnight_imbalance_edge
@@ -195,12 +194,12 @@ changes invalidate the preregistration; any deviation must be logged
 as a separate amendment with a new hash.
 ```
 
-Обратите внимание на строку 2 таблицы kill-критериев: для строковой
-формы генератор сам вытаскивает оператор и число («>» и «0.6»), а не
-подставляет заглушку. Дата: `date=None` ставит сегодняшний день;
-явная дата должна быть ISO (`YYYY-MM-DD`), иначе `ValueError`.
+Note row 2 of the kill-criteria table: for the string form the generator
+extracts the operator and the number itself (">" and "0.6") instead of
+inserting a stub. The date: `date=None` uses today; an explicit date
+must be ISO (`YYYY-MM-DD`), otherwise `ValueError`.
 
-## Шаг 4. Сохранить `PREREG_<name>_<date>.md` и закоммитить ДО данных
+## Step 4. Save `PREREG_<name>_<date>.md` and commit BEFORE the data
 
 ```python
 from pathlib import Path
@@ -210,41 +209,41 @@ out.write_text(doc, encoding="utf-8")
 print("saved:", out.resolve())
 ```
 
-Пример вывода (путь зависит от вашей рабочей директории):
+Example output (the path depends on your working directory):
 
 ```text
 saved: <workspace>/PREREG_overnight_imbalance_edge_2026-11-03.md
 ```
 
-Если workspace ещё не создан (нет `GRAVEYARD.md` и каталога
-`hypotheses/`), сгенерируйте скелет командой `atropos init` — команда
-создаёт только отсутствующие файлы и никогда не перезаписывает
-существующие; дальше редактируйте их вручную.
+If the workspace does not exist yet (no `GRAVEYARD.md` and no
+`hypotheses/` directory), generate the skeleton with `atropos init` —
+the command creates only missing files and never overwrites existing
+ones; edit them manually afterwards.
 
-Файл положите в каталог пререгистраций вашего проекта (в раскладке
-методологии — `hypotheses/preregistrations/`) и **закоммитьте до любой
-выгрузки данных**. Коммит = хеш протокола: правка после первого
-обращения к данным аннулирует тест; смена замысла = новая гипотеза с
-новым ID, а не правка этой.
+Put the file in your project's preregistration directory (in the
+methodology's layout — `hypotheses/preregistrations/`) and **commit it
+before any data pull**. The commit is the protocol's hash: editing after
+the first data touch invalidates the test; a changed intent = a new
+hypothesis with a new ID, not an edit of this one.
 
-## Шаг 5. Чек-лист законов (перед тем как открыть данные)
+## Step 5. The laws checklist (before opening the data)
 
-- [ ] Graveyard check сделан, результаты поиска вписаны в prereg
-      (см. how-to 03).
-- [ ] Каждый kill-критерий = оператор + число (строка) или
+- [ ] Graveyard check done, search results written into the prereg
+      (see how-to 03).
+- [ ] Every kill criterion = operator + number (string) or
       `{criterion, threshold, comparison}` (dict); `validate_prereg`
-      вернул `[]`.
-- [ ] `comparison` указан явно в каждом dict-критерии.
-- [ ] Snapshot данных и seed зафиксированы (закон 3:
-      воспроизводимость).
-- [ ] Файл `PREREG_<name>_<date>.md` закоммичен ДО выгрузки данных
-      (закон 1).
-- [ ] Пороги больше не меняются (закон 4: kill criteria upfront;
-      закон 5: no post-hoc edits).
+      returned `[]`.
+- [ ] `comparison` is explicit in every dict criterion.
+- [ ] Data snapshot and seed are frozen (law 3: reproducibility).
+- [ ] `PREREG_<name>_<date>.md` is committed BEFORE the data pull
+      (law 1).
+- [ ] Thresholds are never changed again (law 4: kill criteria upfront;
+      law 5: no post-hoc edits).
 
-## Что дальше
+## What next
 
-- Как читать результат проверки — how-to 02
+- How to read the pipeline's result — how-to 02
   (`docs/how-to/02-interpret-verdicts.md`).
-- Куда записывается вердикт — how-to 03 (`docs/how-to/03-read-graveyard.md`).
-- Справочник функций — `docs/api/atropos/prereg_generator.html`.
+- Where the verdict is recorded — how-to 03
+  (`docs/how-to/03-read-graveyard.md`).
+- Function reference — `docs/api/atropos/prereg_generator.html`.

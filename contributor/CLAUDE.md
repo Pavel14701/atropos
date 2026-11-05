@@ -1,82 +1,111 @@
-# CLAUDE.md — Инструкции для Claude
 # Atropos — Hypothesis-Killing Framework — Claude-Specific Instructions
 
-Claude-специализация `AGENTS.md` (Claude Code, ZCode и совместимые CLI-агенты). Базовые правила — в `AGENTS.md`; здесь только отличия и привязка правил к конкретным инструментам (tools). Плейсхолдеры `[PLACEHOLDER]` заполнить значениями проекта.
+A Claude specialization of `AGENTS.md` (Claude Code, ZCode, and
+compatible CLI agents). The base rules live in `AGENTS.md`; this file
+carries only the differences and the binding of rules to concrete tools.
+Fill in the `[PLACEHOLDER]` placeholders with your project's values.
 
 ---
 
-## 1. Первое действие и обзор проекта (First Action and Overview)
+## 1. First Action and Project Overview
 
-До любой работы прочитать в этом порядке: `docs/HYPOTHESIS_KILLING_FRAMEWORK.md` → `AGENTS.md` → этот файл. Если главный документ отсутствует — остановиться и сообщить: фреймворк не развёрнут (развёртывание описано в `METHODOLOGY.md`).
+Before any work, read in this order: `docs/HYPOTHESIS_KILLING_FRAMEWORK.md` → `AGENTS.md` → this file. If the primary document is missing — stop and report: the framework is not deployed (deployment is described in `METHODOLOGY.md`).
 
-Значения проекта: имя `[PROJECT_NAME]`, данные `[DATA_DIR]`, снимок `[SNAPSHOT_DATE]`, владелец `[OWNER]`, окружение `[VENV]`. Если этот файл расходится с `AGENTS.md` в инструментах — приоритет у этого файла; в процессе — приоритет у законов `AGENTS.md`.
+Project values: name `[PROJECT_NAME]`, data `[DATA_DIR]`, snapshot `[SNAPSHOT_DATE]`, owner `[OWNER]`, environment `[VENV]`. Where this file diverges from `AGENTS.md` on tools, this file wins; on process, the laws of `AGENTS.md` win.
 
-## 2. Перед выдвижением гипотезы — какие инструменты использовать
+## 2. Before Proposing a Hypothesis — which tools to use
 
-1. **Graveyard check.** Read `hypotheses/INDEX.csv`; затем Grep по `hypotheses/graveyard/` по ключевым словам и тегам будущей гипотезы (не по заголовкам). Результаты поиска вписать в пререгистрацию.
-2. **Прочитать пайплайн.** Read `docs/HYPOTHESIS_KILLING_FRAMEWORK.md` — таблица 7 стадий и kill-критериев.
-3. **Prereg before data.** Write `hypotheses/preregistrations/H-NNNN.md` → закоммитить через Bash → и только затем любая выгрузка или чтение данных.
+1. **Graveyard check.** Read `hypotheses/INDEX.csv`; then Grep
+   `hypotheses/graveyard/` for the keywords and tags of the future
+   hypothesis (not titles). Write the search results into the prereg.
+2. **Read the pipeline.** Read `docs/HYPOTHESIS_KILLING_FRAMEWORK.md` —
+   the table of 7 stages and kill criteria.
+3. **Prereg before data.** Write `hypotheses/preregistrations/H-NNNN.md`
+   → commit via Bash → only then any data pull or reading.
 
-## 3. Пайплайн и исходы (Pipeline and Outcomes)
+## 3. Pipeline and Outcomes
 
-Стадии: `Formulation → Graveyard check → Preregistration → Data → Test → Verdict → Tombstone`. Стадии не пропускаются и не переупорядочиваются. Полная таблица kill-критериев — `AGENTS.md`, раздел 3.
+Stages: `Formulation → Graveyard check → Preregistration → Data → Test → Verdict → Tombstone`. Stages are never skipped or reordered. The full kill-criterion table is in `AGENTS.md`, section 3.
 
-Обработка исходов:
-- `KILLED` — Write tombstone + строка в `INDEX.csv`; короткое резюме пользователю: что убито и почему.
-- `SURVIVED` — tombstone со списком всех проверок; решение о применении принимает пользователь, не агент.
-- `INCONCLUSIVE` — tombstone с указанием, каких данных не хватило; переоткрытие допустимо на новом снимке.
+Handling outcomes:
+- `KILLED` — Write the tombstone + a row in `INDEX.csv`; a short summary
+  to the user: what was killed and why.
+- `SURVIVED` — a tombstone listing every check; the decision to act on
+  it belongs to the user, not the agent.
+- `INCONCLUSIVE` — a tombstone stating which data was missing; reopening
+  on a new snapshot is allowed.
 
-## 4. Шесть законов — не нарушать (The 6 Laws)
+## 4. The 6 Laws — do not violate
 
-1. Preregister before data. 2. One hypothesis — one ID. 3. Reproducibility (seed + snapshot + requirements). 4. Kill criteria upfront. 5. No post-hoc edits. 6. Every hypothesis gets a verdict. Полные формулировки — `AGENTS.md`, раздел 4.
+1. Preregister before data. 2. One hypothesis — one ID. 3. Reproducibility (seed + snapshot + requirements). 4. Kill criteria upfront. 5. No post-hoc edits. 6. Every hypothesis gets a verdict. Full wording in `AGENTS.md`, section 4.
 
-## 5. Инструменты и конвенции (Tools and Conventions)
+## 5. Tools and Conventions
 
-- Создание и правка файлов — только Write/Edit; не собирать файлы через heredoc в Bash.
-- Чтение — Read (не `cat`, `head`, `tail`); поиск — Grep/Glob: сначала поиск, затем точечное чтение.
-- Все команды — через uv в окружении проекта (`uv sync`, `uv run <cmd>`); глобальный интерпретатор не используется.
-- Тесты: Bash `uv run pytest -q` перед каждым коммитом; код гипотезы без теста не мержится.
-- Стиль: Bash `uv run ruff check .` и `uv run ruff format .`; 78 колонок, докстринги, perflint, E741; конфигурация в `pyproject.toml`; ноль предупреждений.
-- Типы: Bash `uv run mypy` — режим strict, весь код и тесты; однобуквенные идентификаторы запрещены (AST-тест `tests/test_conventions.py`, кроме `_`).
-- Запуск теста гипотезы: Bash `python hypotheses/code/H-NNNN_<slug>.py`; вывод в stdout строго: `H-NNNN: metric=[VALUE] threshold=[THRESHOLD] verdict=[KILLED|SURVIVED|INCONCLUSIVE]`.
-- Падает pytest — чинить код теста; ослаблять kill-критерий запрещено (закон 4).
-- Снимки `[DATA_DIR]/snapshots/` неизменяемы: новая выгрузка = новый снимок, перезапись запрещена.
-- Коммиты — только по явному запросу пользователя; без запроса не работать в `main`.
+- Create and edit files only with Write/Edit; do not assemble files via
+  Bash heredocs.
+- Reading with Read (not `cat`, `head`, `tail`); searching with
+  Grep/Glob: search first, then targeted reads.
+- All commands through uv in the project environment (`uv sync`,
+  `uv run <cmd>`); the global interpreter is never used.
+- Tests: Bash `uv run pytest -q` before every commit; hypothesis code
+  without a test is not merged.
+- Style: Bash `uv run ruff check .` and `uv run ruff format .`; 78
+  columns, docstrings, perflint, E741; configuration in `pyproject.toml`;
+  zero warnings.
+- Types: Bash `uv run mypy` — strict mode, all code and tests;
+  single-letter identifiers are banned (AST test
+  `tests/test_conventions.py`, except `_`).
+- Running a hypothesis test: Bash `python hypotheses/code/H-NNNN_<slug>.py`;
+  stdout strictly:
+  `H-NNNN: metric=[VALUE] threshold=[THRESHOLD] verdict=[KILLED|SURVIVED|INCONCLUSIVE]`.
+- If pytest fails, fix the test code; weakening a kill criterion is
+  forbidden (law 4).
+- `[DATA_DIR]/snapshots/` is immutable: a new pull = a new snapshot;
+  overwriting is forbidden.
+- Commits only on an explicit user request; without a request, do not
+  work on `main`.
 
-Типовая последовательность одной сессии (standard session):
+A standard session, in order:
 
 ```bash
-uv run pytest -q                        # 1. база зелёная
-uv run ruff check . && uv run ruff format --check .   # 2. стиль чист
-uv run mypy                             # 3. типы (strict)
-# 4. Write prereg → commit → выгрузка данных → запуск теста → Write tombstone → строка INDEX.csv → commit
+uv run pytest -q                        # 1. baseline is green
+uv run ruff check . && uv run ruff format --check .   # 2. style is clean
+uv run mypy                             # 3. types (strict)
+# 4. Write prereg → commit → data pull → run the test → Write tombstone → INDEX.csv row → commit
 ```
 
-## 6. Ключевые файлы (Key Files)
+## 6. Key Files
 
-Каноническая раскладка `hypotheses/` — конвенция фреймворка:
+The canonical `hypotheses/` layout is a framework convention:
 scaffold with `atropos init` (files are generated, never overwritten).
 
-| Файл | Роль |
+| File | Role |
 |------|------|
-| `docs/HYPOTHESIS_KILLING_FRAMEWORK.md` | Методология фреймворка — читать первым |
-| `AGENTS.md` | Базовые правила агента; этот файл — надстройка над ними |
-| `hypotheses/preregistrations/H-NNNN.md` | Пререгистрации — Write до любых данных |
-| `hypotheses/code/H-NNNN_*.py` | Код тестов гипотез |
-| `hypotheses/graveyard/H-NNNN.md` | Надгробия — только Write, append-only |
-| `hypotheses/INDEX.csv` | Реестр — строка на каждую гипотезу |
-| `[DATA_DIR]/DATA_DICTIONARY.md` | Схема данных — источник правды до выгрузки |
-| `[PROJECT_SPECIFIC_FILE]` | `[PURPOSE]` — допишите файлы своего проекта |
+| `docs/HYPOTHESIS_KILLING_FRAMEWORK.md` | Framework methodology — read first |
+| `AGENTS.md` | Base agent rules; this file is a layer on top of them |
+| `hypotheses/preregistrations/H-NNNN.md` | Preregs — Write before any data |
+| `hypotheses/code/H-NNNN_*.py` | Hypothesis test code |
+| `hypotheses/graveyard/H-NNNN.md` | Tombstones — Write only, append-only |
+| `hypotheses/INDEX.csv` | Registry — one row per hypothesis |
+| `[DATA_DIR]/DATA_DICTIONARY.md` | Data schema — the source of truth before the pull |
+| `[PROJECT_SPECIFIC_FILE]` | `[PURPOSE]` — add your project's own files |
 
-## 7. Claude-специфичные запреты (сверх 10 запретов из `AGENTS.md`)
+## 7. Claude-Specific Prohibitions (on top of the 10 prohibitions of `AGENTS.md`)
 
-1. Не использовать подагентов (subagents) для обхода стадий пайплайна; каждая стадия выполняется в основном контексте с видимыми артефактами.
-2. Не править пререгистрацию через Edit после первого обращения к данным — только новая гипотеза (закон 5).
-3. Не «улучшать» kill-критерии при переносе prereg в код — код следует prereg дословно.
-4. Не открывать данные до prereg даже «для проверки схемы» — схема берётся из `DATA_DICTIONARY.md`.
-5. Не запускать выгрузку данных при незакоммиченной пререгистрации.
-6. Не завершать сессию с гипотезой без вердикта: либо tombstone, либо явный статус OPEN и план.
+1. Do not use subagents to bypass pipeline stages; every stage runs in
+   the main context with visible artifacts.
+2. Do not edit the prereg via Edit after the first data touch — only a
+   new hypothesis (law 5).
+3. Do not "improve" kill criteria when porting the prereg into code —
+   the code follows the prereg verbatim.
+4. Do not open data before the prereg, even "just to check the schema" —
+   the schema comes from `DATA_DICTIONARY.md`.
+5. Do not start a data pull with an uncommitted prereg.
+6. Do not end a session with a hypothesis lacking a verdict: either a
+   tombstone, or an explicit OPEN status and a plan.
 
 ---
 
-Приоритет: законы (`AGENTS.md`, раздел 4) > запреты (разделы 7 обоих файлов) > скорость и удобство. При конфликте — стоп и вопрос `[OWNER]`.
+Priority: laws (`AGENTS.md`, section 4) > prohibitions (section 7 of
+both files) > speed and convenience. On conflict — stop and ask
+`[OWNER]`.
