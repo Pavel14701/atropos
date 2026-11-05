@@ -1,85 +1,99 @@
 ---
 name: 13-signal-test
-description: Сырой сигнальный тест: EV, t на cluster-SE, направление vs prereg, per-year/per-asset таблицы, мощность (этап 3/7).
-when_to_use: После premise-check; вместе с nulls и инкременталью на старте скрина.
+description: Raw signal test: EV, t on cluster-SE, direction vs prereg, per-year/per-asset tables, power (stage 3/7).
+when_to_use: After the premise check; together with the nulls and the incremental test at the start of the screen.
 version: 1.0.0
 ---
 
 
 > Note: log/registrar excerpts below quote the closed donor corpus (not shipped). The workspace layout itself is yours: scaffold with `atropos init` (files are generated, never overwritten).
-# SKILL 3: SIGNAL TEST — протокол сырого сигнального теста (Stage 3 of 7)
+# SKILL 3: SIGNAL TEST — the raw signal test protocol (Stage 3 of 7)
 
-> Самостоятельный протокол: агенту нужен только этот файл + данные.
-> Полная таксономия: FRAMEWORK.md (корень репо) §4 (NULL-DEATH, ANTI-SIGNAL-DEATH);
-> шаблон скрина: TEMPLATES.md (корень репо) шаблон 2 (§4 — сигнальный тест).
+> Self-contained protocol: the agent needs only this file + data.
+> Full taxonomy: FRAMEWORK.md (repo root) §4 (NULL-DEATH,
+> ANTI-SIGNAL-DEATH); screen template: TEMPLATES.md (repo root)
+> template 2 (§4 — the signal test).
 
-## PURPOSE (цель)
+## PURPOSE
 
-Есть ли сырой эффект (raw effect), в какую сторону (direction vs prereg)
-и держится ли он по годам (per-year table). Честная сырая картина ДО
-всяких контролей: контролы (14-incremental-test) отвечают «чужой ли это эффект»,
-сырой тест — «есть ли вообще что контролировать» и «хватает ли мощности».
+Is there a raw effect, in which direction (direction vs prereg), and
+does it hold across years (per-year table). An honest raw picture
+BEFORE any controls: the controls (14-incremental-test) answer "is
+this effect someone else's"; the raw test answers "is there anything
+at all to control" and "is there enough power".
 
-## INPUTS (входы)
+## INPUTS
 
-1. Кандидат с премис-чеком из 11-premise-check; замороженная конструкция из пререга
-   (каденс, горизонт L, перекрывающиеся/неперекрывающиеся forward returns).
-2. Панель данных с точными путями; конвенция книги (издержки, timing
-   без look-ahead) объявлена до рана.
+1. A candidate with a premise check from 11-premise-check; the frozen
+   construction from the prereg (cadence, horizon L,
+   overlapping/non-overlapping forward returns).
+2. A data panel with exact paths; the book's convention (costs,
+   timing without look-ahead) declared before the run.
 
-## PROCEDURE (каждый шаг = измеримый выход в логе)
+## PROCEDURE (each step = a measurable log output)
 
-1. **RAW EFFECT SIZE.** EV на сделку/день (bp или R) + hit-rate;
-   n наблюдений. Нет метрик «на глаз» — только числа в логе.
-2. **T-STAT (cluster-SE).** t-статистика с кластеризованной/Newey-West SE
-   (лаг ≥ L для перекрывающихся окон) РЯДОМ с naive i.i.d. SE для
-   сравнения. Naive t на кластеризованных данных завышен.
-3. **DIRECTION vs PREREG.** Знак против замороженного направления —
-   провал независимо от величины t. Abs-вариант — только в лог, не в kill.
-4. **PER-YEAR TABLE (обязательна).** Год: n, EV, t; счёт знака k/N лет;
-   концентрация EV по годам (флаг 4: > ~70% в одном годе = артефакт-приор).
-5. **PER-ASSET TABLE.** Позитивных активов k/N; эффект на одном символе
-   = не эффект рынка (см. LOO, 15-robustness-battery).
-6. **POWER CALCULATION (расчёт мощности, записан в пререг до рана).**
-   N = (2·sigma/EV)^2 ~ наблюдений для t ≈ 2 при ожидаемом эффекте EV
-   (z_0.975 + z_0.8 ≈ 2.8; точная формула — по所选 тесту). N < N_min →
-   статус UNPOWERED/UNDECIDABLE — честный исход, не приукрашивание.
-7. **SANITY: «ОБЕ НОГИ ПОЛОЖИТЕЛЬНЫ» = БАГ.** Long и short arms позитивны
-   одновременно — look-ahead/выравнивание, не эдж (lowcaps-урок: «+3.2..
-   +4.5%/день на обоих плечах 23/23» = пойманный баг, а не находка).
+1. **RAW EFFECT SIZE.** EV per trade/day (bp or R) + hit rate; n
+   observations. No eyeball metrics — only numbers in the log.
+2. **T-STAT (cluster-SE).** The t-statistic with clustered/Newey-West
+   SE (lag ≥ L for overlapping windows) NEXT TO the naive i.i.d. SE
+   for comparison. Naive t on clustered data is inflated.
+3. **DIRECTION vs PREREG.** A sign against the frozen direction is a
+   failure regardless of the t magnitude. The abs variant goes to the
+   log only, never to the kill.
+4. **PER-YEAR TABLE (mandatory).** Year: n, EV, t; sign score k/N
+   years; EV concentration across years (flag 4: > ~70% in one year =
+   an artifact prior).
+5. **PER-ASSET TABLE.** Positive assets k/N; an effect on one symbol
+   = not a market effect (see LOO, 15-robustness-battery).
+6. **POWER CALCULATION (recorded in the prereg before the run).**
+   N = (2·sigma/EV)^2 ~ observations for t ≈ 2 at the expected effect
+   EV (z_0.975 + z_0.8 ≈ 2.8; the exact formula depends on the chosen
+   test). N < N_min → status UNPOWERED/UNDECIDABLE — an honest
+   outcome, not a spin.
+7. **SANITY: "BOTH LEGS POSITIVE" = A BUG.** The long and short arms
+   positive at once — look-ahead/alignment, not an edge (the lowcaps
+   lesson: "+3.2.. +4.5%/day on both legs 23/23" = a caught bug, not
+   a find).
 
-## KILL CRITERIA (критерии убийства)
+## KILL CRITERIA
 
-- **t < 2** — статистического сигнала нет (unpowered или ноль).
-- **Знак противоположен prereg-направлению** — книга убита, инверс
-  не пререгается (INVERTED-DEATH на этапе знака).
-- **Per-year sign flips > 50%** — знак плавает, эффект режимный.
-- **ANTI-SIGNAL**: обе ноги положительны = панельный дрейф-артефакт
-  (ANTI-SIGNAL-DEATH) — или баг выравнивания; оба варианта = стоп.
+- **t < 2** — no statistical signal (unpowered or zero).
+- **The sign is opposite to the prereg direction** — the book is
+  killed, the inverted version is never preregged (INVERTED-DEATH at
+  the sign stage).
+- **Per-year sign flips > 50%** — the sign floats, the effect is
+  regime-driven.
+- **ANTI-SIGNAL**: both legs positive = a panel drift artifact
+  (ANTI-SIGNAL-DEATH) — or an alignment bug; either way = stop.
 
-## PASS CRITERIA (критерии прохода)
+## PASS CRITERIA
 
-t ≥ 2 на кластеризованной SE; знак совпадает с prereg; знак стабилен
-> 50% лет (лучше — все годы); эффект не сидит в одном годе/активе;
-N ≥ N_min из пререга. → Дальше 14-incremental-test (инкременталь — решающий тест).
+t ≥ 2 on the clustered SE; the sign matches the prereg; the sign is
+stable in > 50% of years (better: all years); the effect does not sit
+in a single year/asset; N ≥ N_min from the prereg.
+→ Next: 14-incremental-test (the incremental — the decisive test).
 
-## REAL EXAMPLE (примеры из кладбища)
+## REAL EXAMPLE (from the graveyard)
 
-**XS reversal alt/BTC (tombstone 60/105):** все 9 конфигов net-отрицательны,
-ОБЕ ноги положительны (legs +37..+123%/год) = дрейф-артефакт; pooled
-ev −0.44% (t −3.19), 7/8 лет минус, 1/9 активов > 0
-(`runs/xs_reversion_screen.log`). Спреды ТРЕНДЯТ — реверсия была
-анти-сигналом, флип = закрытая семья. **ETF flows (раунд-16):** бакет
-inflow>2σ даёт +50.9bp/д, но **t 1.32 при n=55** — unpowered: красивый EV
-при мощности ниже N_min не сигнал. Рядом: Unlock Effect — p 0.19-0.40 по
-всем окнам, направление угадано неверно.
+**XS reversal alt/BTC (tombstone 60/105):** all 9 configs
+net-negative, BOTH legs positive (legs +37..+123%/year) = a drift
+artifact; pooled ev −0.44% (t −3.19), 7/8 years negative, 1/9 assets
+> 0 (`runs/xs_reversion_screen.log`). The spreads TREND — the
+reversal was the anti-signal, the flip = a closed family. **ETF flows
+(round-16):** the inflow>2σ bucket gives +50.9 bp/day, but **t 1.32
+at n=55** — unpowered: a pretty EV with power below N_min is not a
+signal. Nearby: the Unlock Effect — p 0.19-0.40 across all windows,
+the direction guessed wrong.
 
-## COMMON MISTAKES (типичные ошибки)
+## COMMON MISTAKES
 
-- Праздновать большой EV при n < N_min (ETF flows: +50.9bp при t 1.32).
-- Перекрывающиеся forward returns с naive t — SE занижена в разы.
-- Пропустить per-year сплит: концентрация 2021-22 — главный маркер
-  decay/артефакта (BAC: 76% EV из 2021-22, 2025-26 −11%/год).
-- Трактовать «обе ноги +» как двойной эдж — это баг или дрейф-зеркало.
-- Иска́ть спасение другим окном/порогом после kill — один прогон,
-  один вердикт; «но при другом окне жив» = майнинг.
+- Celebrating a large EV at n < N_min (ETF flows: +50.9 bp at t 1.32).
+- Overlapping forward returns with a naive t — the SE is understated
+  by multiples.
+- Skipping the per-year split: 2021-22 concentration is the main
+  decay/artifact marker (BAC: 76% of EV from 2021-22, 2025-26
+  −11%/year).
+- Reading "both legs +" as a double edge — it is a bug or a drift
+  mirror.
+- Hunting for rescue with another window/threshold after a kill — one
+  run, one verdict; "but it is alive at another window" = mining.

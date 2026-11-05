@@ -1,74 +1,80 @@
 ---
 name: 01-preregister
-description: Заморозить гипотезу пререгистрацией через atropos.prereg_generator ДО любого обращения к данным.
-when_to_use: Перед первым look в данные по новой гипотезе; при переоткрытии похороненной семьи с новой механикой.
+description: Freeze the hypothesis with a preregistration via atropos.prereg_generator BEFORE any touch of the data.
+when_to_use: Before the first look at the data for a new hypothesis; when reopening a buried family with a new mechanism.
 version: 0.1.0
 ---
 
-# SKILL 01: PREREGISTER — заморозить гипотезу до данных
+# SKILL 01: PREREGISTER — freeze the hypothesis before data
 
-> Core-скилл агента Atropos. Публичный API:
-> `atropos.prereg_generator.generate_prereg(params: dict) -> str` и
-> `validate_prereg(params) -> list[str]`. Пустой список проблем = можно
-> генерировать. Закон: prereg коммитится ДО выгрузки данных.
+> Core skill of the Atropos agent. Public API:
+> `atropos.prereg_generator.generate_prereg(params: dict) -> str` and
+> `validate_prereg(params) -> list[str]`. An empty problem list = you
+> may generate. Law: the prereg is committed BEFORE the data is
+> pulled.
 
-## PURPOSE (цель)
+## PURPOSE
 
-Превратить гипотезу в неизменяемый документ с числовым kill-критерием
-до того, как данные получат шанс что-то подсказать. Пререг без
-числового порога — не пререг, а намерение.
+Turn the hypothesis into an immutable document with a numeric kill
+criterion before the data gets a chance to hint at anything. A prereg
+without a numeric threshold is not a prereg — it is an intention.
 
-## PROCEDURE (порядок)
+## PROCEDURE
 
-1. **Собрать params-dict.** Семь обязательных полей (`REQUIRED_FIELDS`):
-   `name`, `hypothesis`, `construction` (str или список шагов),
-   `nulls` (str или список), `kill_criteria` (список), `power_calc`
-   (str / список / dict), `hash` (хэш замороженной спеки).
-2. **Kill-критерии — только жёсткие направленные правила.** Форма dict:
-   `{"criterion": ..., "threshold": <число>, "comparison": "<" | "<="
-   | ">" | ">=" | "=="}`; форма str — оператор, привязанный к числу
-   (`"incremental t < 2"`). Порог записан до теста и после не меняется.
-3. **Валидировать.** `validate_prereg(params)` обязан вернуть `[]`.
-   Любая проблема чинится в params, а не игнорируется.
-4. **Сгенерировать и зафиксировать.** `generate_prereg(params)` —
-   markdown-документ (дата опциональна, формат ISO). Документ
-   коммитится/сохраняется ДО выгрузки данных. Нет раскладки workspace —
-   `atropos init` создаст скелет без перезаписи существующих файлов.
-5. **Переоткрытие.** Для похороненной семьи — новый датированный пререг,
-   раскрывающий закрытую историю и новую механику; иначе это майнинг.
+1. **Assemble the params-dict.** Seven required fields
+   (`REQUIRED_FIELDS`): `name`, `hypothesis`, `construction` (a str or
+   a list of steps), `nulls` (a str or a list), `kill_criteria` (a
+   list), `power_calc` (a str / list / dict), `hash` (the hash of the
+   frozen spec).
+2. **Kill criteria — hard directional rules only.** Dict form:
+   `{"criterion": ..., "threshold": <number>, "comparison": "<" | "<="
+   | ">" | ">=" | "=="}`; str form — an operator pinned to a number
+   (`"incremental t < 2"`). The threshold is written before the test
+   and never changed afterwards.
+3. **Validate.** `validate_prereg(params)` must return `[]`. Any
+   problem is fixed in the params, not ignored.
+4. **Generate and commit.** `generate_prereg(params)` — a markdown
+   document (date optional, ISO format). The document is
+   committed/saved BEFORE the data is pulled. No workspace layout —
+   `atropos init` creates the skeleton without overwriting existing
+   files.
+5. **Reopening.** For a buried family — a new dated prereg that
+   discloses the closed history and the new mechanism; otherwise it is
+   mining.
 
-## EXAMPLE (пример)
+## EXAMPLE
 
 ```python
 from atropos.prereg_generator import generate_prereg, validate_prereg
 
 params = {
     "name": "H-0007-mom30-echo",
-    "hypothesis": "mom30 предсказывает forward-return на 5d",
+    "hypothesis": "mom30 predicts the 5d forward-return",
     "construction": ["zscore(mom30)", "top-tercile long only"],
-    "nulls": ["нет предсказательной силы vs shuffled-сигнал"],
+    "nulls": ["no predictive power vs a shuffled signal"],
     "kill_criteria": [
         {"criterion": "incremental t", "threshold": 2.0,
          "comparison": "<"},
         {"criterion": "placebo percentile", "threshold": 95.0,
          "comparison": "<"},
     ],
-    "power_calc": "N=(2*sigma/EV)^2 ~= 600 наблюдений для t~2",
+    "power_calc": "N=(2*sigma/EV)^2 ~= 600 observations for t~2",
     "hash": "sha256:<hash-frozen-spec>",
 }
 assert validate_prereg(params) == []
-doc = generate_prereg(params)  # markdown, закончен до данных
+doc = generate_prereg(params)  # markdown, finished before data
 ```
 
-## NEVER (запреты)
+## NEVER
 
-- Не смотреть в данные до фиксации пререга — включая «просто глянуть
-  на разброс».
-- Не менять пороги/направления после первого прогона: смена замысла =
-  новая гипотеза с новым ID.
-- Не оставлять kill-критерий без числа: «слишком слабо» — не критерий.
+- Do not look into the data before the prereg is frozen — including
+  "just glancing at the spread".
+- Do not change thresholds/directions after the first run: a change of
+  intent = a new hypothesis with a new ID.
+- Do not leave a kill criterion without a number: "looks too weak" is
+  not a criterion.
 
-## ДАЛЬШЕ
+## NEXT
 
-Пререг зафиксирован → `02-run-pipeline.md` (прогон и вердикт).
-Условия воскрешения чужих семей — `03-read-graveyard.md`.
+Prereg frozen → `02-run-pipeline.md` (the run and the verdict).
+Resurrection conditions of other families → `03-read-graveyard.md`.

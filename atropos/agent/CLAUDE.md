@@ -1,14 +1,16 @@
-# CLAUDE.md — заметки для Claude (пакетный слой Atropos)
+# CLAUDE.md — notes for Claude (Atropos package layer)
 
-- Читай `AGENTS.md` этого слоя первым: рабочий цикл из 5 шагов и
-  NEVER-список обязательны до любой работы с гипотезами.
-- Скиллы не угадывай по имени — список: `atropos agent-context
-  --list-skills`; текст: `atropos agent-context --skill=NAME`.
-- Прежде чем писать свой текст пререга, вызывай
-  `atropos.prereg_generator.generate_prereg(params)` — формат уже
-  заморожен в коде; params-dict валидируется `validate_prereg`.
-- Вердикт всегда берётся из `report["overall_verdict"]`, не из твоей
-  интерпретации промежуточных чисел.
-- Эти файлы — пакетные. Личные/проектные дополнения клади в user/project
-  слой (`atropos agent-setup`), packaged-файлы не редактируй.
-- Проверка окружения перед работой: `atropos agent-doctor`.
+- Read this layer's `AGENTS.md` first: the 5-step workflow and the
+  NEVER-list are mandatory before any hypothesis work.
+- Never guess skills by name — list them: `atropos agent-context
+  --list-skills`; read one: `atropos agent-context --skill=NAME`.
+- Before writing your own prereg text, call
+  `atropos.prereg_generator.generate_prereg(params)` — the format is
+  already frozen in code; the params dict is validated by
+  `validate_prereg`.
+- Always take the verdict from `report["overall_verdict"]`, not from
+  your interpretation of intermediate numbers.
+- These files are packaged. Personal/project additions go into the
+  user/project layer (`atropos agent-setup`); never edit packaged
+  files.
+- Environment check before work: `atropos agent-doctor`.

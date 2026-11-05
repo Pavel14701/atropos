@@ -1,89 +1,102 @@
 ---
 name: 14-incremental-test
-description: Решающий инкрементальный тест: t собственного коэффициента поверх замороженных контролов (этап 4/7).
-when_to_use: Обязательный старт скрина вместе с nulls; после сырого t >= 2 из 13-signal-test.
+description: The decisive incremental test: t of the signal's own coefficient on top of frozen controls (stage 4/7).
+when_to_use: The mandatory screen start together with the nulls; after a raw t >= 2 from 13-signal-test.
 version: 1.0.0
 ---
 
 
 > Note: log/registrar excerpts below quote the closed donor corpus (not shipped). The workspace layout itself is yours: scaffold with `atropos init` (files are generated, never overwritten).
-# SKILL 4: INCREMENTAL TEST — решающий тест (Stage 4 of 7, THE DECISIVE KILLER)
+# SKILL 4: INCREMENTAL TEST — the decisive test (Stage 4 of 7, THE DECISIVE KILLER)
 
-> Самостоятельный протокол: агенту нужен только этот файл + данные.
-> Таксономия: FRAMEWORK.md (корень репо) §3 ЗАКОН 2, §4 (INCREMENTAL-DEATH); разбор: CASES_AND_FLAGS.md (корень репо) CASE 1 (CVD).
+> Self-contained protocol: the agent needs only this file + data.
+> Taxonomy: FRAMEWORK.md (repo root) §3 LAW 2, §4 (INCREMENTAL-DEATH);
+> teardown: CASES_AND_FLAGS.md (repo root) CASE 1 (CVD).
 
-## PURPOSE (цель)
+## PURPOSE
 
-Добавляет ли сигнал t > 2 СОБСТВЕННЫМ коэффициентом поверх известных
-контролей (known controls). Сырой эффект ничего не доказывает: известные
-фичи поглощают лифт «нового» сигнала — он оказывается шумным прокси чужой
-фичи. Главный убийца пайплайна; с 2026-11-01 инкременталь — ОБЯЗАТЕЛЬНЫЙ
-СТАРТ скрина (урок волны-3).
+Does the signal add t > 2 with its OWN coefficient on top of the
+known controls. The raw effect proves nothing: known features absorb
+the lift of the "new" signal — it turns out to be a noisy proxy of
+someone else's feature. The pipeline's main killer; since 2026-11-01
+the incremental is the MANDATORY start of the screen (the wave-3
+lesson).
 
-## INPUTS (входы)
+## INPUTS
 
-1. Сырой сигнал с t ≥ 2 из 13-signal-test (сырая красота НЕ обязательство выживания).
-2. Панель: forward_return + сигнал + полный столбец контролов.
+1. A raw signal with t ≥ 2 from 13-signal-test (raw beauty is NOT a
+   survival obligation).
+2. A panel: forward_return + the signal + the full control columns.
 
-## PROCEDURE (порядок)
+## PROCEDURE
 
-1. **FREEZE CONTROL LIST (заморозить список контролов до рана).**
-   Дом-минимум, известные контроли (known controls):
-   - momentum: mom7 / mom30 (или горизонт кандидата);
-   - OB-фичи (для микроструктурных кандидатов): strength / zone_width /
-     retest_delay;
-   - уровень волы: iv_pct / rv_pct;
-   - |BTC-move| (конфаунд conditioning-читов);
-   - year dummies (календарный контроль — см. 16-walkforward-calendar).
+1. **FREEZE CONTROL LIST (frozen before the run).** House minimum of
+   known controls:
+   - momentum: mom7 / mom30 (or the candidate's horizon);
+   - OB features (for microstructure candidates): strength /
+     zone_width / retest_delay;
+   - vol level: iv_pct / rv_pct;
+   - |BTC-move| (the confounder of conditioning reads);
+   - year dummies (calendar control — see 16-walkforward-calendar).
 2. **REGRESSION.** `forward_return ~ known_controls + new_signal`,
-   SE: HC0 / Newey-West (лаг ≥ L) / кластеризация по датам-месяцам.
-   Pooled с instrument fixed effects ИЛИ per-instrument — одно, из пререга.
-3. **READ OUT.** t(new_signal), дельта-R², знак беты; рядом t без контролов
-   (сырой) для сравнения поглощения.
-4. **PER-SYMBOL SPLIT.** Коэффициент по символам: рвётся в разные стороны
-   (BTC −0.41 / ETH +0.78 / SOL +0.94 у CVD) = «сигнал» — шумный прокси.
-5. **ABSORPTION REPORT.** Какие контролы поглотили лифт: у CVD это
-   zone_width_atr (t −9.6) и retest_delay (t −9.2). Осторожно: сырая
-   регрессия t ±10-14 = конфаунд |BTC-move|, не сигнал.
+   SE: HC0 / Newey-West (lag ≥ L) / clustering by dates-months.
+   Pooled with instrument fixed effects OR per-instrument — one of
+   the two, from the prereg.
+3. **READ OUT.** t(new_signal), delta-R², the beta sign; next to it
+   the t without controls (raw) to compare absorption.
+4. **PER-SYMBOL SPLIT.** The coefficient per symbol: tearing in
+   different directions (BTC −0.41 / ETH +0.78 / SOL +0.94 for CVD) =
+   the "signal" is a noisy proxy.
+5. **ABSORPTION REPORT.** Which controls absorbed the lift: for CVD
+   these are zone_width_atr (t −9.6) and retest_delay (t −9.2).
+   Caution: a raw regression t of ±10-14 = the |BTC-move| confounder,
+   not the signal.
 
-## KILL CRITERIA (критерии убийства)
+## KILL CRITERIA
 
-- **t(new_signal) < 2 после контролов = REPACKAGING-DEATH**
-  (INCREMENTAL-DEATH) — эффект реален, но это переоткрытие известной фичи;
-  независимо от сырой статистики и результата батареи.
-- ΔR² ≈ 0 при формально значимом t — «буква PASS / начинка DEAD»
-  (GLM v2: SPOT30 t +3.10 формально, инкременталь t +0.73).
-- Семья закрывается по страйкам (strikes): 3 kill-механики = permanent
-  close (GLM: репакедж → календарь → конъюнкция).
+- **t(new_signal) < 2 after controls = REPACKAGING-DEATH**
+  (INCREMENTAL-DEATH) — the effect is real but it is a rediscovery of
+  a known feature; regardless of the raw statistics and the battery
+  result.
+- ΔR² ≈ 0 with a formally significant t — "letter PASS / filling
+  DEAD" (GLM v2: SPOT30 t +3.10 formally, incremental t +0.73).
+- A family closes by strikes: 3 kill mechanics = permanent close
+  (GLM: repackaging → calendar → conjunction).
 
-**ПРАВИЛО (red thread):** «Красивые сырые числа ничего не значат, если
-инкременталь их убивает» — beautiful raw numbers mean nothing if incremental kills them.
+**RULE (red thread):** "beautiful raw numbers mean nothing if
+incremental kills them".
 
-## PASS CRITERIA (критерии прохода)
+## PASS CRITERIA
 
-t(new_signal) ≥ 2 после ПОЛНОГО замороженного списка контролов И ΔR² ≥
-порога пререга (эталон PREREG_OFI §7: ΔR² ≥ 0.003). → Дальше 15-robustness-battery
-(батарея робастности). Проходившие: POC-avoidance — t −16.55 ПОСЛЕ
-OB-контролов, ортогонален OB (|ρ| ≤ 0.143) — первый кандидат 9 раундов,
-прошедший инкрементальный тест.
+t(new_signal) ≥ 2 after the FULL frozen control list AND ΔR² ≥ the
+prereg threshold (reference PREREG_OFI §7: ΔR² ≥ 0.003).
+→ Next: 15-robustness-battery (the robustness battery). A passer:
+POC-avoidance — t −16.55 AFTER the OB controls, orthogonal to OB
+(|ρ| ≤ 0.143) — the first candidate in 9 rounds to pass the
+incremental test.
 
-## REAL EXAMPLE (пример из кладбища — 3-strike family closure)
+## REAL EXAMPLE (from the graveyard — a 3-strike family closure)
 
-**CVD/GLM-семейство:** сырая предпосылка **t +5.50** → инкременталь после
-OB-контролов **t −0.20** — весь лифт поглощён retest_delay и zone_width.
-Тот же механизм: CVD raw +0.217R, батарея ROBUST 6/6, placebo percentile
-100 — но slope_z t +1.05 после контролов; BTC.D-прокси t 3.52 → 0.16;
-COT cot_z t −0.99 после mom30; SVI-slope ΔR² ≈ 0.001 поверх ATM IV.
-Каждый выглядел живым до одной регрессии; регрессия стоила часы, а не годы
+**The CVD/GLM family:** the raw premise **t +5.50** → the incremental
+after OB controls **t −0.20** — the entire lift absorbed by
+retest_delay and zone_width. Same mechanism: CVD raw +0.217R, battery
+ROBUST 6/6, placebo percentile 100 — but slope_z t +1.05 after
+controls; the BTC.D proxy t 3.52 → 0.16; COT cot_z t −0.99 after
+mom30; SVI-slope ΔR² ≈ 0.001 on top of ATM IV. Each looked alive
+until a single regression; the regression cost hours, not years
 (`runs/cvd_ob_independence.log`, `runs/glm_v2_postmortem.log`).
 
-## COMMON MISTAKES (типичные ошибки)
+## COMMON MISTAKES
 
-- Пропустить инкременталь, потому что «батарея ROBUST»: батарея проверяет,
-  что эффект не шум; только контролы проверяют, что он не ЧУЖОЙ (CASE 1).
-- Список контролов подобран после данных — контроль должен быть заморожен.
-- Заявлять победу на формальном t > 2 в сырой спеке при инкрементале < 2
-  (GLM v2: «letter PASS, filling DEAD»); забыть ΔR² — значимый t без
-  прироста объяснённой дисперсии = шумный дубль.
-- Трактовать REPACKAGING как «почти живой»: семья закрывается; преемники —
-  с prior ≤ 20% и одним датированным прогоном (PREREG_GLM_SPOT §8).
+- Skipping the incremental because "the battery is ROBUST": the
+  battery checks the effect is not noise; only the controls check it
+  is not SOMEONE ELSE'S (CASE 1).
+- A control list picked after the data — the control set must be
+  frozen.
+- Claiming victory on a formal t > 2 in the raw spec while the
+  incremental is < 2 (GLM v2: "letter PASS, filling DEAD"); forgetting
+  ΔR² — a significant t with no gain in explained variance = a noisy
+  duplicate.
+- Reading REPACKAGING as "almost alive": the family closes;
+  successors are admitted with prior ≤ 20% and one dated run
+  (PREREG_GLM_SPOT §8).

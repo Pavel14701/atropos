@@ -1,35 +1,36 @@
 ---
 name: 02-run-pipeline
-description: Прогнать гипотезу через atropos.ensemble_pipeline.run_full_pipeline и правильно прочитать один из 9 вердиктов.
-when_to_use: Когда пререг зафиксирован и данные выгружены; для любого решающего прогона по замороженной спеке.
+description: Run the hypothesis through atropos.ensemble_pipeline.run_full_pipeline and read one of the 9 verdicts correctly.
+when_to_use: When the prereg is frozen and the data is pulled; for any decisive run on the frozen spec.
 version: 0.1.0
 ---
 
-# SKILL 02: RUN PIPELINE — один прогон, один вердикт
+# SKILL 02: RUN PIPELINE — one run, one verdict
 
-> Core-скилл агента Atropos. Публичный API:
+> Core skill of the Atropos agent. Public API:
 > `atropos.ensemble_pipeline.run_full_pipeline(data: dict,
-> config: dict | None) -> dict`. Стадии идут в adversarial-порядке,
-> первый FAIL убивает кандидата, остальные стадии — SKIPPED.
+> config: dict | None) -> dict`. Stages run in adversarial order:
+> the first FAIL kills the candidate, the remaining stages are
+> SKIPPED.
 
-## PROCEDURE (порядок)
+## PROCEDURE
 
-1. **Собрать data-dict.** Ключи: `returns` (forward-returns, серия),
-   `signal` (тот же индекс), опционально `features` (DataFrame известных
-   контролов), `mom7` / `mom30` (наблюдаемые momentum-факторы; иначе
-   трейлинг-суммы), `hypothesis` (описание). Панельный режим:
-   `panel_signal` / `panel_returns` (DataFrame: даты x активы) включают
-   стадию 7; одни — panel-only (стадии 1-6 SKIPPED).
-2. **Конфиг поверх дефолтов.** `config` мерджится поверх
-   `DEFAULT_CONFIG`; заметные ключи: `cost.cost_bps` (односторонние
-   издержки, bps, вычитаются на стадии 5), `model` (`"ols"` | `"knn"` |
-   `"kernel"` | callable-factory, стадия 6).
-3. **Один прогон.** Без подбора параметров после результата; seed
-   зафиксирован внутри конфигов.
-4. **Прочитать отчёт.** `overall_verdict`, `killed_by_stage`,
-   `kill_reason`, `stages` (по-стадийные dict'ы), `runtime_seconds`.
+1. **Assemble the data-dict.** Keys: `returns` (forward returns, a
+   series), `signal` (same index), optionally `features` (a DataFrame
+   of known controls), `mom7` / `mom30` (observed momentum factors;
+   otherwise trailing sums), `hypothesis` (description). Panel mode:
+   `panel_signal` / `panel_returns` (DataFrame: dates x assets) enable
+   stage 7; panel inputs alone (stages 1-6 SKIPPED).
+2. **Config on top of defaults.** `config` is merged over
+   `DEFAULT_CONFIG`; notable keys: `cost.cost_bps` (one-way cost in
+   bps, subtracted at stage 5), `model` (`"ols"` | `"knn"` |
+   `"kernel"` | a callable factory, stage 6).
+3. **One run.** No parameter tuning after the result; the seed is
+   pinned inside the configs.
+4. **Read the report.** `overall_verdict`, `killed_by_stage`,
+   `kill_reason`, `stages` (per-stage dicts), `runtime_seconds`.
 
-## EXAMPLE (пример)
+## EXAMPLE
 
 ```python
 from atropos.ensemble_pipeline import run_full_pipeline
@@ -42,36 +43,36 @@ report = run_full_pipeline(
 print(report["overall_verdict"], report.get("kill_reason"))
 ```
 
-## ТАБЛИЦА ВЕРДИКТОВ (9) — ЧТО ДЕЛАТЬ ДЛЯ КАЖДОГО
+## VERDICT TABLE (9) — WHAT TO DO FOR EACH
 
-| Вердикт | Смысл | Действие агента |
+| Verdict | Meaning | Agent action |
 |---|---|---|
-| `SURVIVES` | все стадии прошли, предупреждений нет | tombstone `SURVIVED`. PASS ≠ подтверждение: выжил = условный кандидат. Для deployed-стратегии включить `track_record.live_verdict` |
-| `SURVIVES_WITH_WARNINGS` | прошли, но с предупреждениями | tombstone `SURVIVED` с перечнем предупреждений из `stages` |
-| `REPACKAGING` | сигнал — прокси известной фичи (стадии 1-2) | tombstone `KILLED`: эффект реален, но чужой; семья закрывается, преемники — с prior <= 20% и одним прогоном |
-| `ARTIFACT` | артефакт: субпериодная концентрация / плацебо / календарь (стадия 1) | tombstone `KILLED`, записать механику артефакта |
-| `DEAD` | батарея робастности (стадия 3) | tombstone `KILLED`, перечислить сломанные тесты |
-| `NO_OOS_EDGE` | нет out-of-sample эджа: walk-forward / model-eval (стадии 4, 6) | tombstone `KILLED`; сжатие vs discovery — в надгробие |
-| `COST_DEATH` | гросс жив, net-of-cost умирает (стадия 5) | tombstone `KILLED`; зафиксировать `cost_bps`, при котором умирает |
-| `RISK` | пробой drawdown-хвоста или гросс-Sharpe-пола (стадия 5) | tombstone `KILLED` с риск-числами |
-| `CS_NO_EDGE` | кросс-секционный IC / квантильный спред пуст (стадия 7) | tombstone `KILLED` |
+| `SURVIVES` | all stages passed, no warnings | tombstone `SURVIVED`. PASS ≠ confirmation: survived = a conditional candidate. For a deployed strategy include `track_record.live_verdict` |
+| `SURVIVES_WITH_WARNINGS` | passed, but with warnings | tombstone `SURVIVED` with the warning list from `stages` |
+| `REPACKAGING` | the signal is a proxy of a known feature (stages 1-2) | tombstone `KILLED`: the effect is real but borrowed; the family closes, successors start with prior <= 20% and a single run |
+| `ARTIFACT` | artifact: subperiod concentration / placebo / calendar (stage 1) | tombstone `KILLED`, record the artifact mechanics |
+| `DEAD` | robustness battery (stage 3) | tombstone `KILLED`, list the broken tests |
+| `NO_OOS_EDGE` | no out-of-sample edge: walk-forward / model-eval (stages 4, 6) | tombstone `KILLED`; put the shrinkage vs discovery into the tombstone |
+| `COST_DEATH` | gross alive, net-of-cost dies (stage 5) | tombstone `KILLED`; record the `cost_bps` at which it dies |
+| `RISK` | drawdown-tail or gross-Sharpe-floor breach (stage 5) | tombstone `KILLED` with the risk numbers |
+| `CS_NO_EDGE` | cross-sectional IC / quantile spread empty (stage 7) | tombstone `KILLED` |
 
-`INCONCLUSIVE` на стадии (мало данных, вырожденные входы) — честный
-исход: итог `INCONCLUSIVE`, переоткрытие допустимо только на новом
-снимке данных.
+`INCONCLUSIVE` at a stage (too little data, degenerate inputs) is an
+honest outcome: the overall result is `INCONCLUSIVE`, reopening is
+allowed only on a new data snapshot.
 
-## NEVER (запреты)
+## NEVER
 
-- Не перезапускать «с чуть другими параметрами» после вердикта —
-  один прогон, один вердикт; пересмотр = новая гипотеза, новый ID.
-- Не читать PASS как подтверждение эджа: выживший — условный
-  кандидат с гейтами, не leg системы.
-- Не пропускать стадии ручными скриптами «для скорости»: порядок
-  стадий и есть защита.
+- Do not re-run "with slightly different parameters" after a verdict —
+  one run, one verdict; a revision = a new hypothesis, a new ID.
+- Do not read PASS as confirmation of an edge: a survivor is a
+  conditional candidate with gates, not a leg of a system.
+- Do not skip stages with manual scripts "for speed": the stage order
+  itself is the protection.
 
-## ДАЛЬШЕ
+## NEXT
 
-Вердикт записан → tombstone + строка в реестре (см. `01-preregister.md`
-и `03-read-graveyard.md`). `SURVIVES` в production →
-`atropos.track_record.live_verdict` (LIVE_OK / LIVE_KILLED /
-INCONCLUSIVE; LIVE_OK — НЕ подтверждение эджа).
+Verdict recorded → tombstone + a row in the registry (see
+`01-preregister.md` and `03-read-graveyard.md`). `SURVIVES` in
+production → `atropos.track_record.live_verdict` (LIVE_OK /
+LIVE_KILLED / INCONCLUSIVE; LIVE_OK is NOT confirmation of an edge).

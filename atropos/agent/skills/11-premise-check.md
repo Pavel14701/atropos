@@ -1,90 +1,105 @@
 ---
 name: 11-premise-check
-description: Проверка предпосылки до стратегии: могильник, триггер, знак, данные, инструмент, cost-линия (этап 1/7).
-when_to_use: До любой строки стратегии по новой крипто-гипотезе; при переносе академического эффекта из акций.
+description: Premise check before any strategy: graveyard, trigger, sign, data, instrument, cost line (stage 1/7).
+when_to_use: Before any strategy line for a new crypto hypothesis; when porting an academic effect from equities.
 version: 1.0.0
 ---
 
-# SKILL 1: PREMISE CHECK — протокол проверки предпосылки (Stage 1 of 7)
+# SKILL 1: PREMISE CHECK — the premise check protocol (Stage 1 of 7)
 
-> Самостоятельный протокол: агенту нужен только этот файл + данные.
-> Таксономия смертей: FRAMEWORK.md (корень репо) §4; надгробия живут
-> в раскладке вашего workspace (`hypotheses/graveyard/`, реестр —
+> Self-contained protocol: the agent needs only this file + data.
+> Death taxonomy: FRAMEWORK.md (repo root) §4; tombstones live in
+> your workspace layout (`hypotheses/graveyard/`, registry —
 > `hypotheses/INDEX.csv`): scaffold with `atropos init` (files are
 > generated, never overwritten).
 
-## PURPOSE (цель)
+## PURPOSE
 
-Ответить: существует ли триггерная предпосылка (trigger condition) вообще
-в крипто — ДО любой строки стратегии. Самый дешёвый этап пайплайна:
-гипотеза, умершая здесь, стоила 1-3 query, а не пререг-слот и неделю.
-Дешёвая ранняя смерть = успех пайплайна, не потеря.
+Answer: does the trigger premise exist at all in crypto — BEFORE any
+strategy line. The cheapest stage of the pipeline: a hypothesis that
+dies here cost 1-3 queries, not a prereg slot and a week. A cheap
+early death = the pipeline working, not a loss.
 
-## INPUTS (входы)
+## INPUTS
 
-1. Формулировка гипотезы с явным триггером: «когда X, тогда Y на горизонте L».
-2. Инвентарь данных `data/` репо: какие серии бесплатны, глубина истории.
-3. Инструменты: Deribit = только BTC+ETH опционы; альт-опционы делистед
-   (SOL — 2022-12); индексных крипто-опционов не существует.
-4. Graveyard: `docs/THEORY_GRAVEYARD.md` — проверка ДО всего остального.
+1. A hypothesis statement with an explicit trigger: "when X, then Y
+   over horizon L".
+2. The `data/` inventory of the repo: which series are free, history
+   depth.
+3. Instruments: Deribit = BTC+ETH options only; alt options delisted
+   (SOL — 2022-12); index crypto options do not exist.
+4. Graveyard: `docs/THEORY_GRAVEYARD.md` — check BEFORE anything
+   else.
 
-## PROCEDURE (порядок, каждый шаг = измеримый выход в логе)
+## PROCEDURE (order; each step = a measurable log output)
 
-1. **GRAVEYARD CHECK FIRST (проверка могильника).** Найти ближайшую семью
-   в THEORY_GRAVEYARD.md. Отличие только параметром/обёрткой = переоткрытие
-   (reopening): запуск ТОЛЬКО с новым датированным прeregом, раскрывающим
-   закрытую историю (3 из 49 направлений ревьюера уже были закрыты дома).
-2. **EXISTS (условие наступает?).** Один bounded query: частота триггера,
-   разброс фактора p10/p50/p90, доля дней с условием. Триггер не срабатывает
-   ни разу / реже меры измерения → PREMISE-DEATH.
-3. **SIGN CHECK (знак).** Для переносов из акций — сырой знаковый тест
-   (ноль параметров, один query). Знак риск-премии в крипте отрицателен:
-   инверсия (INVERTED) фиксируется навсегда, инверс не пререгается.
-4. **DATA AVAILABILITY (данные).** Бесплатная многолетняя история есть?
-   Платный источник = DATA-BLOCKED, с перечнем, что бы открыло вопрос.
-   Короткое окно (< 1 года) — «SHORT WINDOW DISCLOSED LOUDLY» в брифе.
-5. **INSTRUMENT (инструмент существует?).** Торгуемый инструмент и домен
-   исполнения реальны? Делистинг / HFT-коллокация / MEV-блоки =
-   INSTRUMENT-BLOCKED — «не существует как вопрос».
-6. **COST-LINE PRE-PROBE (амплитуда vs издержки).** Дом-линия ~10bp taker
-   RT / 20bp консервативный RT. Gross-амплитуда < RT/2 = семья мертва до
-   стратегии; turnover-прогноз > 20 RT/год = construction closed.
+1. **GRAVEYARD CHECK FIRST.** Find the closest family in
+   THEORY_GRAVEYARD.md. Differing only by a parameter/wrapper =
+   reopening: run ONLY with a new dated prereg that discloses the
+   closed history (3 of the reviewer's 49 directions had already been
+   closed in-house).
+2. **EXISTS (does the condition occur?).** One bounded query: trigger
+   frequency, factor spread p10/p50/p90, share of days with the
+   condition. The trigger never fires / fires less often than the
+   unit of measurement → PREMISE-DEATH.
+3. **SIGN CHECK.** For ports from equities — a raw sign test (zero
+   parameters, one query). The risk-premium sign in crypto is
+   negative: an inversion (INVERTED) is recorded permanently, the
+   inverted version is never preregged.
+4. **DATA AVAILABILITY.** Is there free multi-year history? A paid
+   source = DATA-BLOCKED, with a list of what would open the
+   question. A short window (< 1 year) — "SHORT WINDOW DISCLOSED
+   LOUDLY" in the brief.
+5. **INSTRUMENT (does it exist?).** Are the tradable instrument and
+   the execution domain real? Delisting / HFT colocation / MEV blocks
+   = INSTRUMENT-BLOCKED — "does not exist as a question".
+6. **COST-LINE PRE-PROBE (amplitude vs costs).** House line ~10 bp
+   taker RT / 20 bp conservative RT. Gross amplitude < RT/2 = the
+   family is dead before strategy; a turnover forecast > 20 RT/year =
+   construction closed.
 
-## KILL CRITERIA (критерии убийства — любой один закрывает этап)
+## KILL CRITERIA (any single one closes the stage)
 
-- **GRAVEYARD-HIT** — семья закрыта, нового аргумента нет.
-- **PREMISE-DEATH** — триггер не наступает никогда/реже меры/инвертирован.
-- **DATA-BLOCKED** — нет бесплатной многолетней истории.
-- **INSTRUMENT-BLOCKED** — инструмент/домен исполнения не существует.
-- **COST-LINE** — gross-амплитуда ниже издержек (арифметика общая для семьи).
-Записать причину смерти + условия воскрешения (resurrection conditions):
-новый аргумент/данные/инструмент; «нет известных» = честно.
+- **GRAVEYARD-HIT** — the family is closed, no new argument.
+- **PREMISE-DEATH** — the trigger never occurs / occurs less often
+  than the unit of measurement / is inverted.
+- **DATA-BLOCKED** — no free multi-year history.
+- **INSTRUMENT-BLOCKED** — the instrument/execution domain does not
+  exist.
+- **COST-LINE** — gross amplitude below costs (the arithmetic is
+  shared across the family).
+Record the cause of death + resurrection conditions: a new
+argument/data/instrument; "none known" = honest.
 
-## PASS CRITERIA (критерии прохода)
+## PASS CRITERIA
 
-Триггер наступает с измеримой частотой; бесплатная история ≥ минимального
-окна; инструмент торгуется; могилы нет или есть раскрытый новый механизм;
-знак не инвертирован; амплитуда выше cost-линии.
-→ Дальше: 14-incremental-test (инкременталь — старт скрина) + 12-null-control (nulls).
+The trigger occurs at a measurable frequency; free history >= the
+minimum window; the instrument trades; no grave, or a disclosed new
+mechanism exists; the sign is not inverted; amplitude above the cost
+line.
+→ Next: 14-incremental-test (the incremental — the screen's start) +
+12-null-control (nulls).
 
-## REAL EXAMPLE (пример из кладбища)
+## REAL EXAMPLE (from the graveyard)
 
-**RND strike-density audit (раунд-16, DATA-DEATH):** 105,713 строк,
-2975 дней. Гейт плотности страйков ПРОЙДЕН (медиана 15 ≥ 8), но
-неотрицательность density провалена — 79.8% core-ячеек < 90%; smoke-тест
-Блэка-Шоулза показал «чистую пилу» (27-30 знаковых флипов): шум котировок
-разрушает вторую производную улыбки. Семья закрыта до любых shape/GLM
-тестов. Рядом: Alt-VRP wheel — доля дней SOL с IV<30% = 0.000%
-(PREMISE-DEATH); дисперсионный арб — индексных крипто-опционов не
-существует (INSTRUMENT-BLOCKED); IV momentum — AC(1) ΔIV = −0.268,
-предпосылка инвертирована.
+**RND strike-density audit (round-16, DATA-DEATH):** 105,713 rows,
+2975 days. The strike-density gate PASSED (median 15 ≥ 8), but
+density non-negativity failed — 79.8% of core cells < 90%; the
+Black-Scholes smoke test showed a "pure saw" (27-30 sign flips):
+quote noise destroys the second derivative of the smile. The family
+closed before any shape/GLM tests. Nearby: the Alt-VRP wheel — the
+share of SOL days with IV<30% = 0.000% (PREMISE-DEATH); dispersion
+arbitrage — index crypto options do not exist (INSTRUMENT-BLOCKED);
+IV momentum — AC(1) of ΔIV = −0.268, the premise is inverted.
 
-## COMMON MISTAKES (типичные ошибки)
+## COMMON MISTAKES
 
-- Строить инфраструктуру/фетчи до premise-check (CASE 4: basis 8.9bp убит
-  одним bounded-probe); молча тестировать на коротком окне без дисклоужера.
-- Пропустить graveyard: повторное тестирование похороненного = майнинг.
-- Переносить академический знак со stocks без знакового premise-check
-  (флаг 5; MAX: LS −47.2%/год, дно shuffled-распределения).
-- Считать «премис жива» = «стратегия жива»: TS-1 — премис выжила,
-  экономика ≈ 0 (COST-DEATH на следующем шаге).
+- Building infrastructure/fetchers before the premise check (CASE 4:
+  an 8.9 bp basis killed by one bounded probe); silently testing on a
+  short window without disclosure.
+- Skipping the graveyard: re-testing something buried = mining.
+- Porting an academic sign from stocks without a sign premise check
+  (flag 5; MAX: LS −47.2%/year, the bottom of the shuffled
+  distribution).
+- Reading "premise alive" as "strategy alive": TS-1 — the premise
+  survived, the economics ≈ 0 (COST-DEATH at the next step).

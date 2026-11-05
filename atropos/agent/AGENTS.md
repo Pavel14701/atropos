@@ -1,82 +1,87 @@
-# Atropos Agent Context — пакетный слой (default layer)
+# Atropos Agent Context — package layer (default layer)
 
-Как ПОЛЬЗОВАТЬСЯ фреймворком Atropos. Это пакетный слой: user-слой
-(`%APPDATA%/atropos/agent` / `~/.config/atropos/agent`) и project-слой
-(`./.atropos/agent`) могут заменять, дополнять или отключать эти файлы
-и скиллы. Диагностика: `atropos agent-doctor`.
+How to USE the Atropos framework. This is the package layer: the user
+layer (`%APPDATA%/atropos/agent` / `~/.config/atropos/agent`) and the
+project layer (`./.atropos/agent`) may replace, extend, or disable
+these files and skills. Diagnostics: `atropos agent-doctor`.
 
-## Рабочий цикл гипотезы (5 шагов)
+## Hypothesis workflow (5 steps)
 
-1. **Graveyard check.** До всего: поиск в `hypotheses/graveyard/` и
-   `INDEX.csv` по предсказанию и kill-критерию (не по заголовку).
-   `KILLED`-дубликат без новой механики не выдвигается. Скилл:
-   `03-read-graveyard`. Нет могильника в проекте? `atropos init`
-   генерирует скелет (существующие файлы не перезаписываются).
-2. **Preregister до данных.** Пререгистрация фиксируется ДО любого
-   обращения к данным. Kill-критерии — только жёсткие правила
-   «оператор + число». Скилл: `01-preregister`.
-3. **Run pipeline.** Один прогон по замороженной спеке; первый FAIL
-   решает всё. Скилл: `02-run-pipeline`.
-   **ML-гипотеза?** Если гипотеза — классификатор (features → target
-   0/1, порог + EV), а не правило signal → outcome, дисциплина та же
-   (graveyard + prereg до данных), движок другой: skill
-   `04-run-ml-kill-protocol` (`atropos.ml_training.
-   run_ml_kill_protocol`): walk-forward CV, 4 гейта, вердикты
-   `SURVIVES` / `DEAD(<gate>)` / `UNDERPOWERED` (нерешённая — НЕ
-   смерть). Один прогон — один вердикт, как и в rule-цепочке.
-4. **Interpret.** PASS ≠ подтверждение: `SURVIVES` = условный кандидат
-   с гейтами, не leg системы. Один прогон — один вердикт.
-5. **Record tombstone.** Каждая гипотеза заканчивается надгробием и
-   строкой в `INDEX.csv`, включая собственные неудобные вердикты.
+1. **Graveyard check.** Before anything: search `hypotheses/graveyard/`
+   and `INDEX.csv` by prediction and kill criterion (not by title).
+   A `KILLED` duplicate with no new mechanism is not proposed. Skill:
+   `03-read-graveyard`. No graveyard in the project? `atropos init`
+   generates the skeleton (existing files are never overwritten).
+2. **Preregister before data.** The prereg is frozen BEFORE any touch
+   of the data. Kill criteria — hard "operator + number" rules only.
+   Skill: `01-preregister`.
+3. **Run pipeline.** One run on the frozen spec; the first FAIL decides
+   everything. Skill: `02-run-pipeline`.
+   **ML hypothesis?** If the hypothesis is a classifier (features →
+   target 0/1, threshold + EV) rather than a signal → outcome rule,
+   the discipline is the same (graveyard + prereg before data), the
+   engine is different: skill `04-run-ml-kill-protocol`
+   (`atropos.ml_training.
+   run_ml_kill_protocol`): walk-forward CV, 4 gates, verdicts
+   `SURVIVES` / `DEAD(<gate>)` / `UNDERPOWERED` (undecided — NOT a
+   death). One run, one verdict, as in the rule chain.
+4. **Interpret.** PASS ≠ confirmation: `SURVIVES` = a conditional
+   candidate with gates, not a leg of a system. One run, one verdict.
+5. **Record tombstone.** Every hypothesis ends with a tombstone and a
+   row in `INDEX.csv`, including your own uncomfortable verdicts.
 
-## API (фактический)
+## API (as implemented)
 
 ```python
 from atropos.prereg_generator import generate_prereg, validate_prereg
 
-# params-dict из 7 обязательных полей; сначала validate_prereg(params).
-doc = generate_prereg(params)  # -> markdown-строка
+# params-dict of 7 required fields; run validate_prereg(params) first.
+doc = generate_prereg(params)  # -> markdown string
 
 from atropos.ensemble_pipeline import run_full_pipeline
 
 # data: returns, signal, features, mom7/mom30, hypothesis,
-# panel_signal/panel_returns; config: поверх DEFAULT_CONFIG.
+# panel_signal/panel_returns; config: on top of DEFAULT_CONFIG.
 report = run_full_pipeline(data, config)
 report["overall_verdict"]  # SURVIVES | SURVIVES_WITH_WARNINGS |
 # REPACKAGING | ARTIFACT | DEAD | NO_OOS_EDGE | COST_DEATH | RISK |
-# CS_NO_EDGE (+ INCONCLUSIVE-стадии); killed_by_stage, kill_reason.
+# CS_NO_EDGE (+ INCONCLUSIVE stages); killed_by_stage, kill_reason.
 
 from atropos.track_record import live_verdict
-# production-этап для deployed SURVIVES; LIVE_OK ≠ подтверждение.
+# production stage for a deployed SURVIVES; LIVE_OK ≠ confirmation.
 ```
 
-## Скиллы (10)
+## Skills (10)
 
-Core: `01-preregister`, `02-run-pipeline` (таблица 9 вердиктов),
-`03-read-graveyard`, `04-run-ml-kill-protocol` (ML-цепочка:
-features→target, walk-forward, гейты). Протоколы этапов 1-7:
+Core: `01-preregister`, `02-run-pipeline` (the 9-verdict table),
+`03-read-graveyard`, `04-run-ml-kill-protocol` (the ML chain:
+features→target, walk-forward, gates). Stage 1-7 protocols:
 `11-premise-check`, `12-null-control`, `13-signal-test`,
-`14-incremental-test` (решающий), `15-robustness-battery`,
-`16-walkforward-calendar`. Порядок фиксирован:
-1 → 2 → 3 → 4 → 5 → 6, каждый этап дешевле следующего. Список:
-`atropos agent-context --list-skills`; текст: `--skill=NAME`.
+`14-incremental-test` (the decisive one), `15-robustness-battery`,
+`16-walkforward-calendar`. The order is fixed:
+1 → 2 → 3 → 4 → 5 → 6, each stage cheaper than the next. List:
+`atropos agent-context --list-skills`; text: `--skill=NAME`.
 
-## NEVER (не делать никогда)
+## NEVER (do not ever)
 
-- Не смотреть в данные до фиксации пререга — никакие «превью».
-- Не менять kill-критерии после первого обращения к данным.
-- Не перезапускать прогон с подправленными параметрами (result
-  shopping); смена замысла = новая гипотеза, новый ID.
-- Не читать PASS/SURVIVES как подтверждение эджа.
-- Не выдвигать `KILLED`-гипотезу повторно без новой механики.
-- Не держать гипотезу без вердикта: без tombstone она открыта.
-- Не редактировать и не удалять надгробия: кладбище append-only.
+- Do not look into the data before the prereg is frozen — no
+  "previews".
+- Do not change kill criteria after the first touch of the data.
+- Do not re-run with tweaked parameters (result shopping); a change of
+  intent = a new hypothesis, a new ID.
+- Do not read PASS/SURVIVES as confirmation of an edge.
+- Do not re-propose a `KILLED` hypothesis without a new mechanism.
+- Do not leave a hypothesis without a verdict: without a tombstone it
+  counts as open.
+- Do not edit or delete tombstones: the graveyard is append-only.
 
-## Переопределение этого слоя
+## Overriding this layer
 
-- Файлы: `AGENTS.md`/`CLAUDE.md` в старшем слое заменяют; `X.append.md`
-  дополняют; `X.disabled` отключает базу (append-ы остаются).
-- Скиллы: `skills/{name}.md` заменяет/добавляет; `{name}.append.md`
-  дополняет; `skills/.disabled` (список имён) и `skills/.disabled-all`
-  отключают. Старший слой: project > user > package.
-- Настройка: `atropos agent-setup --scope=project --dry-run`.
+- Files: `AGENTS.md`/`CLAUDE.md` in a higher layer replace;
+  `X.append.md` extends; `X.disabled` disables the base (appends
+  remain).
+- Skills: `skills/{name}.md` replaces/adds; `{name}.append.md`
+  extends; `skills/.disabled` (a list of names) and
+  `skills/.disabled-all` disable. Higher layer wins: project > user >
+  package.
+- Setup: `atropos agent-setup --scope=project --dry-run`.
