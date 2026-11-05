@@ -1,479 +1,522 @@
-# CASES AND FLAGS — красные флаги, case studies, чек-лист агента
+# CASES AND FLAGS — red flags, case studies, the agent checklist
 
-> Документ v1.0 (2026-11-02). Часть фреймворка Atropos («система убийства говногипотез»).
-> Компаньоны: FRAMEWORK.md (философия + pipeline 7 этапов + 6 законов, §6),
-> TEMPLATES.md (шаблоны пререга/скрина/батареи/post-mortem/брифинга).
-> Красная нить фреймворка — §9, цитируется в конце раздела 3.
+> Document v1.0 (2026-11-02). Part of the Atropos framework ("a system
+> for killing crap hypotheses").
+> Companions: FRAMEWORK.md (philosophy + the 7-stage pipeline + the
+> 6 laws, §6), TEMPLATES.md (the prereg/screen/battery/post-mortem/
+> briefing templates).
+> The framework's red thread — §9 — is quoted at the end of section 3.
 
-**Источник.** Корпус-донор: закрытый внутренний репозиторий (в поставку
-не входит) — 16 раундов марафона ревью S10, кладбище теорий v1.1.1
-(123 записи = 129 смертей + 1 отзыв), его пререги `PREREG_*.md`
-(включая OFI-shadow — эталон 7-гейтовой конструкции), его
-post-mortem- и скрин-логи каталога `runs/`, его деплой-спека §8.
-Все числа взяты из этих файлов, не из памяти. Имена файлов в этом
-документе — каталожные ссылки на корпус-донор, а не файлы вашего
-workspace: раскладку `hypotheses/` (кладбище + реестр) scaffold with
+**Source.** Donor corpus: a closed internal repository (not included
+in this distribution) — 16 rounds of the S10 review marathon, the
+theory graveyard v1.1.1 (123 entries = 129 deaths + 1 retraction),
+its preregs `PREREG_*.md` (including the OFI-shadow, the reference
+7-gate design), its post-mortem and screen logs under the `runs/`
+directory, and its deploy spec §8. All numbers are taken from those
+files, not from memory. File names in this document are catalog
+references into the donor corpus, not files in your workspace: the
+`hypotheses/` layout (graveyard + registry) is scaffolded with
 `atropos init` (files are generated, never overwritten).
 
-**Как пользоваться.** Перед запуском любого субагента: (1) прогнать
-гипотезу через 8 флагов раздела 1 — каждый сработавший флаг =
-обязательная строка в брифе агента; (2) сверить с case studies
-раздела 2 — если кандидат похож на одну из пяти смертей, тест
-проектируется так, чтобы убить именно этот механизм; (3) пройти
-чек-лист раздела 3 — все 7 пунктов, без исключений.
+**How to use.** Before launching any subagent: (1) run the hypothesis
+through the 8 flags of section 1 — every flag that fires is a
+mandatory line in the agent briefing; (2) check against the case
+studies of section 2 — if the candidate resembles one of the five
+deaths, the test is designed to kill exactly that mechanism;
+(3) walk the checklist of section 3 — all 7 items, no exceptions.
 
 ---
 
-## РАЗДЕЛ 1. КРАСНЫЕ ФЛАГИ — 8 паттернов, предсказывающих смерть ДО теста
+## SECTION 1. RED FLAGS — 8 patterns that predict death BEFORE the test
 
-Каждый флаг сформулирован по схеме: механизм / реальный пример из
-кладбища / правило одной строкой. Флаг — это не вердикт; это prior.
-Вердикт даёт только один прогон по замороженному пререгу. Но 8 флагов
-ниже в марафоне сработали десятки раз: игнорировать их — значит
-оплачивать смерть кандидата полным прогоном вместо одного query.
+Each flag follows the same scheme: the mechanism / a real example from
+the graveyard / a one-line rule. A flag is not a verdict; it is a
+prior. Only a single run against a frozen prereg produces a verdict.
+But the 8 flags below fired dozens of times in the marathon: ignoring
+them means paying for the candidate's death with a full run instead
+of a single query.
 
-### ФЛАГ 1. Корреляция с momentum > 0.5 → репакедж тренда
+### FLAG 1. Correlation with momentum > 0.5 → trend repackaging
 
-**Механизм.** Крипто-кросс-секция rank-one (PC1 = 66.8% дисперсии).
-Любая «новая» фича, сильно коррелированная с трендом, с высокой
-вероятностью пересказывает моментум другим языком — ML, нелинейность
-и многослойность не добавляют информации, её не было.
+**Mechanism.** The crypto cross-section is rank-one (PC1 = 66.8% of
+variance). Any "new" feature strongly correlated with trend is, with
+high probability, momentum retold in another language — ML,
+nonlinearity and stacking add no information, because there was none
+to add.
 
-**Примеры.** CTREND (ML-агрегация мульти-горизонтных трендов, Fieberg
-2025 JFQA): OOS R² −0.00001, IC/д −0.007 (t −0.59), дельта к наивному
-30d momentum — ноль, net −11.4%/год против −1.2% у наивного,
-placebo 200 shuffled-feature p 0.74 — реальная книга НИЖЕ среднего
-плацебо (`runs/round13_ctrend.log`, могила 100). GLM v2: член рубрики
-mvrv_hi+10 механически пинал скор в топ на 60/63 mvrv-high дней —
-«предсказание» = эхо MVRV-моментума, внутри режимной ячейки ноль
-вариации скора (`runs/glm_v2_postmortem.log`, могила 118).
-Контрпример-предупреждение: ETF flows имели corr(flow_z, mom7) = 0.540
-— флаг сработал, но решающий инкрементальный тест дал t +2.96 ПОСЛЕ
-mom7/mom30 → условный ДА (`runs/round16_etf_flows.log`). Флаг задаёт
-prior, убивает только инкременталь.
+**Examples.** CTREND (an ML aggregation of multi-horizon trends,
+Fieberg 2025 JFQA): OOS R² −0.00001, IC/d −0.007 (t −0.59), delta over
+naive 30d momentum — zero, net −11.4%/yr against −1.2% for the naive
+book, placebo 200 shuffled-feature p 0.74 — the real book lands BELOW
+the placebo mean (`runs/round13_ctrend.log`, grave 100). GLM v2: the
+mvrv_hi+10 rubric term mechanically pinned the score to the top on
+60/63 mvrv-high days — the "prediction" is an MVRV-momentum echo,
+with zero score variation inside the regime cell
+(`runs/glm_v2_postmortem.log`, grave 118). A cautionary counterexample:
+ETF flows had corr(flow_z, mom7) = 0.540 — the flag fired, but the
+decisive incremental test gave t +2.96 AFTER mom7/mom30 → a
+conditional YES (`runs/round16_etf_flows.log`). The flag sets the
+prior; only the incremental kills.
 
-**Правило.** |ρ(новая фича, momentum)| > 0.5 → вердикт по умолчанию
-«репакедж»; кандидат жив только если инкрементальный t > 2 после
-momentum + известных фич.
+**Rule.** |ρ(new feature, momentum)| > 0.5 → the default verdict is
+"repackaging"; the candidate is alive only if the incremental t > 2
+after momentum + known features.
 
-### ФЛАГ 2. Описание без predict-теста → describe-vs-predict (10/10)
+### FLAG 2. Description without a predict test → describe-vs-predict (10/10)
 
-**Механизм.** Режимная статистика, посчитанная на прошлом, описывает
-прошлое. Она либо вырождена (насыщена, персистентна), либо следует
-собственной автокорреляции — и не предсказывает следующий период.
-Семья в кладбище закрыта со счётом 10/10: SMA-tilt, vol-target, Hurst,
-Shannon entropy, ADX, grid-Hurst, RV-regime switch, dispersion
-conditional, граф-плотность, Байес-режимы.
+**Mechanism.** Regime statistics computed on the past describe the
+past. They are either degenerate (saturated, persistent) or follow
+their own autocorrelation — and they do not predict the next period.
+The family is closed in the graveyard at 10/10: SMA-tilt, vol-target,
+Hurst, Shannon entropy, ADX, grid-Hurst, RV-regime switch, dispersion
+conditional, graph density, Bayesian regimes.
 
-**Примеры.** Hurst: H shuffled-рядов 0.627 ВЫШЕ реального 0.618 —
-оценщик меряет своё смещение (могила 90). Entropy: медиана 0.994 из
-max 1.0 — «хаос» включён всегда (92). SMA-tilt: NW5 4.47 против базы
-4.89 — ухудшение (58). Vol-target: CAGR +299% → +16.5% — съедает
-доходность на порядок (57). RV-regime: raw t 1.08, инкременталь t 0.78
-(98). Граф-плотность: lag-1 автокорр +0.988, независимых дней ~15 из
-2434 (123, PERSISTENCE-DEATH). Байес-режимы — 7-й член семьи,
-CONFIRMED describe-only (парный стек, `runs/pairs_stack_components.log`).
-
-**Правило.** Никакая статистика состояния не входит в систему без
-предиктивного теста следующего периода против синтетических бэндов
-(GBM + shuffled) — «описывает» ≠ «предсказывает».
-
-### ФЛАГ 3. Порог/окно выбраны после данных → in-sample артефакт
-
-**Механизм.** Порог, взятый из тех же данных (полная выборка,
-percentile-срез на всем ряде), подгоняется под шум. Перенос в
-walk-forward сжимает эффект кратно и ломает монотонность лестницы.
-
-**Пример.** Ex-Kurt на спреде — «единственный маргинальный
-предсказатель раунда-15»: discovery-спред −0.024, CI [−0.047, −0.0008]
-исключает 0, согласованность 3/4 года — но пороги p90/p10 взяты из
-полных данных (честно disclosed). Walk-forward (rolling 180d train →
-frozen p25/p50/p75 → 30d test, 27 блоков, 6440 pair-day): спред
-−0.00457 (t −0.57) — **сжатие ~5×**; лестница q1..q4 −0.003/−0.008/
-−0.003/−0.009 — немонотонный зигзаг, строго убывающих блоков 2/27
-= tail-артефакт. GRAVEYARD (`runs/exkurt_walkforward.log`,
+**Examples.** Hurst: the H of shuffled series 0.627 is HIGHER than the
+real 0.618 — the estimator measures its own bias (grave 90). Entropy:
+median 0.994 out of max 1.0 — "chaos" is always on (92). SMA-tilt:
+NW5 4.47 against base 4.89 — a degradation (58). Vol-target: CAGR
++299% → +16.5% — it eats an order of magnitude of return (57).
+RV-regime: raw t 1.08, incremental t 0.78 (98). Graph density: lag-1
+autocorr +0.988, ~15 independent days out of 2434 (123,
+PERSISTENCE-DEATH). Bayesian regimes — the family's 7th member,
+CONFIRMED describe-only (the pairs stack,
 `runs/pairs_stack_components.log`).
 
-**Правило.** Ноль параметров после данных: пороги/окна замораживаются
-до рана; любой кандидат с in-sample порогами идёт в walk-forward
-пререг, а не в полку — как «находка» не цитируется.
+**Rule.** No state statistic enters the system without a predictive
+test of the next period against synthetic bands (GBM + shuffled) —
+"describes" ≠ "predicts".
 
-### ФЛАГ 4. Эффект только в одном году/режиме → режимный артефакт
+### FLAG 3. A threshold/window chosen after the data → in-sample artifact
 
-**Механизм.** Концентрация позитивного EV в одном годе/режиме означает
-либо подгонку под единственный эпизод, либо уже умерший эдж (decay
-распознан после того, как окно закрылось).
+**Mechanism.** A threshold taken from the same data (the full sample,
+a percentile cut over the whole series) is fitted to noise.
+Transplanted into walk-forward it shrinks the effect severalfold and
+breaks the ladder's monotonicity.
 
-**Примеры.** BAC weekly: +39.4%/год, beats 99% shuffles — но 2021-22
-несёт **76%** позитивного EV, 2025-26 −11%/год; выжил только как
-conditional с признанным decay (`runs/round12_xs_academic.log`,
-раздел survivors). Amihud vol-of-illiq: трети +83 / +55 / **−38**%
-/год — FRAGILE-DEATH (103). Friday-13th: z +2.70, 8/9 лет +, но весь
-эффект = один день 2021-08-13 (84). C2 extreme flow: +9.9%/+4.7% в
-2021-22, потом ноль — DECAY-DEATH (34). Газ → вола: full-sample 1.45×
-= артефакт NFT-маниа 2021-22, post-Merge ratio 1.01× (88).
+**Example.** Ex-Kurt on the spread — "the only marginal predictor of
+round-15": discovery spread −0.024, CI [−0.047, −0.0008] excludes 0,
+consistency 3/4 years — but the p90/p10 thresholds were taken from
+the full data (honestly disclosed). Walk-forward (rolling 180d train
+→ frozen p25/p50/p75 → 30d test, 27 blocks, 6440 pair-days): spread
+−0.00457 (t −0.57) — **a ~5× shrink**; the q1..q4 ladder
+−0.003/−0.008/−0.003/−0.009 — a non-monotone zigzag, strictly
+decreasing blocks 2/27 = a tail artifact. GRAVEYARD
+(`runs/exkurt_walkforward.log`, `runs/pairs_stack_components.log`).
 
-**Правило.** Per-year сплит обязателен в каждом скрине; концентрация
-> ~70% в одном годе/режиме = артефакт-приор; максимум статуса —
-conditional с раскрытым decay, не кандидат.
+**Rule.** Zero parameters after the data: thresholds/windows are
+frozen before the run; any candidate with in-sample thresholds goes
+into a walk-forward prereg, not onto the shelf — it is never cited
+as a "finding".
 
-### ФЛАГ 5. «Известный факт из акций» без проверки знака → инверсия риск-премии
+### FLAG 4. The effect lives in one year/regime → regime artifact
 
-**Механизм.** В крипте знак риск-премии отрицателен: за лотерейность
-и высокий down-risk ПЛАТЯТ. Академическое направление (long
-спокойных / short лотерейных) инвертируется — книга уходит на дно
-null-распределения. Перенос факта со stocks без дешёвого знакового
-premise-check = гарантированная INVERTED-DEATH.
+**Mechanism.** Positive EV concentrated in a single year/regime means
+either a fit to a single episode or an edge that has already died
+(the decay recognized only after the window closed).
 
-**Примеры.** MAX effect (Bali-Cakici-Whitelaw 2011): LS net **−47.2%**
-/год weekly — beats 5.0% shuffled-факторов (дно распределения),
-Sharpe −0.56, DD 442%; LONG-only-нога (спокойные, инверсная) +38.1%
-(`runs/round12_xs_academic.log`, могила 101). Downside beta
-(Ang-Chen-Xing 2006): LS −38.2%/год weekly (beats 10.0%), reverse
-tail 90.5/94.5%; шорт низко-down-beta −85.2/−105.9%/год; LONG-only
-+47.0/+58.9% (102). При этом все репакедж-контролы были пройдены
-честно (ρ(MAX, β) +0.502 < 0.7; overlap с реверсом max|ρ| 0.07;
-turnover 0.44-1.47 RT/год) — умер не контрол, умер знак.
+**Examples.** BAC weekly: +39.4%/yr, beats 99% of shuffles — but
+2021-22 carries **76%** of the positive EV and 2025-26 is −11%/yr;
+it survived only as conditional with an acknowledged decay
+(`runs/round12_xs_academic.log`, survivors section). Amihud
+vol-of-illiq: thirds +83 / +55 / **−38**%/yr — FRAGILE-DEATH (103).
+Friday-13th: z +2.70, positive in 8/9 years, but the whole effect =
+the single day 2021-08-13 (84). C2 extreme flow: +9.9%/+4.7% in
+2021-22, then zero — DECAY-DEATH (34). Gas → vol: the full-sample
+1.45× is an artifact of the 2021-22 NFT mania, post-Merge ratio
+1.01× (88).
 
-**Правило.** Любая гипотеза-перенос из акций начинается с premise-check
-знака на сырых данных (ноль параметров, один query) — до построения
-книги, батарей и placebos.
+**Rule.** A per-year split is mandatory in every screen; concentration
+> ~70% in one year/regime = an artifact prior; the maximum status is
+conditional with a disclosed decay, never a candidate.
 
-### ФЛАГ 6. EV-амплитуда < cost-линии (10-20bp RT) → COST-DEATH априорно
+### FLAG 5. A "known fact from equities" without a sign check → risk-premium inversion
 
-**Механизм.** У дома есть линия издержек: ~10bp taker RT, 20bp
-консервативная RT-линия. Если gross-амплитуда эффекта меньше линии,
-никакая механика, фильтрация и сайзинг её не спасут — арифметика
-общая для всей семьи. Строить инфраструктуру до замера амплитуды =
-оплачивать смерть кандидата максимумом ресурсов.
+**Mechanism.** In crypto the sign of the risk premium is negative:
+investors PAY, in expected return, for lottery-likeness and high
+down-risk. The academic direction (long calm / short lottery-like)
+inverts — the book lands at the bottom of the null distribution.
+Porting a fact from stocks without the cheap sign premise-check = a
+guaranteed INVERTED-DEATH.
 
-**Примеры.** Basis-арб («10-20%/год почти безрисково»): макс |basis|
-BTC за 123.5 дня 1m = **8.9bp < одного 20bp RT**; P(|b|>10bp) =
-0 минут за 4 месяца; ETH — 3 торгуемые минуты (могила 79). Стат- arb
-пары: cost 0.20% RT против pooled t −3.7 (анти-эдж) (55). Grid-семья:
-4/5 рук auto-dead на 20bp-линии до всякой статистики (93-97).
-Weekend fade: максимальная премия +3.25pp < kill-бара 5pp (81).
-Hour-of-day: лучший час +0.04% < 10bp RT (65). IV-спред BTC/ETH:
-gross $9-19 против RT haircut $296 (35).
+**Examples.** MAX effect (Bali-Cakici-Whitelaw 2011): LS net
+**−47.2%**/yr weekly — beats 5.0% of shuffled factors (the bottom of
+the distribution), Sharpe −0.56, DD 442%; the LONG-only leg (calm,
+inverted) +38.1% (`runs/round12_xs_academic.log`, grave 101).
+Downside beta (Ang-Chen-Xing 2006): LS −38.2%/yr weekly (beats
+10.0%), reverse tail 90.5/94.5%; shorting low-down-beta
+−85.2/−105.9%/yr; LONG-only +47.0/+58.9% (102). All the repackaging
+controls were passed honestly (ρ(MAX, β) +0.502 < 0.7; overlap with
+reversal max|ρ| 0.07; turnover 0.44-1.47 RT/yr) — the controls did
+not die, the sign did.
 
-**Правило.** Амплитуда замеряется одним bounded-probe до
-инфраструктуры; gross < cost-линии → семья закрывается без пререга
-(причина смерти записывается, трек не тратится).
+**Rule.** Every port-in hypothesis from equities starts with a sign
+premise-check on raw data (zero parameters, one query) — before any
+book building, batteries and placebos.
 
-### ФЛАГ 7. Годовой prior в скоринге → календарная контаминация
+### FLAG 6. EV amplitude < the cost line (10-20bp RT) → COST-DEATH a priori
 
-**Механизм.** Любой член скоринга/рубрики, кодирующий «какой сейчас
-год/режим» (явный year-приор, мульти-летний lookback-тренд, знание
-автора о годовых режимах), делает in-sample корреляцию с фактической
-траекторией тривиально высокой. OOS на свежих днях — коллапс.
+**Mechanism.** The house has a cost line: ~10bp taker RT, a
+conservative 20bp RT line. If the gross amplitude of the effect is
+below the line, no mechanics, filtering or sizing can save it — the
+arithmetic is shared by the whole family. Building infrastructure
+before measuring the amplitude = paying for the candidate's death
+with maximum resources.
 
-**Примеры.** GLM v1: член рубрики «годовой режим» — пилот SPOT30
-+0.53 (t +5.50), dir hit положителен в каждом годе (64/75/73/76/77/58);
-на 189 свежих днях **+0.053 (t +0.73)**, hit 52% при базе 56%.
-Диагноз: селекция 80 стратифицированных дней + знание автором годовых
-режимов (in-sample веса) — могила 118, страйк S2. CTREND: агрегация
-мульти-горизонтных (до годовых) трендов — тот же календарный
-механизм поверх репакеджа (100). Календарный класс целиком: Friday-13,
-hour-of-day, сессионные окна, CNY/Halloween — все мертвы (65, 83, 84).
+**Examples.** Basis arb ("10-20%/yr, nearly risk-free"): max |basis|
+for BTC over 123.5 days of 1m = **8.9bp < a single 20bp RT**;
+P(|b|>10bp) = 0 minutes in 4 months; ETH — 3 tradable minutes
+(grave 79). Stat-arb pairs: cost 0.20% RT against a pooled t −3.7
+(an anti-edge) (55). Grid family: 4/5 arms auto-dead at the 20bp
+line before any statistics (93-97). Weekend fade: max premium
++3.25pp < the 5pp kill bar (81). Hour-of-day: best hour +0.04% <
+10bp RT (65). BTC/ETH IV spread: gross $9-19 against an RT haircut
+of $296 (35).
 
-**Правило.** В скоринге/рубрике не должно быть year/regime-членов;
-годовые дамми в регрессии — необходимый, но недостаточный контроль;
-обязательна репликация на свежих днях, которых не видел автор скоринга.
+**Rule.** The amplitude is measured with a single bounded probe
+before any infrastructure; gross < the cost line → the family closes
+without a prereg (the cause of death is recorded, no track is spent).
 
-### ФЛАГ 8. Управляемый turnover > 20 RT/год → COST-DEATH по конструкции
+### FLAG 7. A yearly prior in scoring → calendar contamination
 
-**Механизм.** Turnover — это выбор дизайна, а не рынка. Дом-линия
-20 RT/год: кандидат, которому для жизни нужен больший оборот, умирает
-от издержек раньше, чем статистика успевает что-то сказать. Редизайн
-«снизить оборот» часто вскрывает, что эдж и был частотой обновления.
+**Mechanism.** Any scoring/rubric term encoding "which year/regime we
+are in now" (an explicit year prior, a multi-year lookback trend, the
+author's knowledge of yearly regimes) makes the in-sample correlation
+with the actual trajectory trivially high. OOS on fresh days —
+collapse.
 
-**Примеры.** XS funding-carry hysteresis: два пре-декларированных
-kill — (1) turnover не снизился ниже 20 (mean 20.7 / max 28.4 RT/год;
-исходная weekly-рука 24.8 / 33.4) и (2) Sharpe коллапсировал при
-вынужденном удержании (NW5 −0.05, EV −1.88%/год против baseline
-+29.86) — **сработали ОБА**; «эдж = еженедельный refresh экстремумов,
-не держимый сигнал» (`runs/funding_carry_hysteresis.log`, могила 115).
-Basis term structure: все 12 ячеек убиты оборотом 171-1105 RT/год/символ
-(104). Funding-грид: до 1.8M RT/год (94).
+**Examples.** GLM v1: the "yearly regime" rubric term — pilot SPOT30
++0.53 (t +5.50), dir hit positive in every year (64/75/73/76/77/58);
+on 189 fresh days **+0.053 (t +0.73)**, hit 52% against a 56% base.
+Diagnosis: the selection of 80 stratified days + the author's
+knowledge of yearly regimes (in-sample weights) — grave 118, strike
+S2. CTREND: the aggregation of multi-horizon (up to yearly) trends —
+the same calendar mechanism on top of repackaging (100). The
+calendar class as a whole: Friday-13, hour-of-day, session windows,
+CNY/Halloween — all dead (65, 83, 84).
 
-**Правило.** Turnover проектируется до рана; прогноз > 20 RT/год =
-construction closed; если гистерезис/филтр убивает Sharpe — сигнала
-не было, была частота переторговки.
+**Rule.** No year/regime terms in scoring or the rubric; year dummies
+in a regression are a necessary but insufficient control; replication
+on fresh days the scoring's author never saw is mandatory.
+
+### FLAG 8. Controlled turnover > 20 RT/yr → COST-DEATH by construction
+
+**Mechanism.** Turnover is a design choice, not a market property.
+The house line is 20 RT/yr: a candidate that needs more turnover to
+live dies of costs before the statistics get a word in. The "reduce
+the turnover" redesign often reveals that the edge was the refresh
+frequency itself.
+
+**Examples.** XS funding-carry hysteresis: two pre-declared kills —
+(1) turnover did not drop below 20 (mean 20.7 / max 28.4 RT/yr; the
+original weekly arm 24.8 / 33.4) and (2) Sharpe collapsed under
+forced holding (NW5 −0.05, EV −1.88%/yr against a baseline of
++29.86) — **BOTH fired**; "the edge = the weekly refresh of
+extremes, not a holdable signal"
+(`runs/funding_carry_hysteresis.log`, grave 115). Basis term
+structure: all 12 cells killed by turnover of 171-1105
+RT/yr/symbol (104). Funding grid: up to 1.8M RT/yr (94).
+
+**Rule.** Turnover is designed before the run; a forecast above
+20 RT/yr = construction closed; if a hysteresis/filter kills the
+Sharpe — there was no signal, only an overtrading frequency.
 
 ---
 
-## РАЗДЕЛ 2. CASE STUDIES — 5 самых поучительных смертей
+## SECTION 2. CASE STUDIES — the 5 most instructive deaths
 
-Пять смертей из 130+, выбранные по одному критерию: урок обобщается
-на целый класс будущих гипотез. Каждая — с механизмом, числами и
-надгробием.
+Five deaths out of 130+, chosen by a single criterion: the lesson
+generalizes to a whole class of future hypotheses. Each comes with a
+mechanism, numbers and a tombstone.
 
-### CASE 1. CVD → retest_delay: красивейший сырой сигнал, пустой после контролов (INCREMENTAL-DEATH)
+### CASE 1. CVD → retest_delay: a beautiful raw signal, empty after controls (INCREMENTAL-DEATH)
 
-**Гипотеза.** CVD-дивергенция (агрессивный поток против движения цены)
-подтверждает входы ноги C'' — «толпа продаёт, умные покупают».
-Первый кандидат раунда-6, выглядевший как настоящий эдж.
+**Hypothesis.** CVD divergence (aggressive flow against the price
+move) confirms entries on the C'' leg — "the crowd sells, the smart
+money buys". Round-6's first candidate, and it looked like a real
+edge.
 
-**Что убило.** Не батарея — она была ROBUST. Убил инкрементальный
-тест против известных фич. Сырая картина: long-side подтверждение
-+0.217R [+0.083, +0.350], hit_tp +5.3pp, 5/6 лет; полная батарея:
-порог без обрыва, инвариантность к нормализатору, все 3 субпериода +,
-LOO ±0.01R, placebo percentile 100.0 (0/200 draws, p ≤ 0.005).
-Затем инкременталь поверх OB-контролов: slope_z t +1.05 (нужно > 2),
-ΔR² +0.0004; весь lift поглощён zone_width_atr (t −9.6) и
-retest_delay (t −9.2). По символам BTC −0.41 / ETH +0.78 / SOL +0.94
-— «сигнал» = шумный прокси retest_delay.
+**What killed it.** Not the battery — the battery was ROBUST. The
+incremental test against known features killed it. The raw picture:
+long-side confirmation +0.217R [+0.083, +0.350], hit_tp +5.3pp,
+positive in 5/6 years; full battery: no threshold cliff, invariance
+to the normalizer, all 3 subperiods positive, LOO ±0.01R, placebo
+percentile 100.0 (0/200 draws, p ≤ 0.005). Then the incremental on
+top of OB controls: slope_z t +1.05 (needs > 2), ΔR² +0.0004; the
+entire lift is absorbed by zone_width_atr (t −9.6) and retest_delay
+(t −9.2). By symbol: BTC −0.41 / ETH +0.78 / SOL +0.94 — the
+"signal" is a noisy proxy for retest_delay.
 
-**Механизм.** CVD коррелирован с геометрией зоны OB: там, где зона
-узкая и ретест быстрый, дивергенция «случается» чаще — и там же
-систематически лучше EV. Регрессия это вскрыла за один проход;
-три года наблюдений тратились бы впустую без неё.
+**Mechanism.** CVD is correlated with OB zone geometry: where the
+zone is narrow and the retest fast, divergences "happen" more often —
+and EV is systematically better there too. One regression pass
+exposed this; without it, three years of observations would have
+been wasted.
 
-**Урок (обобщается).** Батарея робастности и placebo проверяют, что
-эффект не шум; только контролы проверяют, что он не ЧУЖОЙ. С этого
-дня инкрементальные контролы с известными фичами — обязательный СТАРТ
-любого скрина, не финальная проверка. Механика повторилась минимум
-трижды: trade-size моменты (skew −2.48 raw → −1.46 после контролов),
-BTC.D (t 3.52 сырой → 0.16 после контролов momentum-ног), L/S ratio
-(hi_d t +1.86 после OB-контролов). Отдельный под-урок: сырая
-регрессия t ±10-14 = конфаунд |BTC-move|, не сигнал.
+**Lesson (generalizes).** The robustness battery and placebo check
+that the effect is not noise; only controls check that it is not
+SOMEONE ELSE'S. From that day on, incremental controls against known
+features are the mandatory START of every screen, not the final
+check. The same mechanics repeated at least three times: trade-size
+moments (skew −2.48 raw → −1.46 after controls), BTC.D (t 3.52 raw →
+0.16 after momentum-leg controls), L/S ratio (hi_d t +1.86 after OB
+controls). A separate sub-lesson: a raw regression t of ±10-14 = the
+|BTC-move| confound, not a signal.
 
-**Надгробие.** Раздел 5 кладбища, «волна 3(б)»; survivor CVD-forward
-с пониженным prior; `runs/cvd_ob_independence.log`,
+**Tombstone.** Graveyard section 5, "wave 3(b)"; the survivor
+CVD-forward with a lowered prior; `runs/cvd_ob_independence.log`,
 `runs/vpin_cvd_screen.log`.
 
-### CASE 2. MAX effect: риск-премия в крипте отрицательна (INVERTED-DEATH)
+### CASE 2. MAX effect: the risk premium in crypto is negative (INVERTED-DEATH)
 
-**Гипотеза.** Академический перенос: лонг спокойных / шорт лотерейных
-(низкий/высокий MAX30, Bali-Cakici-Whitelaw 2011). На акциях фактор
-работает десятилетиями — знак считался данным.
+**Hypothesis.** An academic port: long calm / short lottery-like
+(low/high MAX30, Bali-Cakici-Whitelaw 2011). On equities the factor
+has worked for decades — the sign was treated as given.
 
-**Что убило.** Знак. Репакедж-контролы пройдены (ρ(MAX, β) +0.502 <
-0.7; overlap с реверс-агентом max|ρ| 0.07; turnover 0.44-1.47 RT/год
-— kill даже не понадобился). 200-draw shuffled-factor placebo на
-каждую руку. Результат: LS net **−47.2%/год** weekly — на 5.0-м
-перцентиле shuffled-распределения (дно), Sharpe −0.56, DD 442%.
-Лотерейные монеты перформировали. Monthly-рука +9.9% (beats 71.1% —
-ниже бара 95%) → NO в обеих руках. Сиблинг downside beta
-(Ang-Chen-Xing 2006): LS −38.2%/год weekly, reverse tail 90.5/94.5%;
-инверсные лонг-ноги обеих книг +38..+59%/год.
+**What killed it.** The sign. Repackaging controls passed (ρ(MAX, β)
++0.502 < 0.7; overlap with the reversal agent max|ρ| 0.07; turnover
+0.44-1.47 RT/yr — the kill-line was not even needed). A 200-draw
+shuffled-factor placebo per arm. Result: LS net **−47.2%/yr** weekly
+— at the 5.0th percentile of the shuffled distribution (the bottom),
+Sharpe −0.56, DD 442%. The lottery coins underperformed. The monthly
+arm +9.9% (beats 71.1% — below the 95% bar) → NO in both arms.
+Sibling downside beta (Ang-Chen-Xing 2006): LS −38.2%/yr weekly,
+reverse tail 90.5/94.5%; the inverted long legs of both books
++38..+59%/yr.
 
-**Механизм.** В крипто-кросс-секции за риск платят: монеты с
-лотерейными хвостами и высоким down-side beta — это рычажная ставка
-на рынок, которая в бычьем режиме переплачивает. «Спокойные» —
-недоходный хвост. Академический знак = ставка против структуры
-этого рынка, и данные это говорят одним числом.
+**Mechanism.** In the crypto cross-section risk is paid for: coins
+with lottery tails and high down-side beta are a leveraged bet on
+the market that overpays in bull regimes. The "calm" ones are the
+underearning tail. The academic sign = a bet against the structure
+of this market, and the data says so with a single number.
 
-**Урок (обобщается).** Известный факт из акций переносится как
-ВОПРОС, не как направление. premise-check знака на сырых данных
-стоит один query и убивает инвертированную книгу до всей работы.
-Флаг 5 — прямое следствие этого кейса; для всех будущих фактор-скринов
-инверсия учтена заранее. Отметить честность протокола: смерть
-зафиксирована ДО пререга, на батарее-премортеме — ресурсы пререг-слота
-не потрачены.
+**Lesson (generalizes).** A known fact from equities ports over as a
+QUESTION, not as a direction. A sign premise-check on raw data costs
+one query and kills the inverted book before any of the work.
+Flag 5 is the direct consequence of this case; the inversion is
+priced in up front for all future factor screens. Note the
+protocol's honesty: the death was recorded BEFORE the prereg, on a
+battery-pre-mortem — the prereg slot's resources were never spent.
 
-**Надгробие.** Могилы 101-102, TAXONOMY: INVERTED-DEATH введён как
-термин этим кейсом; `runs/round12_xs_academic.log`.
+**Tombstone.** Graves 101-102, TAXONOMY: INVERTED-DEATH was
+introduced as a term by this case; `runs/round12_xs_academic.log`.
 
-### CASE 3. Hurst: shuffled выше реального — рождение анти-bias протокола (estimator bias)
+### CASE 3. Hurst: shuffled above real — the birth of the anti-bias protocol (estimator bias)
 
-**Гипотеза.** Rolling-Hurst различает тренд/хаос и предсказывает
-следующий день спреда A-vs-C'' — режимный фильтр/свитч.
+**Hypothesis.** Rolling Hurst distinguishes trend/chaos and predicts
+the next day of the A-vs-C'' spread — a regime filter/switch.
 
-**Что убило.** Синтетический null. Реальный H внутри 95% бэндов
-92-96% времени. Решающее число: **H shuffled-рядов 0.627 против
-реального 0.618** — ряды, у которых структура разрушена by
-construction, дают МЕДИАННЫЙ Hurst ВЫШЕ рыночного. Оценщик меряет
-собственное смещение, а не рынок. Предиктивный тест: все CI через
-ноль. Арматура гипотезы развалилась дополнительно: рука H<0.4 —
-0 дней при W=400; H>0.6 горит 42-57% времени («трендовый день» =
-почти всегда); безусловный спред A−C'' = −0.98 — «переключиться на
-A» = борьба с базовым рейтом системы.
+**What killed it.** The synthetic null. The real H sits inside the
+95% bands 92-96% of the time. The decisive number: **the H of
+shuffled series 0.627 against the real 0.618** — series whose
+structure is destroyed by construction produce a MEDIAN Hurst HIGHER
+than the market's. The estimator measures its own bias, not the
+market. The predictive test: every CI spans zero. The rest of the
+hypothesis's scaffolding collapsed as well: the H<0.4 arm — 0 days
+at W=400; H>0.6 fires 42-57% of the time ("a trend day" = almost
+always); the unconditional A−C'' spread = −0.98 — "switch to A" =
+fighting the system's base rate.
 
-**Механизм.** R/S-оценка Hurst положительно смещена на конечных
-выборках с тяжелыми хвостами; shuffle сохраняет маргинальное
-распределение, разрушает память — и если shuffled-H не падает ниже
-реального, «памяти» в данных для этого оценщика нет. Бэнды из GBM +
-shuffled показали это до всякого предиктивного теста.
+**Mechanism.** The R/S Hurst estimator is positively biased on finite
+heavy-tailed samples; a shuffle preserves the marginal distribution
+and destroys the memory — and if the shuffled-H does not drop below
+the real value, there is no "memory" in the data for this estimator.
+The GBM + shuffled bands showed this before any predictive test.
 
-**Урок (обобщается).** Оценщик — часть гипотезы: он подлежит аудиту
-синтетическим null так же, как сигнал (та же логика, что волна 1:
-баг симулятора D.13g = часть гипотезы). Анти-bias протокол: перед
-любым claim «рынок трендовый/хаотичный по метрике X» — посчитать X
-на GBM и shuffled, построить 95% бэнды; реальное значение внутри
-бэндов = метрика неинформативна, дальше тестировать нечего. Семья
-«describe-but-don-predict» добита этим же протоколом до 10/10
-(флаг 2).
+**Lesson (generalizes).** The estimator is part of the hypothesis: it
+must be audited with a synthetic null exactly like the signal (the
+same logic as wave 1: the D.13g simulator bug = part of the
+hypothesis). The anti-bias protocol: before any claim that "the
+market is trending/chaotic by metric X" — compute X on GBM and
+shuffled series, build the 95% bands; the real value inside the
+bands = the metric is uninformative, there is nothing left to test.
+The "describe-but-don't-predict" family was finished off by this
+same protocol to 10/10 (flag 2).
 
-**Надгробие.** Могила 90 (OVERFIT-DEATH); сиблинги entropy 92 (saturat
-0.994/1.0), grid-Hurst 95 (ΔSharpe −2.22); `runs/hurst_entropy_screen.log`.
+**Tombstone.** Grave 90 (OVERFIT-DEATH); siblings entropy 92
+(saturation 0.994/1.0), grid-Hurst 95 (ΔSharpe −2.22);
+`runs/hurst_entropy_screen.log`.
 
-### CASE 4. Basis 8.9bp: замер амплитуды ДО инфраструктуры (COST-DEATH априорно)
+### CASE 4. Basis 8.9bp: measuring the amplitude BEFORE the infrastructure (COST-DEATH a priori)
 
-**Гипотеза.** Клейм ревьюера: «дислокации базиса спот/перп — 10-20%/
-год, почти безрисковый арбитраж».
+**Hypothesis.** The reviewer's claim: "spot/perp basis dislocations
+are 10-20%/yr, near-riskless arbitrage".
 
-**Что убило.** Один bounded-probe с новым фетчем: 123.5 дня 1m spot И
-perp BTC/ETH/SOL (2026-07..11). Весь диапазон |basis| BTC — макс
-**8.9bp**, меньше стоимости одного 20bp RT; P(|b|>10bp) = **0 минут
-за 4 месяца**. ETH: 3 торгуемые минуты за 123 дня. SOL: «дислокация»
-= персистентный дисконт −5..−13bp — naive harvest −25.6%/год;
-медианное время возврата к нулю с −10bp = 5.9 дней против 48h exit.
-Реальный funding 3-7%/год, не 10-20%. Клейм умер по обеим ногам:
-амплитуды нет и yield-а нет.
+**What killed it.** A single bounded probe with a fresh fetch:
+123.5 days of 1m spot AND perp for BTC/ETH/SOL (2026-07..11). BTC's
+entire |basis| range — max **8.9bp**, less than the cost of one
+20bp RT; P(|b|>10bp) = **0 minutes in 4 months**. ETH: 3 tradable
+minutes in 123 days. SOL: the "dislocation" is a persistent discount
+of −5..−13bp — naive harvest −25.6%/yr; the median time to revert to
+zero from −10bp is 5.9 days against a 48h exit. Real funding is
+3-7%/yr, not 10-20%. The claim died on both legs: no amplitude and
+no yield.
 
-**Механизм.** Арбитражных дислокаций на мажорах уже нет — их
-съедает арбитражаж быстрее, чем REST-инфраструктура успевает увидеть.
-То, что выглядит «почти безрисковым доходом» в рассказе, на данных
-оказывается распределением, у которого хвост правее cost-линии пуст.
+**Mechanism.** Arbitrage dislocations on the majors no longer exist —
+arbitrage flow eats them faster than REST infrastructure can even
+see them. What reads as "nearly riskless yield" in the telling turns
+out, on the data, to be a distribution whose tail to the right of
+the cost line is empty.
 
-**Урок (обобщается).** Порядок операций при любом «известном клейме»:
-(1) bounded-probe амплитуды — часы; (2) сравнение с cost-линией —
-одна строка; (3) только при gross > line — инфраструктура и пререг.
-Флаг 6 — прямое следствие. Прецеденты той же механики: IV-спред gross
-$9-19 vs haircut $296 (35), SKEW-1 gross +2.86pt < floor 3.0pt (37),
-funding_carry v1 +1.59bp/д vs costs 10.5bp/д (22). Заметь: в этих
-случаях предиктор был РЕАЛЕН и СИЛЁН (SKEW Spearman +0.473 — сильнейший
-в доме) — экономика убивает даже работающие предикторы.
+**Lesson (generalizes).** The order of operations for any "known
+claim": (1) a bounded amplitude probe — hours; (2) the comparison
+with the cost line — one line; (3) only if gross > the line —
+infrastructure and a prereg. Flag 6 is the direct consequence.
+Precedents with the same mechanics: IV spread gross $9-19 vs a
+$296 haircut (35), SKEW-1 gross +2.86pt < the 3.0pt floor (37),
+funding_carry v1 +1.59bp/d vs costs of 10.5bp/d (22). Note: in these
+cases the predictor was REAL and STRONG (SKEW Spearman +0.473 — the
+strongest in the house) — economics kills even working predictors.
 
-**Надгробие.** Могила 79 (NULL-DEATH по premise; cost-класс в
-приложениях); `runs/basis_dislocation_screen.log`.
+**Tombstone.** Grave 79 (NULL-DEATH on the premise; the cost class in
+the appendices); `runs/basis_dislocation_screen.log`.
 
-### CASE 5. GLM v1: годовой prior в скоринге —masked momentum, OOS коллапс (календарная контаминация)
+### CASE 5. GLM v1: a yearly prior in scoring — masked momentum, OOS collapse (calendar contamination)
 
-**Гипотеза.** GLM-скор контекста (рубрика: IV-пол / MVRV-продолжение /
-**годовой режим** / skew-знак / term-инверсия) предсказывает forward
-spot 30д. Пилот: слепой скоринг 80 стратифицированных дней 2021-2026
-до распечатывания sealed исходов.
+**Hypothesis.** A GLM context score (rubric: IV floor / MVRV
+continuation / **yearly regime** / skew sign / term inversion)
+predicts forward 30d spot. Pilot: blind scoring of 80 stratified
+days from 2021-2026 before unsealing the sealed outcomes.
 
-**Что убило.** N-расширение на 189 свежих дней. Пилот: SPOT30 +0.53
-(t +5.50), dir hit 64/75/73/76/77/58% — положителен в КАЖДОМ годе;
-momentum-контроль «выживал» (t +4.41 → +4.56), holdout fit 2021-24 →
-2025-26 давал +0.657 (t +4.18) — holdout сильнее ин-сэмпла. Кандидат
-пере-ранжирован в топ, рубрика заморожена пререгом. Затем 189 новых
-дней: **SPOT30 +0.053 (t +0.73)** против +0.53; dir hit 52% при базе
-56%; 2026-флаг подтверждён (hit 42%). Диагноз: пилот = селекция 80
-стратифицированных дней + знание автором годовых режимов — член
-рубрики «годовой режим» нёс календарь, который в пилоте совпал с
-фактической траекторией, а на свежих днях не нёс ничего.
+**What killed it.** The N-extension to 189 fresh days. Pilot: SPOT30
++0.53 (t +5.50), dir hit 64/75/73/76/77/58% — positive in EVERY
+year; the momentum control "survived" (t +4.41 → +4.56), a holdout
+fit 2021-24 → 2025-26 gave +0.657 (t +4.18) — the holdout was
+stronger than in-sample. The candidate was re-ranked to the top and
+the rubric frozen by a prereg. Then 189 new days: **SPOT30 +0.053
+(t +0.73)** against +0.53; dir hit 52% against a 56% base; the 2026
+flag confirmed (hit 42%). Diagnosis: the pilot = the selection of 80
+stratified days + the author's knowledge of yearly regimes — the
+"yearly regime" rubric term carried the calendar, which happened to
+match the actual trajectory in the pilot and carried nothing on the
+fresh days.
 
-**Механизм.** Скор, содержащий year-приор, механически «угадывает»
-режим каждого года: в бычьем году он лонгирует, в медвежьем — нет.
-Кросс-валидации и holdout-сплиты внутри пилотной выборки это не ловят,
-потому что год-приор валиден на всей пилотной истории. Ловит только
-forward-репликация на днях, которых не видел ни скор, ни автор.
+**Mechanism.** A score containing a year prior mechanically "guesses"
+each year's regime: in a bull year it goes long, in a bear year it
+does not. Cross-validation and holdout splits inside the pilot
+sample do not catch this, because the year prior is valid across the
+entire pilot history. Only a forward replication on days seen by
+neither the score nor its author catches it.
 
-**Урок (обобщается).** Годовой prior в скоринге = masked momentum
-(флаг 7). Домашняя модель не исключение из дисциплины: GLM умер тем
-же инкрементальным тестом, что и CVD (v2: t +3.10 формально, t +0.73
-после iv_pct/rv_pct/mvrv/skew; post-mortem — placebo percentile 100,
-но весь эффект в одной ячейке mid-IV × MVRV>75, где скор = эхо
-MVRV-моментума; declustering t 3.09 → 2.70; атрибуция = levered beta
-tilt: падающие месяцы −10.4% против +4.8% растущие). Три страйка
-(C''-репакедж, календарь, v3-конъюнкция: t +0.34, контроль mvrv_only
-бьёт конъюнкцию на −3.68pp) → GLM-as-feature закрыт навсегда;
-промпт-туры запрещены: подгонка промптов = майнинг. Post-mortem-лог
-(`runs/glm_v2_postmortem.log`) — эталон вскрытия: reproduction →
-placebo → квинтили → режим-ячейки → declustering → атрибуция.
+**Lesson (generalizes).** A yearly prior in scoring = masked momentum
+(flag 7). The house model is no exception to the discipline: GLM
+died by the same incremental test as CVD (v2: t +3.10 formally,
+t +0.73 after iv_pct/rv_pct/mvrv/skew; post-mortem — placebo
+percentile 100, but the whole effect sits in the single
+mid-IV × MVRV>75 cell, where the score is an MVRV-momentum echo;
+declustering t 3.09 → 2.70; attribution = a levered beta tilt:
+falling months −10.4% against +4.8% for rising). Three strikes (the
+C'' repackaging, the calendar, the v3 conjunction: t +0.34, with the
+mvrv_only control beating the conjunction by −3.68pp) →
+GLM-as-feature closed for good; prompt tours are banned:
+prompt-fitting = mining. The post-mortem log
+(`runs/glm_v2_postmortem.log`) is the reference autopsy:
+reproduction → placebo → quintiles → regime cells → declustering →
+attribution.
 
-**Надгробие.** Могила 118 (3-STRIKE PERMANENT CLOSE, PARADIGM-DEATH);
+**Tombstone.** Grave 118 (3-STRIKE PERMANENT CLOSE, PARADIGM-DEATH);
 `PREREG_GLM_SPOT_2026-11-02.md`; `runs/glm_v2_postmortem.log`.
 
 ---
 
-## РАЗДЕЛ 3. ЧЕК-ЛИСТ АГЕНТА — 7 пунктов ПЕРЕД запуском субагента
+## SECTION 3. AGENT CHECKLIST — 7 items BEFORE launching a subagent
 
-Рамка слотов — `DEPLOY_SPEC_V1.md` §8: 4 агента (A: core, B: gateway,
-C: API/Telegram/Docker, D: presentation) + лид-аудитор на каждый
-скоуп. Каждый пункт чек-листа — бинарный вопрос; ответ «нет»/«не
-раскрыт» = агент не запускается.
+The slot frame is `DEPLOY_SPEC_V1.md` §8: 4 agents (A: core, B:
+gateway, C: API/Telegram/Docker, D: presentation) + a lead auditor
+per scope. Every checklist item is a binary question; a "no"/"not
+disclosed" answer = the agent does not launch.
 
-**1. SLOTS: максимум 4-5 параллельных агентов.**
-По DEPLOY_SPEC §8 — 4 агента + лид; не больше. Урок марафона: при
-большем числе слотов ломается учёт — зафиксированы «фантомный
-счётчик» (ctrend/onchain значились «в полёте», будучи закрытыми) и
-10 из 13 компонентов парного стека в статусе PENDING из-за не
-вернувшегося агента-2. Правило: слот = агент с one-shot скоупом и
-датированным вердиктом; «в полёте» без даты = разыскивать, не
-запускать новое.
+**1. SLOTS: at most 4-5 parallel agents.**
+Per DEPLOY_SPEC §8 — 4 agents + a lead; no more. The marathon lesson:
+with more slots, accounting breaks — a "phantom counter" was recorded
+(ctrend/onchain listed as "in flight" while already closed), and 10
+of 13 pairs-stack components sat in PENDING because agent-2 never
+returned. The rule: a slot = an agent with a one-shot scope and a
+dated verdict; "in flight" without a date = hunt it down, do not
+launch anything new.
 
-**2. GRAVEYARD check: гипотеза уже мертва?**
-Перед брифингом — найти ближайшую семью в graveyard вашего workspace
-(`hypotheses/graveyard/`; scaffold with `atropos init`).
-Прецедент: 3 из 49 направлений внешнего ревьюера уже были закрыты
-собственными тестами дома; повторное тестирование избегнуто только
-сверкой с историей. Если предложение отличается от похороненного
-только параметром/обёрткой — это переоткрытие: требует явного
-раскрытия закрытой истории в новом датированном пререге, иначе не
-запускается.
+**2. GRAVEYARD check: is the hypothesis already dead?**
+Before briefing — find the closest family in your workspace's
+graveyard (`hypotheses/graveyard/`; scaffold with `atropos init`).
+Precedent: 3 of the external reviewer's 49 directions had already
+been closed by the house's own tests; re-testing was avoided only by
+checking the history. If a proposal differs from a buried one only
+by a parameter/wrapper — that is a rediscovery: it requires the
+closed history to be disclosed explicitly in a new dated prereg,
+otherwise it does not launch.
 
-**3. DATA: данные в репо или DATA-BLOCKED?**
-Bounded probe бесплатных источников ДО брифинга. В кладбище 7+
-DATA-BLOCKED смертей: miner reserves (Glassnode 401, ~$800/мес),
-whale front-running (нет бесплатной labeled-серии + sub-second
-механика), event NLP (календарь без таймстампов/CPI), XS momentum
-(delisted-inclusive вселенная), DeFi ликвидации (аукцион закрывается
-в блоке), Max Pain (OI-by-strike не бесплатен), price/new-addr
-(истинная AdrNewCnt за paywall). Unlock-артефакты (fetche-parqуеты)
-переиспользуются — но «данные платные» = направление не открывается.
+**3. DATA: is the data in the repo, or DATA-BLOCKED?**
+A bounded probe of the free sources BEFORE briefing. The graveyard
+holds 7+ DATA-BLOCKED deaths: miner reserves (Glassnode 401,
+~$800/mo), whale front-running (no free labeled series + sub-second
+mechanics), event NLP (a calendar without timestamps / CPI), XS
+momentum (a delisted-inclusive universe), DeFi liquidations (the
+auction closes within the block), Max Pain (OI-by-strike is not
+free), price/new-addr (true AdrNewCnt behind a paywall). Unlock
+artifacts (the fetch-parquet sets) are reused — but "the data is
+paywalled" = the direction does not open.
 
-**4. NULLS: 3-6 контролов; momentum + известные фичи — минимум.**
-CVD-урок вшит: инкрементальные контролы — СТАРТ скрина, не финал.
-Минимальный набор: momentum (30d или горизонт кандидата) + семейство
-известных фич домена (OB-контролы zone_width/retest_delay для
-микроструктурных кандидатов; |BTC-move| для conditioning; beta для
-XS-книг). Плюс null внешнего ревьюера verbatim, если заявлен, и
-placebo 200 draws для книги. Без контролов кандидат = описательная
-статистика (флаг 2).
+**4. NULLS: 3-6 controls; momentum + known features at minimum.**
+The CVD lesson is built in: incremental controls are the START of a
+screen, not the finale. The minimal set: momentum (30d or the
+candidate's horizon) + the domain's family of known features (OB
+controls zone_width/retest_delay for microstructure candidates;
+|BTC-move| for conditioning; beta for XS books). Plus the external
+reviewer's null verbatim if one is claimed, and a 200-draw placebo
+for the book. Without controls a candidate = descriptive statistics
+(flag 2).
 
-**5. KILL: критерии verbatim, пороги заморожены до данных.**
-Эталон конструкции — `PREREG_OFI_SHADOW_2026-11-02.md` §7: гейты
-таблицей с порогами (executable econ ≥ 40bp; half-life > 2×(poll +
-RTT); t > 2 one-sided AND ΔR² ≥ 0.003 над OB-фичами; знак стабилен
-по terciles), kill-строка verbatim: «t < 2 incremental ИЛИ placebo
-p > 0.05», immutable hash файла до первого снапшота. One-shot
-правило: один прогон по замороженному пререгу; правка после рана =
-новая версия, старый тест аннулирован. Ноль параметров после данных
-(флаг 3).
+**5. KILL: criteria verbatim, thresholds frozen before the data.**
+The reference design is `PREREG_OFI_SHADOW_2026-11-02.md` §7: gates
+in a table with thresholds (executable econ ≥ 40bp; half-life >
+2×(poll + RTT); t > 2 one-sided AND ΔR² ≥ 0.003 over the OB features;
+the sign stable across terciles), the kill-line verbatim: "t < 2
+incremental OR placebo p > 0.05", the file's immutable hash before
+the first snapshot. The one-shot rule: a single run against the
+frozen prereg; an edit after the run = a new version, the old test
+void. Zero parameters after the data (flag 3).
 
-**6. CALENDAR: годовой prior в скоринге? → убрать или контролировать.**
-GLM v1-урок: член «годовой режим» в рубрике скоринга замаскировал
-momentum и дал ложный пилот +0.53 → OOS +0.053. Проверка: нет ли в
-скоринге/фильтре членов, кодирующих год/режим (явные дамми,
-мульти-летний lookback, «знание» автора). Если убрать нельзя —
-year-дамми в регрессии обязательны + репликация на свежих днях вне
-пилотной выборки. Календарный класс аномалий (праздники, часы,
-сессии) — похоронен; не запускать без нового механизма.
+**6. CALENDAR: a yearly prior in scoring? → remove it or control for it.**
+The GLM v1 lesson: the "yearly regime" term in the scoring rubric
+masked the momentum and produced a false pilot of +0.53 →
+OOS +0.053. Check whether the scoring/filtering carries terms
+encoding year/regime (explicit dummies, a multi-year lookback, the
+author's "knowledge"). If removal is impossible — year dummies in
+the regression are mandatory + replication on fresh days outside the
+pilot sample. The calendar class of anomalies (holidays, hours,
+sessions) — buried; do not launch without a new mechanism.
 
-**7. HONEST FRAME: COST-DEAD база? survivorship? power? — раскрыто до рана.**
-Три обязательных дисклоужера в брифе: (a) экономическая рамка —
-если gross на лезвии издержек, так и пишется (SKEW-1: floor 3.0pt
-объявлен ДО рана); (b) survivorship — если вселенная из живых
-символов, книга завышена (XS momentum: long-only = survivorship-мираж,
-шорт минус во всех конфигах); (c) power — при малом окне статусы
-«UNDECIDABLE» допустимы и честны (basis term structure: 123.5d окно,
-power-honesty объявлена; sniper z>2.5: класс пуст, n=9 undecidable).
-Плюс концентрация годов (флаг 4) и funding-покрытие шортов (BAB:
-54.6% файлов с 2023-09) — всё в брифе, не в post-mortem.
+**7. HONEST FRAME: COST-DEAD base? survivorship? power? — disclosed before the run.**
+Three mandatory disclosures in the briefing: (a) the economic frame —
+if gross sits right on the cost line, say exactly that (SKEW-1: the
+3.0pt floor was declared BEFORE the run); (b) survivorship — if the
+universe is living symbols only, the book is inflated (XS momentum:
+long-only = a survivorship mirage, the short leg minus in every
+configuration); (c) power — on a small window, "UNDECIDABLE"
+statuses are allowed and honest (basis term structure: a 123.5d
+window, power honesty declared; sniper z>2.5: the class is empty,
+n=9 undecidable). Plus year concentration (flag 4) and funding
+coverage of the shorts (BAB: 54.6% of files from 2023-09) — all of
+it in the briefing, not in a post-mortem.
 
-### КРАСНАЯ НИТЬ (§9 фреймворка)
+### THE RED THREAD (§9 of the framework)
 
-Одна строка, которая держит весь pipeline — от идеи до вердикта:
+The one line that holds the entire pipeline — from idea to verdict:
 
-> **Проверь могилы → прогони pipeline → один прогон → один вердикт →
-> graveyard или прereg.**
+> **Check the graves → run the pipeline → one run → one verdict →
+> graveyard or prereg.**
 
-Ноль параметров после данных. Ноль календарей в скоринге. Ноль
-«может быть пригодится». Каждая гипотеза входит через чек-лист выше
-и выходит ровно в один из двух исходов; третьего не существует.
+Zero parameters after the data. Zero calendars in scoring. Zero
+"might come in handy". Every hypothesis enters through the checklist
+above and exits into exactly one of two outcomes; there is no third.
 
 ---
 
-*Смежные документы фреймворка: FRAMEWORK.md (§6 — 6 систематических
-законов марафона; §9 — красная нить), TEMPLATES.md (шаблон брифинга
-агента включает пункты чек-листа 2/4/5/7 как обязательные поля).*
-*Источники-числа: `docs/THEORY_GRAVEYARD.md` v1.1.1,
-`RESPONSE_S10_PROPOSAL_2026-11-01.md` (16 раундов),
+*Related framework documents: FRAMEWORK.md (§6 — the 6 systematic
+laws of the marathon; §9 — the red thread), TEMPLATES.md (the agent
+briefing template includes checklist items 2/4/5/7 as mandatory
+fields).*
+*Number sources: `docs/THEORY_GRAVEYARD.md` v1.1.1,
+`RESPONSE_S10_PROPOSAL_2026-11-01.md` (16 rounds),
 `PREREG_OFI_SHADOW_2026-11-02.md`, `runs/glm_v2_postmortem.log`,
 `runs/funding_carry_hysteresis.log`, `runs/exkurt_walkforward.log`,
 `runs/pairs_stack_components.log`, `runs/round16_etf_flows.log`,
