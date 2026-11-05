@@ -346,7 +346,7 @@ def minimum_detectable_effect(
     """Smallest detectable partial R-squared at sample size ``n_obs``.
 
     Effect size is expressed as partial R-squared, consistent with the
-    rest of the library.  Delegates to
+    rest of the framework.  Delegates to
     ``power_calculator.detectable_effect`` (single new coefficient in a
     regression with ``n_predictors`` other regressors).
 

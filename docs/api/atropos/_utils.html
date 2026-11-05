@@ -379,7 +379,7 @@ modules need, so their behavior cannot drift apart between copies.</p>
 </span><span id="L-291"><a href="#L-291"><span class="linenos">291</span></a><span class="sd">    column rank, the model is not identified and every statistic is NaN</span>
 </span><span id="L-292"><a href="#L-292"><span class="linenos">292</span></a><span class="sd">    with ``rank_deficient=True``. A pseudo-inverse would otherwise</span>
 </span><span id="L-293"><a href="#L-293"><span class="linenos">293</span></a><span class="sd">    fabricate plausible-looking minimum-norm t-stats exactly in the</span>
-</span><span id="L-294"><a href="#L-294"><span class="linenos">294</span></a><span class="sd">    collinearity cases the library must flag, so callers are expected</span>
+</span><span id="L-294"><a href="#L-294"><span class="linenos">294</span></a><span class="sd">    collinearity cases the framework must flag, so callers are expected</span>
 </span><span id="L-295"><a href="#L-295"><span class="linenos">295</span></a><span class="sd">    to treat ``rank_deficient`` (or non-finite ``t``) as INCONCLUSIVE.</span>
 </span><span id="L-296"><a href="#L-296"><span class="linenos">296</span></a>
 </span><span id="L-297"><a href="#L-297"><span class="linenos">297</span></a><span class="sd">    Non-finite inputs (NaN/inf columns or target) and fits whose</span>
@@ -770,7 +770,7 @@ columns. Inputs of any other dimension raise <code>ValueError</code>.</p>
 </span><span id="ols_hc0-292"><a href="#ols_hc0-292"><span class="linenos">292</span></a><span class="sd">    column rank, the model is not identified and every statistic is NaN</span>
 </span><span id="ols_hc0-293"><a href="#ols_hc0-293"><span class="linenos">293</span></a><span class="sd">    with ``rank_deficient=True``. A pseudo-inverse would otherwise</span>
 </span><span id="ols_hc0-294"><a href="#ols_hc0-294"><span class="linenos">294</span></a><span class="sd">    fabricate plausible-looking minimum-norm t-stats exactly in the</span>
-</span><span id="ols_hc0-295"><a href="#ols_hc0-295"><span class="linenos">295</span></a><span class="sd">    collinearity cases the library must flag, so callers are expected</span>
+</span><span id="ols_hc0-295"><a href="#ols_hc0-295"><span class="linenos">295</span></a><span class="sd">    collinearity cases the framework must flag, so callers are expected</span>
 </span><span id="ols_hc0-296"><a href="#ols_hc0-296"><span class="linenos">296</span></a><span class="sd">    to treat ``rank_deficient`` (or non-finite ``t``) as INCONCLUSIVE.</span>
 </span><span id="ols_hc0-297"><a href="#ols_hc0-297"><span class="linenos">297</span></a>
 </span><span id="ols_hc0-298"><a href="#ols_hc0-298"><span class="linenos">298</span></a><span class="sd">    Non-finite inputs (NaN/inf columns or target) and fits whose</span>
@@ -845,7 +845,7 @@ asymptotic approximation for HC0, kept as the house convention.</p>
 column rank, the model is not identified and every statistic is NaN
 with <code>rank_deficient=True</code>. A pseudo-inverse would otherwise
 fabricate plausible-looking minimum-norm t-stats exactly in the
-collinearity cases the library must flag, so callers are expected
+collinearity cases the framework must flag, so callers are expected
 to treat <code>rank_deficient</code> (or non-finite <code>t</code>) as INCONCLUSIVE.</p>
 
 <p>Non-finite inputs (NaN/inf columns or target) and fits whose

@@ -1,7 +1,7 @@
 # Real-data example: SPY 12-1 time-series momentum through the ML kill protocol
 
-A runnable example of **calling the atropos library** on real market
-data.  Atropos is a library, not a framework: this directory is a
+A runnable example of **calling the atropos framework** on real market
+data.  Atropos is a falsification-first framework: this directory is a
 scripted demonstration of the calls — `generate_prereg` validates and
 renders the hypothesis you froze, `run_ml_kill_protocol` returns one
 report dict, and YOU decide what the verdicts mean for your pipeline.
@@ -32,7 +32,7 @@ evaluates the preregistered three-model comparison
 Order matters and the runner prints it: **prereg first, results
 second**.  `preregistration.py` holds the frozen params; the spec hash
 changes if you edit any frozen field.  Generating the prereg before
-looking at results is YOUR discipline — the library validates whatever
+looking at results is YOUR discipline — the framework validates whatever
 hypothesis text you froze — and `tests/test_real_data_example.py`
 pins that order.
 
@@ -114,7 +114,7 @@ which assumes a much denser book.
 point, not a failure.** The engine killed a strategy that clears the
 cost line and beats the linear battery by 7.8 sigmas, because its
 per-fold feature-importance rankings are unstable. A first-run `DEAD`
-on a "known good" strategy demonstrates that this library is not a
+on a "known good" strategy demonstrates that this framework is not a
 confirmation machine: a high incremental t-stat is necessary but not
 sufficient — if you cannot explain WHY the model wins consistently
 (the importance story flips fold to fold), the edge is not portable.

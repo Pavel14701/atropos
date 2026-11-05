@@ -1,11 +1,11 @@
 # CASES AND FLAGS — red flags, case studies, the agent checklist
 
-> Document v1.0 (2026-11-02). Part of the Atropos library ("a system
+> Document v1.0 (2026-11-02). Part of the Atropos framework ("a system
 > for killing crap hypotheses").
 > Companions: FRAMEWORK.md (philosophy + the 7-stage pipeline + the
 > 6 laws, §6), TEMPLATES.md (the prereg/screen/battery/post-mortem/
 > briefing templates).
-> The method's red thread — §9 — is quoted at the end of section 3.
+> The framework's red thread — §9 — is quoted at the end of section 3.
 
 **Source.** Donor corpus: a closed internal repository (not included
 in this distribution) — 16 rounds of the S10 review marathon, the
@@ -498,7 +498,7 @@ n=9 undecidable). Plus year concentration (flag 4) and funding
 coverage of the shorts (BAB: 54.6% of files from 2023-09) — all of
 it in the briefing, not in a post-mortem.
 
-### THE RED THREAD (§9 of the method)
+### THE RED THREAD (§9 of the framework)
 
 The one line that holds the entire pipeline — from idea to verdict:
 
@@ -511,7 +511,7 @@ above and exits into exactly one of two outcomes; there is no third.
 
 ---
 
-*Related documents: FRAMEWORK.md (§6 — the 6 systematic
+*Related framework documents: FRAMEWORK.md (§6 — the 6 systematic
 laws of the marathon; §9 — the red thread), TEMPLATES.md (the agent
 briefing template includes checklist items 2/4/5/7 as mandatory
 fields).*

@@ -6,7 +6,7 @@ walk-forward verdicts were looked at: the construction, the nulls, the
 kill criteria (mirroring the engine's four gates with their frozen
 thresholds) and the power floor below are all fixed constants of this
 file.  The runner prints the rendered document BEFORE any result --
-you call the library, the library validates whatever hypothesis text
+you call the framework, the framework validates whatever hypothesis text
 you froze; keeping that order is the caller's discipline, and
 ``tests/test_real_data_example.py`` pins it.
 

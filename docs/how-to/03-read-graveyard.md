@@ -2,13 +2,13 @@
 
 > **Estimated time:** 10 minutes
 >
-> **You will need:** your project with the method deployed and at
+> **You will need:** your project with the framework deployed and at
 > least one graveyard entry. No atropos code needed — just git, grep,
 > and csv. No layout yet? Generate the skeleton: `atropos init`.
 
 ## Why
 
-Law 6 of the method: **every hypothesis gets a verdict**. Without a
+Law 6 of the framework: **every hypothesis gets a verdict**. Without a
 tombstone a hypothesis counts as open, and open items accumulate
 duplicates. The graveyard is not a museum of failures but a **product of
 the process**: the accumulated knowledge base of which hypothesis
@@ -18,7 +18,7 @@ revisited.
 It is important to understand the boundary: the `atropos` repository is
 the killing toolkit (the pipeline, the controls, the prereg generator).
 The graveyard itself is a **methodological artifact of your project**:
-it lives in your `hypotheses/` layout, not in the library.
+it lives in your `hypotheses/` layout, not in the framework.
 
 If there is no layout yet, generate the skeleton: `atropos init` — the
 command creates `GRAVEYARD.md`, `hypotheses/INDEX.csv`, and
@@ -42,7 +42,7 @@ artifacts (prereg, code, tombstone).
 
 ## Tombstone structure
 
-Required fields (per the method's graveyard protocol):
+Required fields (per the framework's graveyard protocol):
 
 1. **ID and verdict** — `H-NNNN` and `KILLED | SURVIVED | INCONCLUSIVE`,
    the verdict date, the author.

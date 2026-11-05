@@ -1,7 +1,7 @@
 """Committed demo transcripts stay truthful to the live demos.
 
 `docs/examples/` holds captured demo outputs so a reader can see real
-library behavior without running anything.  These checks pin the
+framework behavior without running anything.  These checks pin the
 transcripts to the demo source: the recorded command must reference a
 module that exists, and the verdicts recorded in the transcript must
 still be produced by a fresh demo run (verdicts only -- float details

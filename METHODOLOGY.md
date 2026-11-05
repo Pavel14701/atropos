@@ -1,8 +1,8 @@
-# Atropos — Hypothesis-Killing Library — Deployment Methodology
+# Atropos — Hypothesis-Killing Framework — Deployment Methodology
 
-A portable document: how to deploy the hypothesis-killing method in any project that works with hypotheses and data. The document is self-contained — an analyst or an AI agent with zero context deploys everything from scratch using it alone. Project-specific values are marked with placeholders: `[PROJECT_ROOT]`, `[DATA_DIR]`, etc.
+A portable document: how to deploy the hypothesis-killing framework in any project that works with hypotheses and data. The document is self-contained — an analyst or an AI agent with zero context deploys everything from scratch using it alone. Project-specific values are marked with placeholders: `[PROJECT_ROOT]`, `[DATA_DIR]`, etc.
 
-The core of the method: every hypothesis runs a 7-stage pipeline with kill criteria fixed in advance. Possible outcomes: `KILLED` (dead — to the graveyard), `SURVIVED` (alive — may back a decision), `INCONCLUSIVE` (not enough data — reopen on a new snapshot).
+The core of the framework: every hypothesis runs a 7-stage pipeline with kill criteria fixed in advance. Possible outcomes: `KILLED` (dead — to the graveyard), `SURVIVED` (alive — may back a decision), `INCONCLUSIVE` (not enough data — reopen on a new snapshot).
 
 ---
 
@@ -16,7 +16,7 @@ The minimal data infrastructure required:
 - **A git repository** `[PROJECT_ROOT]`: all hypothesis artifacts are committed; history is append-only.
 - **Python 3.11+** with the ability to create virtual environments.
 
-Nothing beyond this is required: the method does not depend on a DB stack, a cloud, or paid tools.
+Nothing beyond this is required: the framework does not depend on a DB stack, a cloud, or paid tools.
 
 ## 2. Directory Structure
 
@@ -70,7 +70,7 @@ The minimal stack: `numpy` (computation), `pandas` (data), `scipy` (statistics),
 | 4 | Write `docs/HYPOTHESIS_KILLING_FRAMEWORK.md` | 7 stages, 6 laws, the prereg and tombstone formats |
 | 5 | Fill in `AGENTS.md` and `CLAUDE.md` (replace the placeholders) | Agent instructions with no `[PLACEHOLDER]` left |
 | 6 | Run a pilot hypothesis `H-0001` through the full cycle | A tombstone in the graveyard + a row in INDEX.csv |
-| 7 | Commit everything, appoint an owner `[OWNER]` | The method is live |
+| 7 | Commit everything, appoint an owner `[OWNER]` | The framework is live |
 
 The `H-0001` pilot is chosen to be clearly killable: the point of the step is to test the graveyard mechanics, not to produce a surviving hypothesis.
 

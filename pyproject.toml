@@ -1,7 +1,7 @@
 [project]
 name = "atropos"
 version = "1.0.0"
-description = "Atropos — hypothesis-killing library: preregistration, null controls, incremental tests, robustness batteries, walk-forward and Monte Carlo verdicts."
+description = "Atropos — hypothesis-killing framework: preregistration, null controls, incremental tests, robustness batteries, walk-forward and Monte Carlo verdicts."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -77,7 +77,7 @@ ignore = [
     # ("True for a finite float", "5% tail of ...").
     "D401",
     # PLR2004 magic values in comparisons: thresholds like 0.05, 1.96, 2.0
-    # ARE the domain vocabulary of a hypothesis-testing library.
+    # ARE the domain vocabulary of a hypothesis-testing framework.
     "PLR2004",
     # PLR0913 too-many-arguments: pipeline entry points take stage configs
     # by design; splitting them would hurt readability more than help.

@@ -3,6 +3,13 @@
 Discipline beats speed. The bar for merging is: clean gates, honest
 tests, no lookaheads, no moved goalposts.
 
+**Terminology.** Atropos is positioned as a (methodological) framework,
+not a library: the value is in the protocol — preregistration before
+results, the staged kill chain, verdicts as the contract — not in
+independently usable primitives. Call it a framework; a 'library'
+framing invites cherry-picking primitives without the discipline that
+makes verdicts meaningful.
+
 ## Before you contribute
 
 Set up with `uv sync` (Python 3.11+, pinned in `uv.lock`). All commands
@@ -89,7 +96,7 @@ entry automatically — a new model is born under full law:
 
 ## Adding a hypothesis (the user workflow)
 
-The library's whole point; walk the doctrine, not around it:
+The framework's whole point; walk the doctrine, not around it:
 
 1. **Prereg before data.** Build the params dict (name, hypothesis,
    construction, nulls, kill criteria, power calc, spec hash), freeze it
@@ -106,7 +113,7 @@ The library's whole point; walk the doctrine, not around it:
    conditions (no graveyard yet? scaffold it with `atropos init`). Formats and the full pipeline doctrine: `FRAMEWORK.md`
    (§2 pipeline, §8 graveyard protocol) and `TEMPLATES.md`.
 
-## For library developers
+## For framework developers
 
 The developer rulebook (review standards, test layers, perf budgets)
 lives in `contributor/AGENTS.md`. Deep methodology docs

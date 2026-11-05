@@ -1,6 +1,6 @@
 """Real-data example: SPY 12-1 momentum through the ML kill protocol.
 
-A runnable example of CALLING the atropos library on real market data
+A runnable example of CALLING the atropos framework on real market data
 -- adapt these calls inside your own research pipeline.  The order is
 the discipline: the frozen preregistration is printed FIRST, then the
 dataset is built, then the engine runs, then the verdicts are printed
@@ -93,7 +93,7 @@ def print_dataset_summary(dataset: dict) -> None:
 
 
 def print_report(report: dict) -> None:
-    """Tombstone-style rendering of the report dict the library returned."""
+    """Tombstone-style rendering of the report dict the framework returned."""
     print("=" * 78)
     print("ML KILL PROTOCOL -- WALK-FORWARD VERDICTS")
     print("=" * 78)
@@ -167,7 +167,7 @@ def main() -> int:
     print("=" * 78)
     print()
     print("STEP 1. PREREGISTRATION (printed BEFORE any result; you call")
-    print("the library, the library validates the hypothesis YOU froze)")
+    print("the framework, the framework validates the hypothesis YOU froze)")
     print("-" * 78)
     print(build_prereg_text())
     print()

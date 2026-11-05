@@ -1,6 +1,6 @@
 # Atropos Agent Context — package layer (default layer)
 
-How to USE the Atropos library. This is the package layer: the user
+How to USE the Atropos framework. This is the package layer: the user
 layer (`%APPDATA%/atropos/agent` / `~/.config/atropos/agent`) and the
 project layer (`./.atropos/agent`) may replace, extend, or disable
 these files and skills. Diagnostics: `atropos agent-doctor`.

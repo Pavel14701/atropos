@@ -1,4 +1,4 @@
-"""The library tests itself: kill-chain doctrine tests.
+"""The framework tests itself: kill-chain doctrine tests.
 
 Atropos exists to kill hypotheses, so its own killers are held to the
 doctrine they enforce.  On deterministic synthetic worlds:

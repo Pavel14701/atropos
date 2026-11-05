@@ -286,7 +286,7 @@ def test_pearson_helpers_agree_between_null_control_and_model_eval() -> None:
     identical contract (size < 3 or zero sd -> NaN, else
     ``np.corrcoef``); 100 random pairs (correlated and independent)
     must agree to 1e-12 or the correlation contract has drifted
-    between the null-control and model-eval sides of the library.
+    between the null-control and model-eval sides of the framework.
     Both helpers see only clean finite inputs here -- their NaN
     handling is exercised by one constant-side probe each, which must
     also agree (both NaN).

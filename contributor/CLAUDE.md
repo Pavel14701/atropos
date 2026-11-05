@@ -1,4 +1,4 @@
-# Atropos — Hypothesis-Killing Library — Claude-Specific Instructions
+# Atropos — Hypothesis-Killing Framework — Claude-Specific Instructions
 
 A Claude specialization of `AGENTS.md` (Claude Code, ZCode, and
 compatible CLI agents). The base rules live in `AGENTS.md`; this file
@@ -9,7 +9,7 @@ Fill in the `[PLACEHOLDER]` placeholders with your project's values.
 
 ## 1. First Action and Project Overview
 
-Before any work, read in this order: `docs/HYPOTHESIS_KILLING_FRAMEWORK.md` → `AGENTS.md` → this file. If the primary document is missing — stop and report: the method is not deployed (deployment is described in `METHODOLOGY.md`).
+Before any work, read in this order: `docs/HYPOTHESIS_KILLING_FRAMEWORK.md` → `AGENTS.md` → this file. If the primary document is missing — stop and report: the framework is not deployed (deployment is described in `METHODOLOGY.md`).
 
 Project values: name `[PROJECT_NAME]`, data `[DATA_DIR]`, snapshot `[SNAPSHOT_DATE]`, owner `[OWNER]`, environment `[VENV]`. Where this file diverges from `AGENTS.md` on tools, this file wins; on process, the laws of `AGENTS.md` win.
 
@@ -76,12 +76,12 @@ uv run mypy                             # 3. types (strict)
 
 ## 6. Key Files
 
-The canonical `hypotheses/` layout is a library convention:
+The canonical `hypotheses/` layout is a framework convention:
 scaffold with `atropos init` (files are generated, never overwritten).
 
 | File | Role |
 |------|------|
-| `docs/HYPOTHESIS_KILLING_FRAMEWORK.md` | Methodology — read first |
+| `docs/HYPOTHESIS_KILLING_FRAMEWORK.md` | Framework methodology — read first |
 | `AGENTS.md` | Base agent rules; this file is a layer on top of them |
 | `hypotheses/preregistrations/H-NNNN.md` | Preregs — Write before any data |
 | `hypotheses/code/H-NNNN_*.py` | Hypothesis test code |

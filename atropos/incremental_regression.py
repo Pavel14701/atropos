@@ -87,7 +87,7 @@ def _fit(
     is saturated (``n_rows <= n_cols``) or rank-deficient, every
     statistic is NaN and ``rank_deficient`` is True.  A pseudo-inverse
     alone would fabricate plausible-looking minimum-norm t-stats
-    exactly in the collinear cases the library must flag, so callers
+    exactly in the collinear cases the framework must flag, so callers
     must treat ``rank_deficient`` (or a non-finite ``t``) as
     INCONCLUSIVE, never as evidence for or against the hypothesis.
     """

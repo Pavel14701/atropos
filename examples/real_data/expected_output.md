@@ -21,7 +21,7 @@ SPY 12-1 TSMOM THROUGH THE ML KILL PROTOCOL (quick preview)
 ==============================================================================
 
 STEP 1. PREREGISTRATION (printed BEFORE any result; you call
-the library, the library validates the hypothesis YOU froze)
+the framework, the framework validates the hypothesis YOU froze)
 ------------------------------------------------------------------------------
 # Preregistration: spy_tsmom_12_1_ml
 

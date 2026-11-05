@@ -1,7 +1,7 @@
-# Atropos — Hypothesis-Killing Library — Universal Agent Instructions
+# Atropos — Hypothesis-Killing Framework — Universal Agent Instructions
 
 > **Context beacon.** This is the DEVELOPER context of Atropos
-> (pytest/ruff/mypy/conventions). For USING the library with an AI
+> (pytest/ruff/mypy/conventions). For USING the framework with an AI
 > agent, see `atropos/agent/` (pip-installed) or run `atropos agent-context`.
 
 A document for any AI agent and any analyst: Claude, Cursor, Windsurf,
@@ -98,7 +98,7 @@ snapshot is allowed.
 ## 6. Key Files Index — fill in for your project
 
 The canonical `hypotheses/` layout (preregistrations, code,
-graveyard, INDEX.csv) is a library convention: scaffold with
+graveyard, INDEX.csv) is a framework convention: scaffold with
 `atropos init` (files are generated, never overwritten).
 
 | File | Purpose |

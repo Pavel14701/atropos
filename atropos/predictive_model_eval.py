@@ -1,6 +1,6 @@
 """Predictive-model evaluation: leakage-safe CV, walk-forward OOS, stability.
 
-Evaluation library for any model that maps features -> next-period return
+Evaluation framework for any model that maps features -> next-period return
 forecasts.  All functions take ``features`` (feature matrix) and ``target``
 (outcome) with rows in CHRONOLOGICAL order.
 

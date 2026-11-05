@@ -205,7 +205,7 @@ def test_cost_death_validates_own_parameters_upfront() -> None:
     ``block_bootstrap_ci`` (after the data was cleaned); the error must
     name the parameter and fire before the data is touched. A negative
     ``min_net_sharpe`` is a floor that any Sharpe clears - forbidden in
-    a hypothesis-killing library.
+    a hypothesis-killing framework.
     """
     with pytest.raises(ValueError, match="n_boot must be >= 1"):
         cost_death_test([0.01] * 10, [1.0] * 10, 10.0, n_boot=0)
