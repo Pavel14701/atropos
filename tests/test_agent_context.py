@@ -41,10 +41,11 @@ from atropos.agent._resolution import (
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-PACKAGE_NINE = [
+PACKAGE_TEN = [
     "01-preregister",
     "02-run-pipeline",
     "03-read-graveyard",
+    "04-run-ml-kill-protocol",
     "11-premise-check",
     "12-null-control",
     "13-signal-test",
@@ -425,10 +426,10 @@ def test_default_user_dir_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     literal-path assertion pass only when the suite ran on Windows.
     """
     monkeypatch.setattr("atropos.agent._resolution._is_windows", lambda: True)
-    monkeypatch.setenv("APPDATA", r"C:\Users\toothcake\AppData\Roaming")
+    monkeypatch.setenv("APPDATA", r"C:\Users\example-user\AppData\Roaming")
     assert (
         PureWindowsPath(str(default_user_dir())).as_posix()
-        == "C:/Users/toothcake/AppData/Roaming/atropos/agent"
+        == "C:/Users/example-user/AppData/Roaming/atropos/agent"
     )
     monkeypatch.delenv("APPDATA", raising=False)
     expected = Path.home() / "AppData" / "Roaming" / "atropos" / "agent"
@@ -502,13 +503,13 @@ def test_package_paths_exist() -> None:
     assert SKILLS_DIR.is_dir()
     assert (AGENT_DIR / "VERSION").exists()
     assert (AGENT_DIR / "MANIFEST.toml").exists()
-    assert len(list(SKILLS_DIR.glob("*.md"))) == 9
+    assert len(list(SKILLS_DIR.glob("*.md"))) == 10
 
 
 def test_public_api_with_pinned_layers(tmp_path: Path) -> None:
     """list_skills/read_agent_context/read_skill on pinned layers."""
     nowhere = tmp_path / "nowhere"
-    assert list_skills(user_dir=nowhere, project_dir=nowhere) == PACKAGE_NINE
+    assert list_skills(user_dir=nowhere, project_dir=nowhere) == PACKAGE_TEN
     context = read_agent_context(user_dir=nowhere, project_dir=nowhere)
     assert context is not None
     assert "===== AGENTS.md =====" in context
@@ -545,7 +546,7 @@ def test_public_api_respects_project_overrides(tmp_path: Path) -> None:
     _write(project_dir / "skills" / ".disabled", "11-premise-check\n")
     nowhere = tmp_path / "nowhere"
     assert list_skills(user_dir=nowhere, project_dir=project_dir) == [
-        name for name in PACKAGE_NINE if name != "11-premise-check"
+        name for name in PACKAGE_TEN if name != "11-premise-check"
     ]
     context = read_agent_context(user_dir=nowhere, project_dir=project_dir)
     assert context is not None

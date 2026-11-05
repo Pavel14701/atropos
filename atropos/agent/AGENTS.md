@@ -10,12 +10,20 @@
 1. **Graveyard check.** До всего: поиск в `hypotheses/graveyard/` и
    `INDEX.csv` по предсказанию и kill-критерию (не по заголовку).
    `KILLED`-дубликат без новой механики не выдвигается. Скилл:
-   `03-read-graveyard`.
+   `03-read-graveyard`. Нет могильника в проекте? `atropos init`
+   генерирует скелет (существующие файлы не перезаписываются).
 2. **Preregister до данных.** Пререгистрация фиксируется ДО любого
    обращения к данным. Kill-критерии — только жёсткие правила
    «оператор + число». Скилл: `01-preregister`.
 3. **Run pipeline.** Один прогон по замороженной спеке; первый FAIL
    решает всё. Скилл: `02-run-pipeline`.
+   **ML-гипотеза?** Если гипотеза — классификатор (features → target
+   0/1, порог + EV), а не правило signal → outcome, дисциплина та же
+   (graveyard + prereg до данных), движок другой: skill
+   `04-run-ml-kill-protocol` (`atropos.ml_training.
+   run_ml_kill_protocol`): walk-forward CV, 4 гейта, вердикты
+   `SURVIVES` / `DEAD(<gate>)` / `UNDERPOWERED` (нерешённая — НЕ
+   смерть). Один прогон — один вердикт, как и в rule-цепочке.
 4. **Interpret.** PASS ≠ подтверждение: `SURVIVES` = условный кандидат
    с гейтами, не leg системы. Один прогон — один вердикт.
 5. **Record tombstone.** Каждая гипотеза заканчивается надгробием и
@@ -42,12 +50,14 @@ from atropos.track_record import live_verdict
 # production-этап для deployed SURVIVES; LIVE_OK ≠ подтверждение.
 ```
 
-## Скиллы (9)
+## Скиллы (10)
 
 Core: `01-preregister`, `02-run-pipeline` (таблица 9 вердиктов),
-`03-read-graveyard`. Протоколы этапов 1-7: `11-premise-check`,
-`12-null-control`, `13-signal-test`, `14-incremental-test` (решающий),
-`15-robustness-battery`, `16-walkforward-calendar`. Порядок фиксирован:
+`03-read-graveyard`, `04-run-ml-kill-protocol` (ML-цепочка:
+features→target, walk-forward, гейты). Протоколы этапов 1-7:
+`11-premise-check`, `12-null-control`, `13-signal-test`,
+`14-incremental-test` (решающий), `15-robustness-battery`,
+`16-walkforward-calendar`. Порядок фиксирован:
 1 → 2 → 3 → 4 → 5 → 6, каждый этап дешевле следующего. Список:
 `atropos agent-context --list-skills`; текст: `--skill=NAME`.
 

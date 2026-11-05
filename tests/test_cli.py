@@ -1,4 +1,4 @@
-"""CLI tests for the three ``atropos`` agent subcommands.
+"""CLI tests for the four ``atropos`` subcommands.
 
 Everything runs through ``main()`` with a pinned user layer and a
 temporary working directory (the project layer is ``<cwd>/.atropos/
@@ -9,6 +9,7 @@ default context -> project replacement -> show-sources -> disable.
 
 from __future__ import annotations
 
+import io
 from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 
@@ -21,10 +22,11 @@ from atropos.cli import (
     main,
 )
 
-PACKAGE_NINE = [
+PACKAGE_TEN = [
     "01-preregister",
     "02-run-pipeline",
     "03-read-graveyard",
+    "04-run-ml-kill-protocol",
     "11-premise-check",
     "12-null-control",
     "13-signal-test",
@@ -72,14 +74,14 @@ def test_main_without_command_exits_with_usage() -> None:
 def test_list_skills_pinned_layer(
     workdir: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """--list-skills prints the nine packaged skills, exit 0."""
+    """--list-skills prints the ten packaged skills, exit 0."""
     _, user_dir = workdir
     code, out, err = _run(
         ["agent-context", "--list-skills"], user_dir, capsys
     )
     assert code == 0
     assert err == ""
-    assert out.splitlines() == PACKAGE_NINE
+    assert out.splitlines() == PACKAGE_TEN
 
 
 def test_content_is_default_action(
@@ -100,7 +102,7 @@ def test_content_is_default_action(
 def test_show_sources_defaults(
     workdir: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """--show-sources lists layers, default statuses and 9 skills."""
+    """--show-sources lists layers, default statuses and 10 skills."""
     _, user_dir = workdir
     code, out, _ = _run(["agent-context", "--show-sources"], user_dir, capsys)
     assert code == 0
@@ -108,8 +110,8 @@ def test_show_sources_defaults(
     assert "package  " in out
     assert "AGENTS.md: default" in out
     assert "CLAUDE.md: default" in out
-    assert "skills: 9 active, 0 disabled/empty" in out
-    for name in PACKAGE_NINE:
+    assert "skills: 10 active, 0 disabled/empty" in out
+    for name in PACKAGE_TEN:
         assert name in out
 
 
@@ -139,7 +141,7 @@ def test_skills_only_prints_every_active_skill(
     _, user_dir = workdir
     code, out, _ = _run(["agent-context", "--skills-only"], user_dir, capsys)
     assert code == 0
-    for name in PACKAGE_NINE:
+    for name in PACKAGE_TEN:
         assert f"===== skill: {name} =====" in out
 
 
@@ -208,7 +210,7 @@ def test_skill_override_operations(
     _write(skills_dir / ".disabled", "13-signal-test\n")
     code, out, _ = _run(["agent-context", "--show-sources"], user_dir, capsys)
     assert code == 0
-    assert "skills: 9 active, 1 disabled/empty" in out
+    assert "skills: 10 active, 1 disabled/empty" in out
     assert f"{'01-preregister':<26} replaced" in out
     assert f"{'new-thing':<26} added" in out
     assert f"{'13-signal-test':<26} disabled" in out
@@ -521,9 +523,9 @@ def test_full_verification_scenario(
     tmp_path, user_dir = workdir
     project = tmp_path / ".atropos" / "agent"
 
-    # 1. defaults: nine skills, both files from the package
+    # 1. defaults: ten skills, both files from the package
     code, out, _ = _run(["agent-context", "--list-skills"], user_dir, capsys)
-    assert out.splitlines() == PACKAGE_NINE
+    assert out.splitlines() == PACKAGE_TEN
 
     # 2. project replacement changes the effective AGENTS.md
     _write(project / "AGENTS.md", "# VERIFICATION REPLACEMENT")
@@ -703,3 +705,116 @@ def test_doctor_package_integrity_branches(
     assert any("!= VERSION" in error for error in errors)
     assert any("declares missing skill: ghost" in error for error in errors)
     assert any("undeclared" in note for note in notes)
+
+
+# ---------------------------------------------------------------------------
+# init (workspace skeleton)
+# ---------------------------------------------------------------------------
+def test_init_creates_workspace_skeleton(
+    workdir: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The init subcommand scaffolds the workspace under --root."""
+    pytest.importorskip("atropos.workspace")
+    tmp_path, user_dir = workdir
+    target = tmp_path / "fresh-ws"
+    code, out, err = _run(["init", "--root", str(target)], user_dir, capsys)
+    assert code == 0
+    assert err == ""
+    assert (target / "GRAVEYARD.md").is_file()
+    assert (target / "hypotheses" / "INDEX.csv").is_file()
+    assert (target / "hypotheses" / "README.md").is_file()
+    assert "created" in out
+    assert "workspace ready" in out
+
+
+def test_init_default_root_is_cwd(
+    workdir: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Without --root the workspace lands in the current directory."""
+    pytest.importorskip("atropos.workspace")
+    tmp_path, user_dir = workdir
+    code, out, _ = _run(["init"], user_dir, capsys)
+    assert code == 0
+    assert (tmp_path / "GRAVEYARD.md").is_file()
+    assert (tmp_path / "hypotheses" / "INDEX.csv").is_file()
+    assert "workspace ready" in out
+
+
+def test_init_dry_run_writes_nothing(
+    workdir: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--dry-run prints the plan and creates no files."""
+    pytest.importorskip("atropos.workspace")
+    tmp_path, user_dir = workdir
+    target = tmp_path / "never-created"
+    code, out, _ = _run(
+        ["init", "--root", str(target), "--dry-run"], user_dir, capsys
+    )
+    assert code == 0
+    assert "[create]" in out
+    assert "dry-run, nothing written" in out
+    assert not target.exists()
+    # an existing workspace shows up as skip-only plan
+    target.mkdir()
+    (target / "GRAVEYARD.md").write_text("user edit\n", encoding="utf-8")
+    code, out, _ = _run(
+        ["init", "--root", str(target), "--dry-run"], user_dir, capsys
+    )
+    assert code == 0
+    assert "[skip (exists)]" in out
+
+
+def test_init_second_run_skips_and_preserves_edits(
+    workdir: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Re-init never overwrites: all files skipped, edits survive."""
+    pytest.importorskip("atropos.workspace")
+    tmp_path, user_dir = workdir
+    target = tmp_path / "ws"
+    code, _out, _ = _run(["init", "--root", str(target)], user_dir, capsys)
+    assert code == 0
+    graveyard = target / "GRAVEYARD.md"
+    graveyard.write_text("user edit\n", encoding="utf-8")
+    code, out, _ = _run(["init", "--root", str(target)], user_dir, capsys)
+    assert code == 0
+    assert "skipped (exists)" in out
+    assert "created " not in out
+    assert graveyard.read_text(encoding="utf-8") == "user edit\n"
+
+
+# ---------------------------------------------------------------------------
+# non-ASCII output on legacy consoles (cp1251)
+# ---------------------------------------------------------------------------
+def test_skill_03_non_ascii_prints_cleanly(
+    workdir: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Skill 03 (Cyrillic + arrows) prints via main() without crashing."""
+    _, user_dir = workdir
+    code, out, err = _run(
+        ["agent-context", "--skill", "03-read-graveyard"], user_dir, capsys
+    )
+    assert code == 0
+    assert "READ GRAVEYARD" in out
+    assert err == ""
+
+
+def test_cp1251_console_reconfigured_not_fatal(
+    workdir: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A strict cp1251 stdout is reconfigured; non-cp1251 text prints."""
+    tmp_path, user_dir = workdir
+    _write(
+        tmp_path / ".atropos" / "agent" / "skills" / "arrow-skill.md",
+        "trend arrow U+2192: \u2192",
+    )
+    raw = io.BytesIO()
+    console = io.TextIOWrapper(raw, encoding="cp1251", errors="strict")
+    monkeypatch.setattr("sys.stdout", console)
+    code = main(
+        ["agent-context", "--skill", "arrow-skill"], user_dir=user_dir
+    )
+    assert code == 0
+    console.flush()
+    # without the UTF-8 reconfigure this encode would have raised
+    # UnicodeEncodeError ('\u2192' has no cp1251 mapping)
+    assert "arrow U+2192: \u2192" in raw.getvalue().decode("utf-8")

@@ -6,7 +6,7 @@
 name = "atropos-agent-context"
 version = "0.1.0"          # must match the VERSION file
 schema = 1
-description = "Default agent context: user workflow + 9 skills"
+description = "Default agent context: user workflow + 10 skills"
 
 [[files]]
 path = "AGENTS.md"
@@ -41,6 +41,13 @@ name = "03-read-graveyard"
 path = "skills/03-read-graveyard.md"
 description = "Graveyard check by prediction+kill-criterion; resurrection conditions"
 when_to_use = "Before proposing any hypothesis; when in doubt it was tested"
+version = "0.1.0"
+
+[[skills]]
+name = "04-run-ml-kill-protocol"
+path = "skills/04-run-ml-kill-protocol.md"
+description = "ML kill chain: walk-forward run_ml_kill_protocol (features/target/exec_returns/times_us), 4 gates, SURVIVES/DEAD(<gate>)/UNDERPOWERED verdicts"
+when_to_use = "for ML hypotheses: features→target, after prereg"
 version = "0.1.0"
 
 # --- stage protocols 1-7, migrated from the root skills/ directory ---

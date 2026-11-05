@@ -1,6 +1,6 @@
 """Atropos command-line interface (stdlib argparse, no new deps).
 
-Three subcommands around the :mod:`atropos.agent` context package:
+Four subcommands:
 
 * ``atropos agent-context`` - print the resolved agent context
   (``--content`` default, ``--path``, ``--show-sources``,
@@ -10,17 +10,23 @@ Three subcommands around the :mod:`atropos.agent` context package:
   writes without ``--yes`` or an interactive confirmation);
 * ``atropos agent-doctor`` - verify the package layer (files, VERSION
   vs MANIFEST, skill inventory) and report user/project overrides,
-  orphan appends and version notes.
+  orphan appends and version notes;
+* ``atropos init`` - create the hypothesis workspace skeleton
+  (``GRAVEYARD.md``, ``hypotheses/INDEX.csv``, ``hypotheses/README.md``
+  via :func:`atropos.workspace.init_workspace`; existing files are
+  never overwritten - edit them manually after init).
 
-Every handler accepts explicit ``user_dir`` / ``project_dir`` layer
-paths (``None`` = platform defaults), which is how the tests pin the
-layers deterministically.  Usage errors go through argparse (exit
-code 2); command failures return non-zero from :func:`main`.
+Every agent-context handler accepts explicit ``user_dir`` /
+``project_dir`` layer paths (``None`` = platform defaults), which is
+how the tests pin the layers deterministically.  Usage errors go
+through argparse (exit code 2); command failures return non-zero from
+:func:`main`.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import sys
 import tomllib
 from collections.abc import Sequence
@@ -578,10 +584,49 @@ def _cmd_agent_doctor(user_dir: Path | None, project_dir: Path | None) -> int:
 
 
 # ---------------------------------------------------------------------------
+# init (workspace skeleton)
+# ---------------------------------------------------------------------------
+def _workspace_plan(root: Path) -> list[tuple[Path, bool]]:
+    """``(path, would_create)`` pairs for every workspace file."""
+    from atropos.workspace import (  # noqa: PLC0415  (lazy: see below)
+        DEFAULT_WORKSPACE_FILES,
+    )
+
+    return [
+        (root / rel_path, not (root / rel_path).exists())
+        for rel_path in DEFAULT_WORKSPACE_FILES
+    ]
+
+
+def _cmd_init(args: argparse.Namespace) -> int:
+    """Handle ``atropos init``; report created/skipped, exit 0."""
+    # lazy: keeps atropos.cli importable without the workspace module
+    from atropos.workspace import init_workspace  # noqa: PLC0415
+
+    root = Path(str(args.root))
+    if args.dry_run:
+        for path, would_create in _workspace_plan(root):
+            marker = "create" if would_create else "skip (exists)"
+            print(f"  [{marker}] {path}")
+        print(f"init: dry-run, nothing written ({root}).")
+        return 0
+    result = init_workspace(root)
+    for rel_text in result["created"]:
+        print(f"  created {root / Path(str(rel_text))}")
+    for rel_text in result["skipped"]:
+        print(f"  skipped (exists) {root / Path(str(rel_text))}")
+    print(
+        "init: workspace ready; files are never overwritten -"
+        " edit them manually after init."
+    )
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # parser + entry point
 # ---------------------------------------------------------------------------
 def _build_parser() -> argparse.ArgumentParser:
-    """Build the argparse tree for the three agent subcommands."""
+    """Build the argparse tree for the four CLI subcommands."""
     parser = argparse.ArgumentParser(
         prog=PROG,
         description=(
@@ -673,7 +718,37 @@ def _build_parser() -> argparse.ArgumentParser:
         "agent-doctor",
         help="verify the agent context layers and overrides",
     )
+
+    init_parser = subparsers.add_parser(
+        "init",
+        help="create the hypothesis workspace skeleton (never overwrites)",
+    )
+    init_parser.add_argument(
+        "--root",
+        metavar="PATH",
+        default=".",
+        help="workspace root directory (default: current directory)",
+    )
+    init_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the plan without writing anything",
+    )
     return parser
+
+
+def _force_utf8_stdout() -> None:
+    """Best-effort UTF-8 stdout (cp1251 consoles mangle skill text).
+
+    ``--skill`` prints Cyrillic text with arrows/sigmas; on a Windows
+    cp1251/cp866 console the strict stream encoding raises
+    ``UnicodeEncodeError`` mid-print.  Best effort only: exotic or
+    already-safe streams keep their configuration.
+    """
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if callable(reconfigure):
+        with contextlib.suppress(AttributeError, OSError, ValueError):
+            reconfigure(encoding="utf-8", errors="replace")
 
 
 def main(
@@ -686,7 +761,9 @@ def main(
 
     ``argv`` defaults to ``sys.argv[1:]``; ``user_dir`` / ``project_dir``
     pin the override layers (``None`` = platform defaults) so tests and
-    embedding code stay deterministic.
+    embedding code stay deterministic.  Before dispatch, stdout is
+    reconfigured to UTF-8 best-effort (cp1251 consoles would otherwise
+    crash on non-ASCII skill text).
 
     Example::
 
@@ -700,6 +777,7 @@ def main(
         01-preregister
         02-run-pipeline
         03-read-graveyard
+        04-run-ml-kill-protocol
         11-premise-check
         12-null-control
         13-signal-test
@@ -710,11 +788,14 @@ def main(
     """
     parser = _build_parser()
     args = parser.parse_args(argv)
+    _force_utf8_stdout()
     command = str(args.command)
     if command == "agent-context":
         return _cmd_agent_context(args, user_dir, project_dir)
     if command == "agent-setup":
         return _cmd_agent_setup(args, user_dir, project_dir)
+    if command == "init":
+        return _cmd_init(args)
     return _cmd_agent_doctor(user_dir, project_dir)
 
 
