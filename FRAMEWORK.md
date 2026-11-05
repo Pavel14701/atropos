@@ -1,8 +1,8 @@
 # ATROPOS — a system for killing crap hypotheses
 
-## A portable hypothesis-testing framework for quant finance
+## A portable hypothesis-testing library for quant finance
 
-> **Quick paths.** User (apply it to your own project) → `docs/how-to/01`.
+> **Quick paths.** User (import the library into your own pipeline) → `docs/how-to/01`.
 > Terms and definitions → `GLOSSARY.md`. Context for an AI agent → `atropos/agent/`
 > (pip package) or the `atropos agent-context` command. ML hypothesis (walk-forward
 > engine) → `docs/how-to/` (skill 04 / `run_ml_kill_protocol`). Reference reading —
@@ -25,7 +25,7 @@ trade (fee + spread + slippage + funding/borrow).
 ## §1 Philosophy
 
 **1.1. This is falsification infrastructure, not a winner hunt.**
-The framework's job is not to find a strategy that "works" but to kill a hypothesis
+The method's job is not to find a strategy that "works" but to kill a hypothesis
 as early and as cheaply as possible. Each stage is a filter; the stages are ordered
 by increasing cost of testing. A good day is not a signal found but a hypothesis
 killed cheaply and documented.
