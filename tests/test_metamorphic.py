@@ -10,6 +10,7 @@ profile registered in ``tests/conftest.py``.
 from __future__ import annotations
 
 import math
+from itertools import pairwise
 
 import numpy as np
 import pytest
@@ -17,6 +18,13 @@ from atropos._utils import block_indices
 from atropos.bootstrap_ci import block_bootstrap_ci, stationary_bootstrap_ci
 from atropos.cost_model import turnover_series
 from atropos.evaluation_metrics import max_drawdown, sharpe_ratio, turnover
+from atropos.ml_training import (
+    assign_folds,
+    ev_of_taken,
+    fold_edges,
+    paired_bootstrap_t_stat,
+    rolling_z,
+)
 from atropos.power_calculator import detectable_effect, power_for_effect
 from hypothesis import assume, given
 from hypothesis import strategies as st
@@ -411,3 +419,189 @@ def test_detectable_effect_fuzz_monotone_decreasing_in_n(
     assert detectable_effect(small_n, n_predictors=5) >= detectable_effect(
         big_n, n_predictors=5
     )
+
+
+# ---------------------------------------------------------------------------
+# ml_training properties: rolling z, folds, EV, paired bootstrap
+# ---------------------------------------------------------------------------
+_Z_VALUE_ARRAYS = hnp.arrays(
+    dtype=np.float64,
+    shape=st.integers(min_value=12, max_value=120),
+    elements=st.floats(min_value=-10.0, max_value=10.0),
+)
+
+_Z_WINDOWS = st.integers(min_value=2, max_value=11)
+
+
+@given(values=_Z_VALUE_ARRAYS, window=_Z_WINDOWS)
+def test_rolling_z_warmup_head_is_exactly_window_minus_one(
+    values: np.ndarray, window: int
+) -> None:
+    """NaN head is exactly ``window - 1`` long, then finite z flows.
+
+    The trailing window needs ``window`` observations, so the first
+    ``window - 1`` entries are NaN by construction and the entry at
+    ``window - 1`` is a genuine z (finite whenever that first window
+    is non-constant -- assumed with a 1e-9 floor, since a constant
+    window honestly reports NaN, and near-constant windows sit inside
+    the rolling std's cancellation dust).
+    """
+    assume(values.size > window)
+    assume(float(np.std(values[:window], ddof=1)) > 1e-9)
+    zed = rolling_z(values, window)
+    assert bool(np.isnan(zed[: window - 1]).all())
+    assert not bool(np.isnan(zed[window - 1]))
+
+
+@given(
+    values=_Z_VALUE_ARRAYS,
+    window=_Z_WINDOWS,
+    scale=st.floats(min_value=0.1, max_value=10.0),
+)
+def test_rolling_z_scale_invariance_positive_factor(
+    values: np.ndarray, window: int, scale: float
+) -> None:
+    """rolling_z(x * c, w) == rolling_z(x, w) for c > 0, to 1e-9.
+
+    The z-score is dimensionless: a positive factor scales the value,
+    the window mean and the window sd identically, so every output
+    must be invariant (up to floating rounding, 1e-9 absolute on
+    O(1) values).  Values are kept away from the subnormal regime,
+    where the std itself underflows (that regime is pinned as a
+    chaos finding instead).
+    """
+    assume(values.size > window)
+    assume(float(np.std(values, ddof=1)) > 1e-6)
+    zed = rolling_z(values, window)
+    scaled = rolling_z(values * scale, window)
+    assert np.allclose(zed, scaled, rtol=0.0, atol=1e-9, equal_nan=True)
+
+
+@given(values=_Z_VALUE_ARRAYS, window=_Z_WINDOWS)
+def test_rolling_z_constant_run_is_nan_inside(
+    values: np.ndarray, window: int
+) -> None:
+    """A constant run longer than the window yields NaN inside it.
+
+    Every trailing window lying entirely inside the run is constant,
+    its sample sd is zero and the honest output is NaN -- from the
+    (window-1)th run position to the run's end.  The z just BEFORE
+    the run completes stays finite (its window still mixes run and
+    pre-run values), so the NaN region has sharp, causal edges.
+    """
+    assume(values.size > window)
+    assume(float(np.std(values[:window], ddof=1)) > 1e-9)
+    assume(abs(float(values[window - 1]) - 3.25) > 1e-9)
+    run_length = window + 5
+    padded = np.concatenate(
+        [values[:window], np.full(run_length, 3.25), values[window:]]
+    )
+    run_start = window
+    zed = rolling_z(padded, window)
+    inside = slice(run_start + window - 1, run_start + run_length)
+    assert bool(np.isnan(zed[inside]).all())
+    assert not bool(np.isnan(zed[run_start + window - 2]))
+
+
+_MONOTONE_TIMES = st.lists(
+    st.integers(min_value=0, max_value=10**9),
+    min_size=8,
+    max_size=60,
+).map(lambda stamps: np.array(sorted(stamps), dtype=np.int64))
+
+
+@given(times=_MONOTONE_TIMES, n_blocks=st.integers(min_value=2, max_value=6))
+def test_fold_edges_assign_folds_partition_monotone_times(
+    times: np.ndarray, n_blocks: int
+) -> None:
+    """Edges + fold ids form a chronological partition of the stamps.
+
+    For random monotone timestamps (duplicates included): strictly
+    increasing edges anchored at the unique min/max, every fold id in
+    ``[0, n_blocks)``, every block populated, fold ids non-decreasing
+    along the sorted axis, and every stamp inside its half-open block
+    (the final block closed at the last edge).
+    """
+    uniq = np.unique(times)
+    assume(uniq.size >= 2 * n_blocks)
+    edges = fold_edges(times, n_blocks)
+    folds = assign_folds(times, edges)
+
+    assert len(edges) == n_blocks + 1
+    assert all(low < high for low, high in pairwise(edges))
+    assert edges[0] == int(uniq[0])
+    assert edges[-1] == int(uniq[-1])
+
+    assert set(folds.tolist()) == set(range(n_blocks))
+    assert int(folds.min()) >= 0 and int(folds.max()) < n_blocks
+    assert bool(np.all(np.diff(folds) >= 0))
+    for block in range(n_blocks):
+        block_stamps = times[folds == block]
+        assert block_stamps.size > 0
+        assert int(block_stamps.min()) >= edges[block]
+        if block < n_blocks - 1:
+            assert int(block_stamps.max()) < edges[block + 1]
+        else:
+            assert int(block_stamps.max()) <= edges[-1]
+
+
+_EV_VALUE_ARRAYS = hnp.arrays(
+    dtype=np.float64,
+    shape=st.integers(min_value=5, max_value=60),
+    elements=st.floats(min_value=-1.0, max_value=1.0),
+)
+
+
+@given(values=_EV_VALUE_ARRAYS)
+def test_ev_of_taken_within_taken_support_and_empty_nan(
+    values: np.ndarray,
+) -> None:
+    """EV is a mean of the taken exec values; empty taken is NaN.
+
+    A mean cannot leave the support of the values it averages (1e-12
+    absorbs the final-ulp of pairwise summation), and taking nothing
+    is the documented NaN -- never a fabricated 0.0 EV that would
+    read as a flat-but-tradeable strategy.
+    """
+    taken = values > 0.0
+    ev = ev_of_taken(values, taken)
+    if not bool(taken.any()):
+        assert math.isnan(ev)
+    else:
+        low = float(values[taken].min()) - 1e-12
+        high = float(values[taken].max()) + 1e-12
+        assert low <= ev <= high
+
+
+@given(
+    values=hnp.arrays(
+        dtype=np.float64,
+        shape=st.integers(min_value=5, max_value=40),
+        elements=st.floats(min_value=-1.0, max_value=1.0),
+    ),
+    n_boot=st.integers(min_value=10, max_value=40),
+    seed=st.integers(min_value=0, max_value=10**4),
+)
+def test_paired_bootstrap_deterministic_and_identical_arms_zero(
+    values: np.ndarray, n_boot: int, seed: int
+) -> None:
+    """Same seed reproduces the pair bitwise; identical arms give 0.0.
+
+    Two calls with one seed must return the exact same ``(t, skipped)``
+    pair (float equality, not a tolerance).  Feeding the SAME stream
+    as both arms makes every bootstrap diff exactly 0.0, so the t is
+    exactly 0.0 whenever at least two valid draws survive (fewer --
+    e.g. an arm that never trades -- is the documented NaN instead).
+    """
+    taken = values > -0.5
+    first = paired_bootstrap_t_stat(
+        values, taken, values, taken, n_boot=n_boot, seed=seed
+    )
+    repeat = paired_bootstrap_t_stat(
+        values, taken, values, taken, n_boot=n_boot, seed=seed
+    )
+    assert first == repeat
+    stat, skipped = first
+    assert skipped >= 0
+    if math.isfinite(stat):
+        assert stat == 0.0
