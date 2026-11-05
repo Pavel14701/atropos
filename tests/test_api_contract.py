@@ -148,6 +148,122 @@ def _deflated_sharpe_result() -> Mapping[str, Any]:
     return deflated_sharpe(returns, n_trials=10, seed=4)
 
 
+def _ml_kill_protocol_report() -> dict[str, Any]:
+    ml_training = pytest.importorskip("atropos.ml_training")
+    run_ml_kill_protocol = ml_training.run_ml_kill_protocol
+
+    rng = np.random.default_rng(0)
+    hidden = rng.standard_normal((600, 3))
+    feature_frame = pd.DataFrame(
+        {
+            "f1": hidden[:, 0],
+            "f2": hidden[:, 1],
+            "f3": hidden[:, 2],
+            "c1": rng.standard_normal(600),
+        }
+    )
+    exec_returns = (
+        0.01 * np.sign(hidden[:, 0] * hidden[:, 1])
+        + 0.002 * hidden[:, 2]
+        + 0.003 * rng.standard_normal(600)
+    )
+    stamps = np.arange(600, dtype=np.int64) * 3_600_000_000
+    target = (exec_returns > 0.004).astype(np.int64)
+    return dict(
+        run_ml_kill_protocol(
+            feature_frame,
+            target,
+            exec_returns,
+            stamps,
+            config={
+                "k_blocks": 3,
+                "bootstrap_b": 50,
+                "n_min_events": 5,
+                "checks": {"deflated_sharpe": False},
+                "model_params": {"gbm": {"n_estimators": 20}},
+            },
+            battery_controls=["c1"],
+        )
+    )
+
+
+def _ml_kill_protocol_model() -> Mapping[str, Any]:
+    report: Mapping[str, Any] = _ml_kill_protocol_report()["models"]["gbm"]
+    return report
+
+
+def _ml_kill_protocol_fold() -> Mapping[str, Any]:
+    fold: Mapping[str, Any] = _ml_kill_protocol_report()["folds"][0]
+    return fold
+
+
+def _ml_kill_protocol_fold_model() -> Mapping[str, Any]:
+    fold_model: Mapping[str, Any] = _ml_kill_protocol_report()["folds"][0][
+        "models"
+    ]["gbm"]
+    return fold_model
+
+
+def _ml_kill_protocol_kill() -> Mapping[str, Any]:
+    kill: Mapping[str, Any] = _ml_kill_protocol_report()["kills"][0]
+    return kill
+
+
+def _ml_kill_protocol_incremental() -> Mapping[str, Any]:
+    detail: Mapping[str, Any] = _ml_kill_protocol_report()["incremental"][
+        "gbm"
+    ]
+    return detail
+
+
+def _ensemble_report() -> dict[str, Any]:
+    ml_ensemble = pytest.importorskip("atropos.ml_ensemble")
+    run_ensemble_report = ml_ensemble.run_ensemble_report
+
+    rng = np.random.default_rng(0)
+    hidden = rng.standard_normal((500, 3))
+    feature_frame = pd.DataFrame(
+        {
+            "f1": hidden[:, 0],
+            "f2": hidden[:, 1],
+            "f3": hidden[:, 2],
+            "c1": rng.standard_normal(500),
+        }
+    )
+    exec_returns = (
+        0.01 * np.sign(hidden[:, 0] * hidden[:, 1])
+        + 0.002 * hidden[:, 2]
+        + 0.003 * rng.standard_normal(500)
+    )
+    stamps = np.arange(500, dtype=np.int64) * 3_600_000_000
+    target = (exec_returns > 0.004).astype(np.int64)
+    return dict(
+        run_ensemble_report(
+            feature_frame,
+            target,
+            exec_returns,
+            stamps,
+            ensemble={
+                "members": ["logit", "gbm"],
+                "combination": "mean",
+                "member_params": {"gbm": {"n_estimators": 20}},
+            },
+            config={
+                "k_blocks": 3,
+                "bootstrap_b": 50,
+                "n_min_events": 5,
+                "checks": {"deflated_sharpe": False},
+            },
+            battery_controls=["c1"],
+        )
+    )
+
+
+def _ensemble_report_namespace() -> Mapping[str, Any]:
+    namespace: Mapping[str, Any] = _ensemble_report()["ensemble"]
+    return namespace
+
+
 RESULT_BUILDERS: dict[str, Callable[[], Mapping[str, Any]]] = {
     "sharpe_ratio": _sharpe_result,
     "block_bootstrap_ci": _block_bootstrap_result,
@@ -160,6 +276,14 @@ RESULT_BUILDERS: dict[str, Callable[[], Mapping[str, Any]]] = {
     "run_cross_sectional_tests.mono": _cs_mono_result,
     "incremental_test": _incremental_result,
     "deflated_sharpe": _deflated_sharpe_result,
+    "run_ml_kill_protocol": _ml_kill_protocol_report,
+    "run_ml_kill_protocol.model": _ml_kill_protocol_model,
+    "run_ml_kill_protocol.fold": _ml_kill_protocol_fold,
+    "run_ml_kill_protocol.fold_model": _ml_kill_protocol_fold_model,
+    "run_ml_kill_protocol.kill": _ml_kill_protocol_kill,
+    "run_ml_kill_protocol.incremental": _ml_kill_protocol_incremental,
+    "run_ensemble_report": _ensemble_report,
+    "run_ensemble_report.ensemble": _ensemble_report_namespace,
 }
 
 EXPECTED_KEY_SETS: dict[str, frozenset[str]] = {
@@ -302,6 +426,95 @@ EXPECTED_KEY_SETS: dict[str, frozenset[str]] = {
             "kurtosis",
             "n_trials",
             "n",
+        }
+    ),
+    "run_ml_kill_protocol": frozenset(
+        {
+            "verdict",
+            "kills",
+            "n_events",
+            "n_rows",
+            "folds",
+            "models",
+            "baseline",
+            "battery",
+            "incremental",
+            "dsr_detail",
+            "ev_model",
+            "ev_baseline",
+            "ev_battery",
+            "deflated_sharpe",
+            "importance_stability",
+            "powered",
+            "n_min_events",
+            "config",
+        }
+    ),
+    "run_ml_kill_protocol.model": frozenset(
+        {
+            "verdict",
+            "ev",
+            "n_events",
+            "deflated_sharpe",
+            "importance_stability",
+            "kills",
+            "importance_by_fold",
+        }
+    ),
+    "run_ml_kill_protocol.fold": frozenset(
+        {
+            "fold",
+            "train_rows",
+            "test_rows",
+            "test_start",
+            "n_dropped_purge_embargo",
+            "models",
+        }
+    ),
+    "run_ml_kill_protocol.fold_model": frozenset(
+        {"threshold", "taken", "ev"}
+    ),
+    "run_ml_kill_protocol.kill": frozenset(
+        {"check", "enabled", "triggered", "inconclusive", "reason"}
+    ),
+    "run_ml_kill_protocol.incremental": frozenset(
+        {"t_vs_battery", "t_vs_baseline", "skipped_draws"}
+    ),
+    "run_ensemble_report": frozenset(
+        {
+            "verdict",
+            "kills",
+            "n_events",
+            "n_rows",
+            "folds",
+            "models",
+            "baseline",
+            "battery",
+            "incremental",
+            "dsr_detail",
+            "ev_model",
+            "ev_baseline",
+            "ev_battery",
+            "deflated_sharpe",
+            "importance_stability",
+            "powered",
+            "n_min_events",
+            "config",
+            "ensemble",
+        }
+    ),
+    "run_ensemble_report.ensemble": frozenset(
+        {
+            "members",
+            "combination",
+            "normalize_scores",
+            "weights",
+            "meta_learner",
+            "meta_folds",
+            "seed",
+            "oof_rows",
+            "oof_correlations",
+            "meta_coefficients",
         }
     ),
 }

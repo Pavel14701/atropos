@@ -20,10 +20,14 @@ __all__ = [
     "clean_1d",
     "frameify",
     "ols_hc0",
+    "purge_embargo_mask",
     "sane_variance_mask",
     "validate_int",
     "validate_number",
 ]
+
+_HOUR_US = 3_600 * 1_000_000
+"""Microseconds in one hour (the time unit of the purge/embargo mask)."""
 
 
 def validate_int(name: str, value: Any, minimum: int = 1) -> int:
@@ -347,3 +351,60 @@ def ols_hc0(target: np.ndarray, design: np.ndarray) -> dict[str, Any]:
         "r2": r2,
         "rank_deficient": False,
     }
+
+
+def purge_embargo_mask(
+    train_times: np.ndarray,
+    test_start: int,
+    horizon_h: int = 1,
+    purge_h: int = 2,
+    embargo_h: int = 24,
+) -> np.ndarray:
+    """Keep-mask for expanding walk-forward training rows (time-based).
+
+    A training row at ``t`` is kept iff ``t + (horizon_h + purge_h)``
+    hours <= ``test_start`` (its label window must not overlap the test
+    fold) AND ``t + embargo_h`` hours <= ``test_start`` (residual
+    information from rows NEAR the test boundary must not leak into
+    training -- the embargo flank sits BEFORE the test start, not
+    after it).
+    ``train_times`` and ``test_start`` are int64 microseconds; the
+    default hours mirror ``atropos.ml_training.DEFAULT_TRAINING_CONFIG``.
+
+    Semantically distinct from
+    :func:`atropos.predictive_model_eval.purged_kfold_cv`: that helper
+    purges by ROW distance from both sides of a contiguous test block
+    and has no embargo, while this mask works in wall-clock
+    microseconds against an arbitrary test-start stamp and adds the
+    embargo flank, which non-iid label streams require.
+
+    Args:
+        train_times: int64 microsecond stamps of candidate train rows.
+        test_start: int64 microsecond stamp where the test fold starts.
+        horizon_h: label horizon in hours (purge window component).
+        purge_h: extra purge hours beyond the label horizon.
+        embargo_h: embargo hours before the test fold start.
+
+    Returns:
+        Boolean keep-mask aligned with ``train_times``.
+
+    Example::
+
+        >>> hour = 3_600_000_000
+        >>> purge_embargo_mask(
+        ...     np.array([997, 998, 999]) * hour,
+        ...     1000 * hour,
+        ...     horizon_h=1,
+        ...     purge_h=2,
+        ...     embargo_h=2,
+        ... ).tolist()
+        [True, False, False]
+    """
+    raw = np.asarray(train_times)
+    times_finite = bool(np.isfinite(raw.astype(float)).all())
+    if raw.size and not times_finite:
+        raise ValueError("train_times must contain finite microsecond stamps")
+    stamps = raw.astype(np.int64)
+    keep_purge = stamps + (horizon_h + purge_h) * _HOUR_US <= test_start
+    keep_embargo = stamps + embargo_h * _HOUR_US <= test_start
+    return keep_purge & keep_embargo

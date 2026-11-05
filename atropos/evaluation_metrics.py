@@ -22,6 +22,7 @@ Run ``python -m atropos.evaluation_metrics`` for a synthetic demo.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import numpy as np
@@ -38,6 +39,7 @@ from atropos._utils import (
 __all__ = [
     "calmar_ratio",
     "deflated_sharpe",
+    "deflated_sharpe_from_moments",
     "equity_from_returns",
     "max_drawdown",
     "profit_factor",
@@ -335,6 +337,83 @@ def _boot_sr_var_annual(
     return float(np.var(sr_boot, ddof=1))
 
 
+def deflated_sharpe_from_moments(
+    sr: float,
+    n_obs: int,
+    skew_val: float,
+    kurt_val: float,
+    var_sr: float,
+    *,
+    n_trials: int,
+) -> float:
+    """Deflated Sharpe ratio (CDF form) from pre-computed moments.
+
+    THE single computational home of the Bailey & Lopez de Prado (2014)
+    deflation formula shared by :func:`deflated_sharpe` (per-period
+    return stream -> moments here) and the ML engine's
+    ``atropos.ml_training.deflated_sharpe_value`` (already-computed
+    moments of a per-trade/per-day EV stream).  Everything is in
+    PER-PERIOD units: ``sr`` and ``var_sr`` must use the same
+    de-annualization convention (the returns-based wrapper converts
+    ``sr_var_annual / periods`` before calling).
+
+    ``DSR = Phi((sr - sr0) * sqrt(n_obs - 1) / sqrt(denom))`` with
+    ``denom = 1 - skew*sr + (kurt - 1)/4 * sr^2`` and the benchmark
+    ``sr0 = sqrt(var_sr) * E[max of n_trials unit normals]``
+    (``n_trials <= 1`` carries no multiple-testing penalty:
+    ``sr0 = 0``, DSR degenerates to the probabilistic Sharpe ratio).
+
+    NaN policy (degenerate input is never a fabricated 0 or 1): a
+    non-finite moment, ``n_obs < 3`` (no honest DSR below three
+    observations), a negative trial variance (sign error) or a
+    degenerate denominator (``denom <= 0``: the normal approximation
+    leaves its domain at the vertex of that quadratic) all yield NaN.
+
+    Args:
+        sr: (per-period) Sharpe ratio of the stream.
+        n_obs: number of observations in the stream, integer >= 0
+            (an empty stream is the returns-based caller's degenerate
+            case; anything below 3 yields NaN, not an error).
+        skew_val: sample skewness of the stream.
+        kurt_val: Pearson (non-excess) kurtosis of the stream.
+        var_sr: variance of SRs across the sibling trial streams, in
+            the same per-period SR units as ``sr``.
+        n_trials: declared number of trials, integer >= 1 (values
+            <= 1 get a zero benchmark; callers may enforce a stricter
+            minimum before calling, as the ML engine does).
+
+    Returns:
+        The deflated Sharpe ratio ``Phi(z)`` in [0, 1], or NaN.
+
+    Raises:
+        ValueError: if ``n_obs`` is not an integer >= 0 or ``n_trials``
+            is not an integer >= 1.
+
+    Example::
+
+        >>> round(deflated_sharpe_from_moments(
+        ...     0.0, 100, 0.0, 3.0, 0.0, n_trials=5
+        ... ), 6)
+        0.5
+    """
+    n_obs = validate_int("n_obs", n_obs, minimum=0)
+    n_trials = validate_int("n_trials", n_trials)
+    if not all(
+        math.isfinite(float(value))
+        for value in (sr, skew_val, kurt_val, var_sr)
+    ):
+        return math.nan
+    if n_obs < 3 or var_sr < 0.0:
+        return math.nan
+    expected_max = _expected_max_normal(n_trials)
+    sr0 = math.sqrt(var_sr) * expected_max
+    denom2 = 1.0 - skew_val * sr + ((kurt_val - 1.0) / 4.0) * sr * sr
+    if not np.isfinite(denom2) or denom2 <= 0.0:
+        return math.nan
+    denom = float(np.sqrt(max(denom2, 1e-12)))
+    return float(stats.norm.cdf((sr - sr0) * np.sqrt(n_obs - 1) / denom))
+
+
 def deflated_sharpe(
     returns: Any,
     n_trials: int,
@@ -355,6 +434,10 @@ def deflated_sharpe(
     the expected max SR of ``n_trials`` unit-variance trials.
     ``n_trials <= 1`` carries no multiple-testing penalty (``SR0 = 0``)
     and DSR equals the probabilistic Sharpe ratio.
+
+    The formula's single computational home is
+    :func:`deflated_sharpe_from_moments`; this wrapper estimates the
+    moments from ``returns`` and delegates.
 
     Args:
         returns: 1-D array-like of per-period returns (NaNs dropped).
@@ -460,23 +543,17 @@ def deflated_sharpe(
     sr0_pp = float(
         np.sqrt(max(sr_var_used, 1e-12) / periods)
     ) * _expected_max_normal(n_trials)
-    denom2 = (
-        1.0
-        - skew * sr_pp_used
-        + ((kurt - 1.0) / 4.0) * sr_pp_used * sr_pp_used
+    # The deflation math itself lives in
+    # :func:`deflated_sharpe_from_moments` (single home shared with the
+    # ML engine's moment-based wrapper).  The variance unit-floor stays
+    # HERE in annual units, applied before the per-period conversion,
+    # so this wrapper's numbers stay bit-compatible with the
+    # pre-unification implementation; the reported ``sr_var_annual``
+    # field stays the raw input.
+    var_sr_pp = max(sr_var_used, 1e-12) / periods
+    dsr = deflated_sharpe_from_moments(
+        sr_pp_used, n_obs, skew, kurt, var_sr_pp, n_trials=n_trials
     )
-    if (
-        np.isfinite(sr_pp_used)
-        and n_obs > 1
-        and np.isfinite(denom2)
-        and denom2 > 0.0
-    ):
-        denom = float(np.sqrt(max(denom2, 1e-12)))
-        dsr = float(
-            stats.norm.cdf((sr_pp_used - sr0_pp) * np.sqrt(n_obs - 1) / denom)
-        )
-    else:
-        dsr = float("nan")
     return {
         "dsr": dsr,
         "p_value": float(1.0 - dsr) if np.isfinite(dsr) else float("nan"),

@@ -269,6 +269,8 @@ def purged_kfold_cv(
         train indices kept:  j < test_lo - purge_gap  or
                               j > test_hi + purge_gap
 
+    Time-based variant with embargo: ``atropos._utils.purge_embargo_mask``.
+
     When ``model_fn`` is given, every fold is scored: out-of-fold
     predictions, per-fold information coefficient (Pearson corr of forecast
     vs realized) and directional hit rate.  A fold whose training set is

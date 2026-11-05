@@ -13,9 +13,12 @@ from collections.abc import Callable
 
 import numpy as np
 import pytest
+from atropos._utils import validate_int
 from atropos.evaluation_metrics import (
+    _expected_max_normal,
     calmar_ratio,
     deflated_sharpe,
+    deflated_sharpe_from_moments,
     equity_from_returns,
     max_drawdown,
     profit_factor,
@@ -234,6 +237,203 @@ def test_deflated_sharpe_degenerate_denominator_is_nan() -> None:
     assert math.isnan(out["p_value"])
     sane = deflated_sharpe(rets, n_trials=5)
     assert math.isfinite(sane["dsr"])
+
+
+def _legacy_deflated_sharpe_value(
+    sr: float,
+    n_obs: int,
+    skew_val: float,
+    kurt_val: float,
+    var_sr: float,
+    *,
+    n_trials: int = 5,
+) -> float:
+    """Verbatim pre-unification copy of ml_training.deflated_sharpe_value.
+
+    Kept ONLY as the differential reference for the unification pin
+    below (the primitive must reproduce it bit-for-bit); the live
+    implementation is a thin delegation to
+    :func:`atropos.evaluation_metrics.deflated_sharpe_from_moments`.
+    """
+    n_obs = validate_int("n_obs", n_obs)
+    n_trials = validate_int("n_trials", n_trials, minimum=2)
+    if not all(
+        math.isfinite(float(value))
+        for value in (sr, skew_val, kurt_val, var_sr)
+    ):
+        return float("nan")
+    if n_obs < 3 or var_sr < 0.0:
+        return float("nan")
+    gamma = 0.5772156649015329
+    z1 = float(stats.norm.ppf(1.0 - 1.0 / n_trials))
+    z2 = float(stats.norm.ppf(1.0 - 1.0 / (n_trials * math.e)))
+    sr0 = math.sqrt(var_sr) * ((1.0 - gamma) * z1 + gamma * z2)
+    denom = 1.0 - skew_val * sr + ((kurt_val - 1.0) / 4.0) * sr * sr
+    if denom <= 0.0:
+        return float("nan")
+    return float(
+        stats.norm.cdf((sr - sr0) * math.sqrt(n_obs - 1) / math.sqrt(denom))
+    )
+
+
+def _legacy_deflated_sharpe_cdf(
+    sr_pp: float,
+    n_obs: int,
+    skew: float,
+    kurt: float,
+    sr_var_annual: float,
+    *,
+    periods: int,
+    n_trials: int,
+) -> float:
+    """Verbatim pre-unification inner CDF math of deflated_sharpe.
+
+    The annual-variance unit floor and the per-period conversion used
+    to happen here, before the denominator guard; the wrapper now
+    keeps the floor/conversion and delegates to the shared primitive.
+    """
+    sr0_pp = float(
+        np.sqrt(max(sr_var_annual, 1e-12) / periods)
+    ) * _expected_max_normal(n_trials)
+    denom2 = 1.0 - skew * sr_pp + ((kurt - 1.0) / 4.0) * sr_pp * sr_pp
+    if (
+        np.isfinite(sr_pp)
+        and n_obs > 1
+        and np.isfinite(denom2)
+        and denom2 > 0.0
+    ):
+        denom = float(np.sqrt(max(denom2, 1e-12)))
+        return float(
+            stats.norm.cdf((sr_pp - sr0_pp) * np.sqrt(n_obs - 1) / denom)
+        )
+    return float("nan")
+
+
+def _moments(returns: np.ndarray) -> tuple[float, float, float]:
+    """Sample (sr_per_period, skew, Pearson kurtosis) of a stream."""
+    sr_pp = float(returns.mean() / returns.std(ddof=1))
+    return (
+        sr_pp,
+        float(stats.skew(returns)),
+        float(stats.kurtosis(returns, fisher=False)),
+    )
+
+
+@pytest.mark.parametrize("n_obs", [300, 1500])
+@pytest.mark.parametrize("n_trials", [1, 2, 10, 100])
+@pytest.mark.parametrize("seed", [0, 3, 9])
+def test_dsr_primitive_equals_legacy_returns_path(
+    seed: int, n_trials: int, n_obs: int
+) -> None:
+    """Unification pin: returns-based DSR reproduces the legacy copy.
+
+    ``deflated_sharpe`` must stay bit-identical to the
+    pre-unification inner math on the sample-moment path: the
+    primitive receives the same per-period moments and the annual
+    variance with its unit floor applied at the SAME point.
+    """
+    returns = 0.0004 + 0.01 * np.random.default_rng(seed).standard_normal(
+        n_obs
+    )
+    out = deflated_sharpe(returns, n_trials=n_trials, seed=0)
+    sr_pp, skew, kurt = _moments(returns)
+    legacy = _legacy_deflated_sharpe_cdf(
+        sr_pp, n_obs, skew, kurt, 1.0, periods=252, n_trials=n_trials
+    )
+    primitive = deflated_sharpe_from_moments(
+        sr_pp, n_obs, skew, kurt, 1.0 / 252, n_trials=n_trials
+    )
+    assert out["dsr"] == primitive
+    assert out["dsr"] == legacy
+
+
+def test_dsr_primitive_equals_legacy_sr_annual_driven() -> None:
+    """Unification pin on the caller-supplied ``sr_annual`` path.
+
+    ``sr_annual`` de-annualizes to ``sr_annual / sqrt(periods)`` and
+    DRIVES the test; the primitive must reproduce the legacy number
+    exactly on that driven path too.
+    """
+    returns = 0.0004 + 0.01 * np.random.default_rng(3).standard_normal(300)
+    out = deflated_sharpe(returns, n_trials=5, sr_annual=2.0, seed=0)
+    sr_pp_used = 2.0 / float(np.sqrt(252))
+    _, skew, kurt = _moments(returns)
+    legacy = _legacy_deflated_sharpe_cdf(
+        sr_pp_used, 300, skew, kurt, 1.0, periods=252, n_trials=5
+    )
+    primitive = deflated_sharpe_from_moments(
+        sr_pp_used, 300, skew, kurt, 1.0 / 252, n_trials=5
+    )
+    assert out["dsr"] == primitive == legacy
+
+
+@pytest.mark.parametrize("n_obs", [1, 2, 3, 100])
+@pytest.mark.parametrize("var_sr", [-0.1, 0.0, 0.1, 1.0])
+@pytest.mark.parametrize("kurt_val", [1.0, 3.0, 10.0])
+@pytest.mark.parametrize("skew_val", [0.0, -1.5, 2.0])
+@pytest.mark.parametrize("sr", [-1.0, -0.3, 0.0, 0.5, 2.0, 10.0])
+def test_dsr_primitive_equals_legacy_moments_copy(
+    sr: float, skew_val: float, kurt_val: float, var_sr: float, n_obs: int
+) -> None:
+    """Unification pin on the moment-based path: primitive == old copy.
+
+    Exact float equality (or paired NaN) on a grid spanning positive,
+    negative and zero Sharpe, degenerate kurtosis=1, zero/negative
+    trial variance and n_obs below/above the n_obs >= 3 policy line.
+    """
+    legacy = _legacy_deflated_sharpe_value(
+        sr, n_obs, skew_val, kurt_val, var_sr, n_trials=5
+    )
+    new = deflated_sharpe_from_moments(
+        sr, n_obs, skew_val, kurt_val, var_sr, n_trials=5
+    )
+    if math.isnan(legacy):
+        assert math.isnan(new)
+    else:
+        assert new == legacy
+        assert 0.0 <= new <= 1.0
+
+
+def test_dsr_primitive_nan_on_nonfinite_moments() -> None:
+    """Non-finite moments are refused (reconciled honest policy).
+
+    The pre-unification ml copy could fabricate a plausible CDF from
+    an infinite moment when the denominator quadratic stayed positive
+    (e.g. ``skew=+inf`` with a negative sr collapses to Phi(-0.0)
+    there); the unified primitive checks every moment up front and
+    yields NaN instead of a fabricated 0/1.
+    """
+    nonfinite_cases: list[tuple[float, int, float, float, float]] = [
+        (math.inf, 100, 0.0, 3.0, 0.1),
+        (-math.inf, 100, 0.0, 3.0, 0.1),
+        (math.nan, 100, 0.0, 3.0, 0.1),
+        (0.5, 100, math.inf, 3.0, 0.1),
+        (-0.5, 100, math.inf, 3.0, 0.1),
+        (0.5, 100, 0.0, math.inf, 0.1),
+        (0.5, 100, 0.0, 3.0, math.inf),
+    ]
+    for case in nonfinite_cases:
+        assert math.isnan(deflated_sharpe_from_moments(*case, n_trials=5)), (
+            case
+        )
+
+
+@pytest.mark.parametrize("n_trials", [2, 10, 100])
+def test_dsr_primitive_single_home_for_trial_penalty(n_trials: int) -> None:
+    """The benchmark is the shared E[max] helper at every trial count.
+
+    Both wrappers reach the SAME primitive, so the multiple-testing
+    penalty cannot drift between the returns path and the EV-stream
+    path; the spot check pins one representative combo per trial
+    count against the legacy copy.
+    """
+    legacy = _legacy_deflated_sharpe_value(
+        0.5, 100, 0.0, 3.0, 0.1, n_trials=n_trials
+    )
+    new = deflated_sharpe_from_moments(
+        0.5, 100, 0.0, 3.0, 0.1, n_trials=n_trials
+    )
+    assert new == legacy
 
 
 def test_deflated_sharpe_rf_subtracts_from_returns() -> None:
