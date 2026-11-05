@@ -5,7 +5,7 @@ The only honest way to measure a rule's out-of-sample t-statistic.
 predicts the next slice, and stacks the out-of-sample PnL:
 
 * **Expanding, not rolling** - each fold trains on ALL history before the
-  test slice (``data.iloc[:t0]``); the framework offers no rolling mode
+  test slice (``data.iloc[:t0]``); the module offers no rolling mode
   at all.
 * **Purge / embargo** - ``purge_gap`` rows directly before each test
   slice are REMOVED from the train slice.  With multi-period forward

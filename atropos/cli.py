@@ -630,7 +630,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=PROG,
         description=(
-            "Atropos hypothesis-killing framework: agent context tools."
+            "Atropos hypothesis-killing library: agent context tools."
         ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)

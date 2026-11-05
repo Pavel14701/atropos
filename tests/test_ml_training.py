@@ -1478,8 +1478,6 @@ def test_dsr_cdf_tail_representable_at_demo_depth() -> None:
     strictly positive -- representable, not underflow, not fabricated
     0/1 -- with no runtime warnings.
     """
-    import warnings
-
     stream = np.linspace(-0.055, -0.045, 21)
     stats = stream_stats(stream)
     with warnings.catch_warnings():

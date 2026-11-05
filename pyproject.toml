@@ -1,7 +1,7 @@
 [project]
 name = "atropos"
 version = "1.0.0"
-description = "Atropos — hypothesis-killing framework: preregistration, null controls, incremental tests, robustness batteries, walk-forward and Monte Carlo verdicts."
+description = "Atropos — hypothesis-killing library: preregistration, null controls, incremental tests, robustness batteries, walk-forward and Monte Carlo verdicts."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

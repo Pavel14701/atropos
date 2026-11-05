@@ -291,7 +291,7 @@ def ols_hc0(target: np.ndarray, design: np.ndarray) -> dict[str, Any]:
     column rank, the model is not identified and every statistic is NaN
     with ``rank_deficient=True``. A pseudo-inverse would otherwise
     fabricate plausible-looking minimum-norm t-stats exactly in the
-    collinearity cases the framework must flag, so callers are expected
+    collinearity cases the library must flag, so callers are expected
     to treat ``rank_deficient`` (or non-finite ``t``) as INCONCLUSIVE.
 
     Non-finite inputs (NaN/inf columns or target) and fits whose

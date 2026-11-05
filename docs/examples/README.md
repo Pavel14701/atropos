@@ -1,7 +1,7 @@
 # docs/examples — committed demo transcripts
 
 Committed outputs of the package demos, so a reader can see what the
-framework produces without running anything first.
+library produces without running anything first.
 
 ## ml_training_demo.log
 

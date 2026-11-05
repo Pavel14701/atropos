@@ -1,6 +1,6 @@
 """Runtime workspace scaffolding: generate the user hypothesis files.
 
-The framework never assumes ``GRAVEYARD.md`` or ``hypotheses/INDEX.csv``
+The library never assumes ``GRAVEYARD.md`` or ``hypotheses/INDEX.csv``
 exist on the user's disk: :func:`init_workspace` materialises the
 skeleton on demand (``atropos init``).  Generation is strictly additive
 - an existing file is reported in ``"skipped"`` and left byte-for-byte
