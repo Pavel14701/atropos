@@ -56,3 +56,30 @@ jobs:
       # frozen prereg, then the walk-forward verdicts (expected ~3s)
       - name: Real-data example (SPY 12-1 TSMOM, --quick)
         run: uv run python examples/real_data/run_example.py --quick
+
+  # WITH-extras leg of the test matrix: lightgbm (the optional
+  # "ranking" extra) installed.  The ranking suite passes without the
+  # extra too (the lambdarank tests importorskip it), so this job
+  # covers the oracle path the default sync leaves skipped.
+  ranking-extra:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          # match .python-version; a skew forks the uv.lock resolution
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync environment (uv.lock + ranking extra)
+        run: uv sync --locked --extra ranking
+
+      - name: Ranking suite (lightgbm lambdarank oracle included)
+        run: uv run python -m pytest tests/test_ranking.py --tb=no -q
+
+      # clean-interpreter demo smoke: the module must import and run
+      # with the extra installed (and its AST guard keeps lightgbm out
+      # of the module's top level either way)
+      - name: Ranking module demo smoke (python -m)
+        run: uv run python -m atropos.ranking
