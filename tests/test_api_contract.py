@@ -15,7 +15,10 @@ from __future__ import annotations
 
 import importlib
 import math
+import os
 import pkgutil
+import subprocess
+import sys
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -834,3 +837,86 @@ def test_max_drawdown_rejects_non_positive_equity() -> None:
     """Multiplicative drawdown needs a strictly positive curve."""
     with pytest.raises(ValueError, match="strictly positive"):
         max_drawdown([1.0, 1.1, 0.0, 1.2])
+
+
+# ---------------------------------------------------------------------------
+# 5. package root: curated backtest golden path
+# ---------------------------------------------------------------------------
+CURATED_BACKTEST_EXPORTS: tuple[str, ...] = (
+    "simulate_signal",
+    "run_position_state_machine",
+    "CostModel",
+    "run_admission_policy",
+    "rank_within_groups",
+    "rank_normalize_group",
+    "CandidateGroup",
+    "RANKING_METRICS",
+    "RANKER_SUITABILITY",
+    "per_trade_sharpe",
+    "pooled_stats",
+    "trade_curve_stats",
+)
+"""Backtest golden path names the package root must keep re-exporting."""
+
+ORACLE_AND_SIM_HELPERS: tuple[str, ...] = (
+    "rank_with_lambdarank",
+    "ev_threshold",
+    "paired_bootstrap_diff",
+    "maker_entry_sim",
+    "maker_sim",
+    "market_sim",
+)
+"""Oracle/comparison tools that must stay in their submodules."""
+
+
+@pytest.mark.parametrize("name", CURATED_BACKTEST_EXPORTS)
+def test_public_api_curated_backtest_path(name: str) -> None:
+    """Each curated golden-path name imports from the package root."""
+    assert name in atropos.__all__, name
+    assert getattr(importlib.import_module("atropos"), name) is not None
+
+
+def test_public_api_excludes_oracle_and_sim_helpers() -> None:
+    """The lambdarank oracle and sim helpers are not golden path."""
+    leaked = set(ORACLE_AND_SIM_HELPERS) & set(
+        getattr(atropos, "__all__", ())
+    )
+    assert not leaked, leaked
+    for name in ORACLE_AND_SIM_HELPERS:
+        assert not hasattr(atropos, name), name
+
+
+def test_init_does_not_import_lightgbm() -> None:
+    """A fresh ``import atropos`` must not pull the optional extra.
+
+    Mirrors the clean-interpreter pattern of
+    ``tests/test_ranking.py``: pin the child's BLAS/OpenMP thread
+    pools to 1 so a bare interpreter spawned from a long pytest
+    session cannot fail on memory-committed hosts, with one retry on
+    "Memory allocation" for the same environment reason.  Only a
+    non-allocation stderr (a real import error) fails immediately.
+    """
+    environment = {
+        **os.environ,
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+    }
+    child = (
+        "import atropos, sys; "
+        'assert "lightgbm" not in sys.modules, "lightgbm leaked"'
+    )
+    result = None
+    for _attempt in range(2):
+        result = subprocess.run(
+            [sys.executable, "-I", "-c", child],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=environment,
+        )
+        if result.returncode == 0:
+            break
+        assert "Memory allocation" not in result.stderr, result.stderr
+    assert result is not None and result.returncode == 0, (
+        result.stderr if result is not None else "no attempt ran"
+    )

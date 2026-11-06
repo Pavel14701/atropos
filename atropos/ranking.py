@@ -523,6 +523,12 @@ def rank_within_groups(
         ... )
         >>> report["n_scored"], report["n_skipped"]
         (2, 0)
+
+    Cross-ranker comparability note: ``n_skipped`` counts SKIPPED
+    groups of THIS run only (too few rows / single-class).  When
+    comparing two rankers via ``RANKING_METRICS``, compare them on the
+    INTERSECTION of ``scored_group_ids`` so unequal skip sets cannot
+    fake a difference.
         >>> report["selected"]
         [8, 11]
         >>> rank_within_groups(report["groups"], top_s=1)["selected"]
@@ -1085,6 +1091,11 @@ def ev_threshold(
     resolve toward the smaller threshold (more trades); pairs with a
     non-finite ``proba`` or ``exec_vals`` entry are dropped.
 
+    NOT an alias of :func:`atropos.ml_training.pick_threshold`:
+    inclusive ``>=`` + the all-trades floor ``-inf`` + an ``(thr,
+    ev, n)`` tuple, vs strict ``>`` + a bare float -- see the
+    Differences test in ``tests/test_ranking.py``.
+
     Args:
         proba: predicted probabilities of the positive class.
         exec_vals: executable per-event returns of the same rows.
@@ -1286,14 +1297,22 @@ def paired_bootstrap_diff(
     the mean difference, the 2.5 / 97.5 percentiles and the fraction
     of draws with ``diff <= 0`` (a one-sided pseudo-p-value).
 
-    Semantically distinct from
-    :func:`atropos.ml_training.paired_bootstrap_t_stat`: that variant
-    resamples ``(exec, taken-flag)`` pairs and reports a t-statistic;
-    this one reports the raw paired-difference CI with no t.
+    NOT an alias of
+    :func:`atropos.ml_training.paired_bootstrap_t_stat` (raw paired
+    diff CI + ``p_le0``, no t-stat): that variant resamples
+    ``(exec, taken-flag)`` pairs and reports a t-statistic; this one
+    reports the raw paired-difference CI with no t.  The
+    ``embargo_until`` reminder stands: enforcement belongs to the
+    fold scheduler that produced the per-group values (see
+    ``arm_b`` below).
 
     Args:
         arm_a: per-group metric values of ranker A.
-        arm_b: per-group metric values of ranker B (same groups).
+        arm_b: per-group metric values of ranker B (same groups).  The
+            caller is responsible for the group set being comparable:
+            ``CandidateGroup.embargo_until`` is carried but NOT
+            enforced here (enforcement belongs to the fold scheduler
+            that produced the per-group values).
         n_boot: number of bootstrap draws, integer >= 2.
         seed: RNG seed, integer >= 0.
 
