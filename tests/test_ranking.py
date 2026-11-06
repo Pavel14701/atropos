@@ -26,6 +26,14 @@ Pinned here:
   :func:`atropos.ml_training.pick_threshold`) / the pandas rule-table
   gate / :func:`paired_bootstrap_diff` (raw paired CI -- distinct
   from the taken-flag t-statistic);
+* the cross-ranker safe path made default:
+  :func:`compare_rankers_on_intersection` restricts every metric to
+  the ``scored_group_ids`` INTERSECTION (an unequal skip set cannot
+  fake a gap) and attaches a paired-bootstrap CI on the diff;
+* the opt-in ``enforce_embargo`` of :func:`paired_bootstrap_diff`:
+  pairs embargoed past the current fold leave the resampling before
+  any draw, while the default off-path stays bit-identical to the
+  historical caller-owned behavior;
 * the module imports WITHOUT lightgbm: AST guard (no top-level
   lightgbm import), clean-interpreter import, and the pointwise path
   never pulls lightgbm into ``sys.modules``.
@@ -55,6 +63,7 @@ from atropos.ranking import (
     RANKING_METRICS,
     CandidateGroup,
     apply_rule_table,
+    compare_rankers_on_intersection,
     ev_threshold,
     fit_rule_table,
     mean_reciprocal_rank,
@@ -1167,8 +1176,317 @@ def test_paired_bootstrap_diff_agrees_with_t_stat_on_trivial_case() -> None:
     assert diff["diff"] == 0.0
 
 
+def test_paired_bootstrap_diff_enforced_embargo_drops_violators() -> None:
+    """enforce_embargo=True drops pairs embargoed past the fold.
+
+    The violating pair leaves BEFORE any draw: the enforced run is
+    bit-identical to bootstrapping the pre-dropped arms on one seed.
+    """
+    arm_a = np.array([0.4, 0.6, 0.5])
+    arm_b = np.array([0.2, 0.3, 0.9])  # pair 3 diffs -0.4 (violating)
+    enforced = paired_bootstrap_diff(
+        arm_a,
+        arm_b,
+        n_boot=200,
+        seed=7,
+        enforce_embargo=True,
+        current_fold=1,
+        group_ids=["d1", "d2", "d3"],
+        embargo_until_by_group={"d3": 4},
+    )
+    assert enforced["n"] == 2
+    assert enforced["diff"] == pytest.approx(0.25)
+    pre_dropped = paired_bootstrap_diff(
+        np.array([0.4, 0.6]), np.array([0.2, 0.3]), n_boot=200, seed=7
+    )
+    assert enforced["lo"] == pre_dropped["lo"]
+    assert enforced["hi"] == pre_dropped["hi"]
+    # boundary: embargo_until == current_fold is NOT a violation
+    boundary = paired_bootstrap_diff(
+        arm_a,
+        arm_b,
+        n_boot=200,
+        seed=7,
+        enforce_embargo=True,
+        current_fold=4,
+        group_ids=["d1", "d2", "d3"],
+        embargo_until_by_group={"d3": 4},
+    )
+    assert boundary["n"] == 3
+    assert boundary["diff"] == pytest.approx(float(np.mean([0.2, 0.3, -0.4])))
+    # metadata for ids absent from group_ids is silently irrelevant
+    untracked = paired_bootstrap_diff(
+        arm_a,
+        arm_b,
+        n_boot=200,
+        seed=7,
+        enforce_embargo=True,
+        current_fold=1,
+        group_ids=["d1", "d2", "d3"],
+        embargo_until_by_group={"d9": 99},
+    )
+    assert untracked["n"] == 3
+
+
+def test_paired_bootstrap_diff_embargo_default_stays_off() -> None:
+    """Default call keeps the violating pair; stray metadata is loud.
+
+    Metadata passed without the enforce flag, and the flag passed
+    without complete metadata, are both dead configurations -> error.
+    """
+    arm_a = np.array([0.4, 0.6, 0.5])
+    arm_b = np.array([0.2, 0.3, 0.9])
+    plain = paired_bootstrap_diff(arm_a, arm_b, n_boot=200, seed=7)
+    assert plain["n"] == 3  # the violating pair resampled as before
+    with pytest.raises(ValueError, match="enforce_embargo=True"):
+        paired_bootstrap_diff(
+            arm_a,
+            arm_b,
+            current_fold=1,
+            group_ids=["d1", "d2", "d3"],
+            embargo_until_by_group={"d3": 4},
+        )
+    with pytest.raises(ValueError, match="needs current_fold"):
+        paired_bootstrap_diff(
+            arm_a,
+            arm_b,
+            enforce_embargo=True,
+            group_ids=["d1", "d2", "d3"],
+        )
+
+
+def test_paired_bootstrap_diff_embargo_group_ids_must_align() -> None:
+    """A group_ids length off the arm length fails loudly."""
+    arm = np.array([0.4, 0.6, 0.5])
+    with pytest.raises(ValueError, match="group_ids length"):
+        paired_bootstrap_diff(
+            arm,
+            arm,
+            enforce_embargo=True,
+            current_fold=1,
+            group_ids=["d1", "d2"],
+            embargo_until_by_group={"d2": 3},
+        )
+
+
+def test_paired_bootstrap_diff_embargo_and_nan_drops_combine() -> None:
+    """The embargo drop stacks with the NaN-pair drop on one mask."""
+    arm_a = np.array([np.nan, 0.6, 0.5])
+    arm_b = np.array([0.1, 0.3, 0.9])
+    result = paired_bootstrap_diff(
+        arm_a,
+        arm_b,
+        n_boot=100,
+        seed=7,
+        enforce_embargo=True,
+        current_fold=1,
+        group_ids=["d1", "d2", "d3"],
+        embargo_until_by_group={"d3": 4},
+    )
+    assert result["n"] == 1
+    assert result["diff"] == pytest.approx(0.3)
+    empty = paired_bootstrap_diff(
+        arm_a,
+        arm_b,
+        n_boot=100,
+        seed=7,
+        enforce_embargo=True,
+        current_fold=1,
+        group_ids=["d1", "d2", "d3"],
+        embargo_until_by_group={"d1": 5, "d2": 9, "d3": 7},
+    )
+    assert empty == {"diff": 0.0, "lo": 0.0, "hi": 0.0, "p_le0": 1.0, "n": 0}
+
+
 # ---------------------------------------------------------------------------
-# 13. chaos: degenerate inputs fail loudly, never silently
+# 13. compare_rankers_on_intersection (scored intersection + CI)
+# ---------------------------------------------------------------------------
+def _comparison_world() -> dict[str, tuple[list[float], list[float]]]:
+    """Four days of ``(scores, graded labels)``; d4 is ranker A's trap."""
+    return {
+        "d1": ([0.9, 0.1], [2.0, 1.0]),
+        "d2": ([0.3, 0.7], [1.0, 2.0]),
+        "d3": ([0.5, 0.5], [1.5, 1.5]),
+        # the trap day: scores INVERTED against the labels, so any
+        # comparison that lets it leak into one arm fakes a gap
+        "d4": ([0.2, 0.8], [2.0, 0.1]),
+    }
+
+
+def _report_over_days(
+    world: dict[str, tuple[list[float], list[float]]],
+    days: list[str],
+) -> dict[str, Any]:
+    """Given-scores report over ``days`` (a skip = simply not scored)."""
+    groups = [
+        CandidateGroup(
+            group_id=day,
+            candidates=[
+                f"{day}_c{position}" for position in range(len(world[day][0]))
+            ],
+            scores=np.array(world[day][0]),
+            labels=np.array(world[day][1]),
+        )
+        for day in days
+    ]
+    return rank_within_groups(groups, top_s=1)
+
+
+def test_compare_on_intersection_excludes_unshared_skip_pattern() -> None:
+    """Only common groups enter: an unshared inverted day cannot gap.
+
+    The watch-item scenario made concrete: ranker A scored and
+    INVERTED d4, ranker B never scored it.  A naive full-list mean
+    would fake a 0.09 ndcg gap; the intersection comparison must
+    report identical (perfect) means on the three common days.
+    """
+    world = _comparison_world()
+    report_a = _report_over_days(world, ["d1", "d2", "d3", "d4"])
+    report_b = _report_over_days(world, ["d1", "d2", "d3"])
+    assert report_a["n_scored"] == 4
+    assert report_b["n_scored"] == 3
+    compared = compare_rankers_on_intersection(report_a, report_b)
+    assert set(compared) == set(RANKING_METRICS) | {"groups_used"}
+    assert compared["groups_used"] == ["d1", "d2", "d3"]
+    for metric_name, entry in compared.items():
+        if metric_name == "groups_used":
+            continue
+        assert set(entry) == {
+            "a",
+            "b",
+            "diff",
+            "lo",
+            "hi",
+            "p_le0",
+            "n",
+            "n_common",
+        }, metric_name
+        assert entry["n_common"] == 3
+        assert entry["n"] == 3
+        assert entry["a"] == pytest.approx(1.0), metric_name
+        assert entry["b"] == pytest.approx(1.0), metric_name
+        assert entry["diff"] == pytest.approx(0.0), metric_name
+        assert entry["p_le0"] == 1.0, metric_name
+    # teeth: the world really carries the hazard the helper removes --
+    # A's full-list ndcg mean (d4 included) is NOT 1.0
+    naive_full_list_ndcg_a = (3.0 + 1.0 / np.log2(3.0)) / 4.0
+    assert naive_full_list_ndcg_a != pytest.approx(1.0)
+
+
+def test_compare_on_intersection_bootstraps_the_diff() -> None:
+    """A uniformly worse arm gets a CI clear of zero, p_le0 == 0.
+
+    d1 / d2 only: both are strict orderings, so inverting the scores
+    inverts every common day (d3's full tie would tie-break back to
+    the ideal order and dilute the per-group diffs).
+    """
+    world = _comparison_world()
+    report_a = _report_over_days(world, ["d1", "d2"])
+    inverted = {
+        day: (scores[::-1], labels) for day, (scores, labels) in world.items()
+    }
+    report_b = _report_over_days(inverted, ["d1", "d2"])
+    compared = compare_rankers_on_intersection(report_a, report_b)
+    ndcg_entry = compared["ndcg@k"]
+    assert ndcg_entry["n_common"] == 2
+    assert ndcg_entry["a"] == pytest.approx(1.0)
+    assert ndcg_entry["b"] == pytest.approx(1.0 / np.log2(3.0))
+    assert ndcg_entry["diff"] == pytest.approx(1.0 - 1.0 / np.log2(3.0))
+    assert ndcg_entry["lo"] == pytest.approx(1.0 - 1.0 / np.log2(3.0))
+    assert ndcg_entry["p_le0"] == 0.0
+    # mrr: the best candidate sits at scored position 2 on every day
+    mrr_entry = compared["mrr"]
+    assert mrr_entry["b"] == pytest.approx(0.5)
+    assert mrr_entry["lo"] == pytest.approx(0.5)
+    assert mrr_entry["p_le0"] == 0.0
+
+
+def test_compare_on_intersection_empty_intersection_raises() -> None:
+    """Disjoint scored sets fail loudly, with the scored counts."""
+    world = _comparison_world()
+    report_a = _report_over_days(world, ["d1", "d2"])
+    report_b = _report_over_days(world, ["d3", "d4"])
+    with pytest.raises(ValueError, match="intersection is empty"):
+        compare_rankers_on_intersection(report_a, report_b)
+
+
+def test_compare_on_intersection_rejects_malformed_reports() -> None:
+    """Non-dict / key-less reports and a bad top_k fail loudly."""
+    report = _report_over_days(_comparison_world(), ["d1", "d2"])
+    not_a_report: Any = ["scored_group_ids", "groups"]
+    with pytest.raises(ValueError, match="must be a ranker report"):
+        compare_rankers_on_intersection(not_a_report, report)
+    truncated: Any = {"scored_group_ids": report["scored_group_ids"]}
+    with pytest.raises(ValueError, match="missing"):
+        compare_rankers_on_intersection(truncated, report)
+    with pytest.raises(ValueError, match="top_k"):
+        compare_rankers_on_intersection(report, report, top_k=1)
+    fractional_k: Any = 1.5
+    with pytest.raises(ValueError, match="top_k"):
+        compare_rankers_on_intersection(report, report, top_k=fractional_k)
+
+
+def test_compare_on_intersection_rejects_split_universe() -> None:
+    """A common group ranking different candidate sets is a caller bug."""
+    report_a = _report_over_days({"d1": ([0.9, 0.1], [2.0, 1.0])}, ["d1"])
+    report_b = _report_over_days(
+        {"d1": ([0.9, 0.1, 0.5], [2.0, 1.0, 1.5])}, ["d1"]
+    )
+    with pytest.raises(ValueError, match="different candidate sets"):
+        compare_rankers_on_intersection(report_a, report_b)
+
+
+def test_compare_on_intersection_drops_singleton_groups() -> None:
+    """One-candidate days carry no ranking contrast and are dropped."""
+    world = {
+        "d1": ([0.9, 0.1], [2.0, 1.0]),
+        "s1": ([0.7], [1.0]),
+    }
+    report_a = _report_over_days(world, ["d1", "s1"])
+    report_b = _report_over_days(world, ["d1", "s1"])
+    compared = compare_rankers_on_intersection(report_a, report_b)
+    assert compared["groups_used"] == ["d1"]
+    assert compared["ndcg@k"]["n_common"] == 1
+
+
+def test_compare_on_intersection_all_singletons_raise() -> None:
+    """An intersection with no ranking-usable group fails loudly."""
+    world = {"s1": ([0.7], [1.0]), "s2": ([0.3], [0.2])}
+    report_a = _report_over_days(world, ["s1", "s2"])
+    report_b = _report_over_days(world, ["s1", "s2"])
+    with pytest.raises(ValueError, match="ranking-usable"):
+        compare_rankers_on_intersection(report_a, report_b)
+
+
+def test_compare_on_intersection_reads_lambdarank_reports() -> None:
+    """The score-key discovery covers lambdarank's per_group_score."""
+    pytest.importorskip("lightgbm")
+    features, target, group_ids, _ = _planted_world()
+    pointwise = rank_within_groups(
+        features,
+        target,
+        group_ids,
+        model="logit",
+        seed=42,
+        config={"model_params": dict(_SHRUNK_MODEL_PARAMS)},
+    )
+    lambdarank = rank_with_lambdarank(features, target, group_ids, seed=7)
+    compared = compare_rankers_on_intersection(pointwise, lambdarank)
+    expected_groups = sorted(
+        set(pointwise["scored_group_ids"])
+        & set(lambdarank["scored_group_ids"])
+    )
+    assert compared["groups_used"] == expected_groups
+    assert compared["ndcg@k"]["n_common"] == len(expected_groups)
+    for metric_name, entry in compared.items():
+        if metric_name == "groups_used":
+            continue
+        assert -1.0 <= entry["a"] <= 1.0, metric_name
+        assert -1.0 <= entry["b"] <= 1.0, metric_name
+
+
+# ---------------------------------------------------------------------------
+# 14. chaos: degenerate inputs fail loudly, never silently
 # ---------------------------------------------------------------------------
 def test_empty_inputs_raise() -> None:
     """Empty frames / group lists are rejected up front."""

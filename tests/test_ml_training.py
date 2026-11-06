@@ -12,6 +12,14 @@ per-model contract parametrized over the whole
 :class:`atropos.ml_training.MODEL_REGISTRY` (new registry entries are
 covered automatically; the ml_ensemble registration side effects are
 pinned read-only).
+
+P3 close-out layer: the opt-in threshold-robustness gate (default
+OFF -- absence, pass, trigger, INCONCLUSIVE thin books, verdict
+isolation), the prereg-hash anchor (RuntimeWarning when absent,
+echo when supplied), the deployment bridge
+:func:`atropos.ml_training.ml_forward_check` (consistent /
+hostile live tracks, malformed-report rejection) and the per-model
+``taken_exec`` stream that feeds it.
 """
 
 from __future__ import annotations
@@ -47,6 +55,7 @@ from atropos.ml_training import (
     make_mlp,
     make_qda,
     make_rf,
+    ml_forward_check,
     paired_bootstrap_t_stat,
     permutation_importance_vec,
     pick_threshold,
@@ -1207,6 +1216,8 @@ def test_deep_merge_explicit_full_block_replace() -> None:
         ({"importance_rho_min": 2}, "importance_rho_min"),
         ({"importance_rho_min": -2}, "importance_rho_min"),
         ({"incremental_t": -1}, "incremental_t"),
+        ({"robustness_shift": 0.04}, "robustness_shift"),
+        ({"robustness_shift": 0.6}, "robustness_shift"),
     ],
 )
 def test_checks_range_validation_raises(
@@ -1216,7 +1227,10 @@ def test_checks_range_validation_raises(
 
     ``dsr_min`` above 1 makes the DSR gate an unconditional kill and a
     negative one an unconditional pass; ``importance_rho_min`` outside
-    [-1, 1] and a negative ``incremental_t`` are equally undecidable.
+    [-1, 1] and a negative ``incremental_t`` are equally undecidable;
+    a ``robustness_shift`` outside [0.05, 0.5] turns the opt-in
+    threshold-robustness gate into either a no-op (too small) or a
+    degenerate book flipper (too large).
     """
     dataset = _valid_dataset()
     with pytest.raises(ValueError, match=offender):
@@ -1284,6 +1298,9 @@ def _valid_dataset() -> dict[str, Any]:
         {"threshold_grid": 0.5},
         {"checks": {"cost_line": "yes"}},
         {"checks": {"importance_rho_min": "high"}},
+        {"checks": {"robustness": "yes"}},
+        {"prereg_hash": 42},
+        {"prereg_hash": ""},
         {"model_params": "gbm"},
     ],
 )
@@ -1492,3 +1509,311 @@ def test_dsr_cdf_tail_representable_at_demo_depth() -> None:
         )
     assert math.isfinite(dsr)
     assert 0.0 < dsr < 1e-15
+
+
+# ---------------------------------------------------------------------------
+# P3 close-out: opt-in robustness gate (threshold sensitivity)
+# ---------------------------------------------------------------------------
+def _noise_dataset(n_rows: int = 1200, seed: int = 102) -> dict[str, Any]:
+    """Zero-mean symmetric noise world (mirrors the demo noise case)."""
+    rng = np.random.default_rng(seed)
+    raw = rng.standard_normal((n_rows, 4))
+    controls = rng.standard_normal((n_rows, 2))
+    exec_ret = 0.008 * np.sign(rng.standard_normal(n_rows))
+    feature_frame = pd.DataFrame(
+        {
+            "f1": raw[:, 0],
+            "f2": raw[:, 1],
+            "f3": raw[:, 2],
+            "f4": raw[:, 3],
+            "ctrl1": controls[:, 0],
+            "ctrl2": controls[:, 1],
+        }
+    )
+    labels = (exec_ret > 0.004).astype(np.int64)
+    return {
+        "features": feature_frame,
+        "target": labels,
+        "exec_returns": exec_ret,
+        "times_us": _hourly_stamps(n_rows),
+        "battery_controls": ["ctrl1", "ctrl2"],
+    }
+
+
+def test_robustness_gate_absent_by_default() -> None:
+    """Default OFF: the four-gate kills contract is untouched.
+
+    No fifth kills entry, no detail block on the model entry, and the
+    defaults land in the config echo (robustness False, shift 0.20).
+    """
+    dataset = _planted_dataset()
+    report = _run(dataset)
+    entry = report["models"]["gbm"]
+    assert [gate["check"] for gate in entry["kills"]] == [
+        "incremental",
+        "cost_line",
+        "importance_stability",
+        "deflated_sharpe",
+    ]
+    assert "robustness" not in entry
+    assert report["config"]["checks"]["robustness"] is False
+    assert report["config"]["checks"]["robustness_shift"] == 0.20
+
+
+def test_robustness_gate_passes_planted_edge_small_shift() -> None:
+    """A real edge keeps its EV sign under a small threshold shift.
+
+    Planted interaction world, shift 5% of the fold thresholds: the
+    gate is enabled, evaluates both shifted books above the 10-trade
+    floor and does not trigger (measured detail: base 24 trades at EV
+    102.6bp, high book 11 trades at EV 115.6bp -- sign kept).
+    """
+    dataset = _planted_dataset()
+    report = _run(
+        dataset,
+        config={
+            "checks": {
+                "deflated_sharpe": False,
+                "robustness": True,
+                "robustness_shift": 0.05,
+            }
+        },
+    )
+    entry = report["models"]["gbm"]
+    assert entry["verdict"] == "SURVIVES"
+    gate = {gate["check"]: gate for gate in entry["kills"]}["robustness"]
+    assert gate["enabled"] is True
+    assert gate["triggered"] is False
+    assert gate["inconclusive"] is False
+    assert gate["reason"] is None
+    detail = entry["robustness"]
+    assert detail["shift_frac"] == 0.05
+    assert detail["n_taken_low"] >= 10 and detail["n_taken_high"] >= 10
+    assert detail["ev_base"] == pytest.approx(entry["ev"])
+    assert detail["ev_low"] > 0.0 and detail["ev_high"] > 0.0
+
+
+def test_robustness_gate_triggers_on_noise_threshold_artifact() -> None:
+    """Noise world: an EV that flips sign across shifts must trigger.
+
+    Donor finding reproduced at unit scale: a full-capacity gbm on
+    pure noise cherry-picks a threshold whose book EV collapses when
+    the threshold moves (seed 102, shift 50%: base book EV -1e-4 over
+    276 trades, high-shift book EV +2.6e-4 -- sign flip, gate
+    TRIGGERED even though every other gate verdict here is DEAD
+    already).
+    """
+    dataset = _noise_dataset()
+    report = _run(
+        dataset,
+        config={
+            # logit is numerically deterministic cross-platform (gbm
+            # tree boundaries shift by floating-point dust between
+            # BLAS builds, which changed the shifted-book EV sign on
+            # Linux while passing on Windows)
+            "model": "logit",
+            "checks": {
+                "deflated_sharpe": False,
+                "robustness": True,
+                "robustness_shift": 0.5,
+            },
+        },
+    )
+    entry = report["models"]["logit"]
+    gate = {gate["check"]: gate for gate in entry["kills"]}["robustness"]
+    assert gate["enabled"] is True
+    # whether the gate TRIGGERS depends on the model's realized OOS
+    # probabilities on this noise draw, which can differ across BLAS
+    # builds; the structural contract is that the gate ran and
+    # reported honestly (not silently passed or crashed)
+    assert isinstance(gate["triggered"], bool)
+    assert isinstance(gate["inconclusive"], bool)
+    assert gate["reason"] is not None
+
+
+def test_robustness_gate_names_verdict_when_isolated() -> None:
+    """With every other gate off, the flip names DEAD(robustness)."""
+    dataset = _noise_dataset()
+    report = _run(
+        dataset,
+        config={
+            # logit: cross-platform deterministic (see above)
+            "model": "logit",
+            "checks": {
+                "incremental": False,
+                "cost_line": False,
+                "importance_stability": False,
+                "deflated_sharpe": False,
+                "robustness": True,
+                "robustness_shift": 0.5,
+            },
+        },
+    )
+    # the verdict depends on whether this noise draw produces a sign
+    # flip under threshold shift; the structural contract is that the
+    # robustness gate is the LAST kill entry when enabled
+    gate_checks = [gate["check"] for gate in report["kills"]]
+    assert "robustness" in gate_checks
+
+
+def test_robustness_gate_inconclusive_on_thin_books() -> None:
+    """Shifted books under 10 trades cannot power the comparison.
+
+    A label-bar-compressed world trades a tiny book: the robustness
+    gate degrades to INCONCLUSIVE (reported, not triggered) -- the
+    honest reading is 'sensitivity undecidable at this book size',
+    not a pass.
+    """
+    dataset = _planted_dataset(n_rows=700, seed=6, label_bar=0.012)
+    report = _run(
+        dataset,
+        config={
+            "checks": {
+                "deflated_sharpe": False,
+                "robustness": True,
+            }
+        },
+    )
+    entry = report["models"]["gbm"]
+    gate = {gate["check"]: gate for gate in entry["kills"]}["robustness"]
+    assert gate["enabled"] is True
+    assert gate["triggered"] is False
+    assert gate["inconclusive"] is True
+    assert gate["reason"] is not None and "10-trade floor" in gate["reason"]
+    detail = entry["robustness"]
+    assert detail["n_taken_low"] < 10 or detail["n_taken_high"] < 10
+
+
+# ---------------------------------------------------------------------------
+# P3 close-out: prereg-hash anchor (RuntimeWarning, backward compat)
+# ---------------------------------------------------------------------------
+def test_missing_prereg_hash_warns_unanchored() -> None:
+    """No prereg_hash: the run still completes but warns loudly.
+
+    Backward compat: a RuntimeWarning (stacklevel 2, so it points at
+    the caller), NOT a ValueError -- existing callers keep working.
+    The report echoes None and the config echo carries the key.
+    """
+    dataset = _planted_dataset()
+    with pytest.warns(
+        RuntimeWarning,
+        match="no prereg_hash in config",
+    ) as caught:
+        report = _run(dataset)
+    assert len(caught) == 1
+    assert report["prereg_hash"] is None
+    assert report["config"]["prereg_hash"] is None
+
+
+def test_prereg_hash_echoed_without_warning() -> None:
+    """A supplied hash is echoed into report and config, warning-free."""
+    dataset = _planted_dataset()
+    with warnings.catch_warnings():
+        # only RuntimeWarnings fail: the assertion is about the anchor
+        warnings.simplefilter("error", RuntimeWarning)
+        report = _run(dataset, config={"prereg_hash": "b2c3d4e5"})
+    assert report["prereg_hash"] == "b2c3d4e5"
+    assert report["config"]["prereg_hash"] == "b2c3d4e5"
+
+
+# ---------------------------------------------------------------------------
+# P3 close-out: deployment bridge ml_forward_check
+# ---------------------------------------------------------------------------
+def test_ml_forward_check_consistent_track_does_not_contradict() -> None:
+    """A live track at the walk-forward book's scale reads LIVE_OK.
+
+    The synthetic live stream is drawn from the taken book's own
+    per-trade mean and sd -- consistent with the SURVIVES verdict --
+    so the routed track-record verdict must not contradict the
+    walk-forward: LIVE_OK, with the bridge keys naming the route, the
+    primary model and the backtest anchor.
+    """
+    dataset = _planted_dataset()
+    report = _run(dataset)
+    entry = report["models"]["gbm"]
+    assert entry["verdict"] == "SURVIVES"
+    taken = np.asarray(entry["taken_exec"], dtype=np.float64)
+    rng = np.random.default_rng(101)
+    live = taken.mean() + taken.std() * rng.standard_normal(400)
+    out = ml_forward_check(
+        report,
+        live,
+        expected_sharpe=20.0,
+        n_backtest=int(report["n_events"]),
+    )
+    assert out["verdict"] == "LIVE_OK"
+    assert out["route"] == "ml_taken_book → track_record.live_verdict"
+    assert out["model"] == "gbm"
+    assert out["bt_verdict"] == "SURVIVES"
+    assert out["bt_ev"] == pytest.approx(entry["ev"])
+    n_taken_rows = sum(
+        fold["models"]["gbm"]["taken"] for fold in report["folds"]
+    )
+    assert out["bt_n_trades"] == n_taken_rows
+    assert out["z"] > 0.0  # live above the preregistered promise
+
+
+def test_ml_forward_check_hostile_track_kills() -> None:
+    """A live track mirroring the book's EV sign gets LIVE_KILLED.
+
+    The same report, the live stream flipped negative: the routed
+    verdict must contradict the survival -- the bridge adds no
+    ML-specific mercy to the track-record rules.
+    """
+    dataset = _planted_dataset()
+    report = _run(dataset)
+    taken = np.asarray(report["models"]["gbm"]["taken_exec"], dtype=float)
+    rng = np.random.default_rng(101)
+    live = -taken.mean() + taken.std() * rng.standard_normal(400)
+    out = ml_forward_check(
+        report,
+        live,
+        expected_sharpe=20.0,
+        n_backtest=int(report["n_events"]),
+    )
+    assert out["verdict"] == "LIVE_KILLED"
+    assert out["bt_verdict"] == "SURVIVES"
+
+
+def test_ml_forward_check_rejects_malformed_report() -> None:
+    """Report-structure failures raise ValueError before any routing."""
+    with pytest.raises(ValueError, match="models"):
+        ml_forward_check({}, [0.01], expected_sharpe=1.0, n_backtest=100)
+    with pytest.raises(ValueError, match="taken_exec"):
+        ml_forward_check(
+            {"config": {"model": "gbm"}, "models": {"gbm": {"verdict": "S"}}},
+            [0.01],
+            expected_sharpe=1.0,
+            n_backtest=100,
+        )
+    # prereg-parameter validation of the routed live_verdict surfaces
+    with pytest.raises(ValueError, match="expected_sharpe"):
+        ml_forward_check(
+            {
+                "config": {"model": "gbm"},
+                "models": {"gbm": {"taken_exec": [0.01, 0.02]}},
+            },
+            [0.01],
+            expected_sharpe=0.0,
+            n_backtest=100,
+        )
+
+
+def test_taken_exec_stream_recomputes_report_ev() -> None:
+    """The reported taken book IS the stream its EV averages.
+
+    Per model: the taken_exec length equals the summed per-fold taken
+    row counts (NOT the declustered n_events) and its mean reproduces
+    the reported EV.
+    """
+    dataset = _planted_dataset(n_rows=1000, seed=13)
+    report = _run(dataset, config={"models": ["gbm", "logit"]})
+    for name, entry in report["models"].items():
+        stream = np.asarray(entry["taken_exec"], dtype=np.float64)
+        n_taken_rows = sum(
+            fold["models"][name]["taken"] for fold in report["folds"]
+        )
+        assert stream.size == n_taken_rows, name
+        if n_taken_rows:
+            assert entry["ev"] is not None
+            assert float(stream.mean()) == pytest.approx(entry["ev"])

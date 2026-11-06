@@ -6,7 +6,7 @@ timestamps -- walks an expanding-block walk-forward CV over it (purge +
 embargo between train and test), fits every requested model from the
 open :data:`MODEL_REGISTRY` through the identical path (fit -> OOS
 probabilities -> threshold -> EV), and evaluates four configurable
-gates per model:
+gates per model (plus an opt-in fifth, default off):
 
 * ``incremental``          the model's taken-trade EV must beat a
                            linear-battery logit (features + caller
@@ -18,7 +18,12 @@ gates per model:
                            consistently (median pairwise Spearman);
 * ``deflated_sharpe``      the deflated Sharpe ratio (Bailey & Lopez
                            de Prado 2014) of the daily EV stream must
-                           clear ``dsr_min``.
+                           clear ``dsr_min``;
+* ``robustness``           OPT-IN (``checks.robustness``, default
+                           ``False``): the taken-book EV must keep its
+                           sign when every fold threshold is shifted
+                           by ``checks.robustness_shift`` up and down
+                           (threshold-sensitivity battery).
 
 Evaluation verdicts of a run: ``SURVIVES`` (every requested model
 passes all enabled gates with enough independent events),
@@ -35,6 +40,15 @@ rule (e.g. ``exec = fwd - cost`` / ``-fwd - cost``,
 ``y = exec > bar``).  Defaults originate from a production
 walk-forward protocol and are reasonable starting points, not frozen
 constants of this module.
+
+The kill verdict is anchored or it is not: a run whose config carries
+no ``prereg_hash`` issues a :class:`RuntimeWarning` (the verdict is
+then unanchored to a frozen preregistration) while the hash itself is
+echoed into the report when supplied.  After deployment,
+:func:`ml_forward_check` bridges the walk-forward report and the live
+taken-book track to :func:`atropos.track_record.live_verdict` -- a
+helper, not a gate: forward tracking happens after deployment, never
+inside the walk-forward.
 
 The model fleet is open: :data:`MODEL_REGISTRY` ships eight bundled
 factories spanning complementary bias axes -- linear (``logit``),
@@ -59,6 +73,7 @@ documented cause-of-death gates triggered (cost line + incremental).
 from __future__ import annotations
 
 import math
+import warnings
 from collections.abc import Callable
 from itertools import pairwise
 from typing import Any
@@ -81,12 +96,14 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from atropos._utils import (
+    clean_1d,
     purge_embargo_mask,
     sane_variance_mask,
     validate_int,
     validate_number,
 )
 from atropos.evaluation_metrics import deflated_sharpe_from_moments
+from atropos.track_record import live_verdict
 
 __all__ = [
     "DEFAULT_TRAINING_CONFIG",
@@ -104,6 +121,7 @@ __all__ = [
     "make_mlp",
     "make_qda",
     "make_rf",
+    "ml_forward_check",
     "paired_bootstrap_t_stat",
     "permutation_importance_vec",
     "pick_threshold",
@@ -135,7 +153,10 @@ DEFAULT_TRAINING_CONFIG: dict[str, Any] = {
     # (comparison only -- the engine never selects among them)
     "model": "gbm",
     "models": None,  # None -> [model]; list[str] -> run each
-    # evaluation-gate toggles and thresholds (see module docstring)
+    # evaluation-gate toggles and thresholds (see module docstring);
+    # robustness is OPT-IN and default OFF: enabling it adds a fifth
+    # kills entry (and a possible DEAD(robustness) verdict) without
+    # touching the four-gate contract of existing runs
     "checks": {
         "incremental": True,
         "incremental_t": 2.0,
@@ -144,7 +165,14 @@ DEFAULT_TRAINING_CONFIG: dict[str, Any] = {
         "importance_rho_min": 0.5,
         "deflated_sharpe": True,
         "dsr_min": 0.95,
+        "robustness": False,
+        "robustness_shift": 0.20,
     },
+    # hash of the frozen preregistration (e.g. the spec hash from
+    # generate_prereg); None is LEGAL (backward compat) but warns at
+    # run time -- an unanchored kill verdict -- and the value, when
+    # given, is echoed into the report
+    "prereg_hash": None,
     # defaults originating from a production walk-forward protocol;
     # cost_rt is consumed by the CALLER when building exec returns
     # (exec = fwd - cost), profit_bar is the EV floor of cost_line
@@ -222,11 +250,22 @@ _CHECK_BOOLS = (
     "cost_line",
     "importance_stability",
     "deflated_sharpe",
+    "robustness",
 )
-_CHECK_NUMBERS = ("incremental_t", "importance_rho_min", "dsr_min")
+_CHECK_NUMBERS = (
+    "incremental_t",
+    "importance_rho_min",
+    "dsr_min",
+    "robustness_shift",
+)
 
 _BASELINE_NAME = "baseline"
 _BATTERY_NAME = "battery"
+
+_ROBUSTNESS_MIN_SHIFT_EVENTS = 10
+"""A shifted book below this many taken trades cannot power the
+sensitivity comparison: the robustness gate degrades to INCONCLUSIVE
+instead of reading noise off a handful of trades."""
 
 
 # ---------------------------------------------------------------------------
@@ -1286,6 +1325,14 @@ def _validate_config(cfg: dict[str, Any]) -> dict[str, Any]:
         cfg[key] = validate_number(key, cfg[key])
         if cfg[key] < floor:
             raise ValueError(f"{key} must be >= {floor}, got {cfg[key]}")
+    prereg_hash = cfg["prereg_hash"]
+    if prereg_hash is not None and (
+        not isinstance(prereg_hash, str) or not prereg_hash
+    ):
+        raise ValueError(
+            "prereg_hash must be None or a non-empty string, got "
+            f"{prereg_hash!r}"
+        )
     _validate_grid(cfg)
     _validate_checks(cfg)
     _validate_model_selection(cfg)
@@ -1342,6 +1389,11 @@ def _validate_checks(cfg: dict[str, Any]) -> None:
         raise ValueError(
             "checks.incremental_t must be >= 0, got "
             f"{checks['incremental_t']}"
+        )
+    if not 0.05 <= checks["robustness_shift"] <= 0.5:
+        raise ValueError(
+            "checks.robustness_shift must lie in [0.05, 0.5], got "
+            f"{checks['robustness_shift']}"
         )
 
 
@@ -1688,21 +1740,27 @@ def _run_cv_folds(
     return fold_rows, oos
 
 
+def _row_thresholds(oos: dict[str, Any], name: str) -> np.ndarray:
+    """Per-row fold-local decision thresholds in merged-OOS order.
+
+    Each test fold's rows carry the threshold that fold's train block
+    picked (the fold-local discipline the engine evaluates gates on).
+    """
+    return np.concatenate(
+        [
+            np.full(size, thr, dtype=float)
+            for size, thr in zip(
+                oos["fold_sizes"], oos["thresholds"][name], strict=True
+            )
+        ]
+    )
+
+
 def _taken_flags(oos: dict[str, Any]) -> dict[str, np.ndarray]:
     """Per-variant merged-OOS taken flags (fold-local thresholds)."""
-    fold_sizes = oos["fold_sizes"]
     flags: dict[str, np.ndarray] = {}
     for name, proba in oos["proba"].items():
-        threshold_by_fold = oos["thresholds"][name]
-        row_thresholds = np.concatenate(
-            [
-                np.full(size, thr, dtype=float)
-                for size, thr in zip(
-                    fold_sizes, threshold_by_fold, strict=True
-                )
-            ]
-        )
-        flags[name] = np.asarray(proba) > row_thresholds
+        flags[name] = np.asarray(proba) > _row_thresholds(oos, name)
     return flags
 
 
@@ -1925,6 +1983,87 @@ def _gate_deflated_sharpe(
     )
 
 
+def _gate_robustness(
+    oos: dict[str, Any],
+    name: str,
+    cfg: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Threshold-robustness gate: the taken-book EV sign must survive.
+
+    Donor finding: a model can beat the battery at ONE threshold while
+    its EV collapses when the threshold moves -- a threshold artifact,
+    not an edge.  The gate re-scores the merged OOS book at every fold
+    threshold scaled by ``(1 - shift)`` and ``(1 + shift)`` with
+    ``shift = checks.robustness_shift`` and TRIGGERs when the EV sign
+    at either shifted book is opposite to the base book's (in
+    particular, any negative shifted EV against a positive base EV).
+    A shifted book under :data:`_ROBUSTNESS_MIN_SHIFT_EVENTS` trades
+    cannot power the comparison: the gate degrades to INCONCLUSIVE
+    (an empty base book likewise).  The per-fold thresholds are
+    shifted AFTER the walk-forward picked them, so the gate reads only
+    already-computed OOS probabilities -- no refit, no leakage.
+
+    Returns:
+        ``(gate_entry, detail)`` where ``detail`` carries the merged
+        taken counts and EVs of the base and both shifted books.
+    """
+    shift_frac = float(cfg["checks"]["robustness_shift"])
+    proba = np.asarray(oos["proba"][name])
+    row_thr = _row_thresholds(oos, name)
+    exec_vals = oos["exec"]
+    detail: dict[str, Any] = {"shift_frac": shift_frac}
+    taken_base = proba > row_thr
+    n_base = int(taken_base.sum())
+    ev_base = ev_of_taken(exec_vals, taken_base)
+    detail["n_taken_base"] = n_base
+    detail["ev_base"] = ev_base if math.isfinite(ev_base) else None
+    if n_base == 0 or not math.isfinite(ev_base):
+        reason = (
+            "model took no out-of-sample trades at the fold thresholds "
+            "(base book empty): no threshold sensitivity to measure"
+        )
+        return _gate_entry("robustness", True, False, True, reason), detail
+    ev_by_book: dict[str, float] = {}
+    thin_books: list[str] = []
+    shift_books = (
+        ("low", 1.0 - shift_frac),
+        ("high", 1.0 + shift_frac),
+    )
+    for label, factor in shift_books:
+        taken_shift = proba > row_thr * factor
+        n_shift = int(taken_shift.sum())
+        ev_shift = ev_of_taken(exec_vals, taken_shift)
+        detail[f"n_taken_{label}"] = n_shift
+        detail[f"ev_{label}"] = ev_shift if math.isfinite(ev_shift) else None
+        if n_shift < _ROBUSTNESS_MIN_SHIFT_EVENTS:
+            thin_books.append(f"{label} ({n_shift})")
+        else:
+            ev_by_book[label] = ev_shift
+    if thin_books:
+        reason = (
+            "shifted book below the "
+            f"{_ROBUSTNESS_MIN_SHIFT_EVENTS}-trade floor at "
+            f"{', '.join(thin_books)}: threshold sensitivity "
+            "undecidable at this book size"
+        )
+        return _gate_entry("robustness", True, False, True, reason), detail
+    flipped: list[str] = []
+    for label, ev_shift in ev_by_book.items():
+        if (ev_base > 0.0 and ev_shift < 0.0) or (
+            ev_base < 0.0 and ev_shift > 0.0
+        ):
+            flipped.append(label)
+    if flipped:
+        reason = (
+            f"taken-book EV flips sign at threshold shift(s) "
+            f"{', '.join(flipped)} (base EV {ev_base:.4f}, "
+            f"shift +/-{shift_frac:.2f}): the edge is a threshold "
+            "artifact"
+        )
+        return _gate_entry("robustness", True, True, False, reason), detail
+    return _gate_entry("robustness", True, False, False, None), detail
+
+
 def _model_verdict(gates: list[dict[str, Any]], powered: bool) -> str:
     """Power gate first: an underpowered run cannot trust its gates.
 
@@ -1949,9 +2088,11 @@ def _evaluate_models(
     family: dict[str, Any],
     cfg: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Evaluate all four gates for every model; per-model reports.
+    """Evaluate the gates for every model; per-model reports.
 
-    Returns ``(models_report, incremental_detail)``.
+    The four default gates plus the opt-in ``robustness`` gate (its
+    detail block lands in ``models[name]["robustness"]`` only when
+    enabled).  Returns ``(models_report, incremental_detail)``.
     """
     models_report: dict[str, Any] = {}
     incremental_detail: dict[str, Any] = {}
@@ -1968,6 +2109,15 @@ def _evaluate_models(
             family["stats"][name], family, cfg
         )
         gates = [gate_incremental, gate_cost, gate_importance, gate_dsr]
+        robustness_detail: dict[str, Any] | None = None
+        if cfg["checks"]["robustness"]:
+            # opt-in fifth gate, appended LAST: enabling it is additive
+            # (a new entry in the kills list) and never reorders the
+            # four-gate verdict contract of existing runs
+            gate_robustness, robustness_detail = _gate_robustness(
+                oos, name, cfg
+            )
+            gates.append(gate_robustness)
         incremental_detail[name] = detail
         models_report[name] = {
             "verdict": _model_verdict(gates, powered),
@@ -1981,7 +2131,13 @@ def _evaluate_models(
             "importance_by_fold": [
                 vector.tolist() for vector in oos["importances"][name]
             ],
+            # per-trade executable returns of the merged OOS taken
+            # book (deployment bridge input for ml_forward_check);
+            # plain float list: report stays JSON-safe and dict==able
+            "taken_exec": (np.asarray(oos["exec"])[taken[name]].tolist()),
         }
+        if robustness_detail is not None:
+            models_report[name]["robustness"] = robustness_detail
     return models_report, incremental_detail
 
 
@@ -2027,7 +2183,11 @@ def run_ml_kill_protocol(
             ``models`` (registry names; several models share one CV
             pass and are compared, never selected), ``checks`` (gate
             on/off and thresholds), ``profit_bar``, ``k_blocks``,
-            ``purge_h``, ``embargo_h``, ``model_params``.
+            ``purge_h``, ``embargo_h``, ``model_params``,
+            ``prereg_hash`` (hash of the frozen preregistration; when
+            absent, the kill verdict is unanchored and a
+            :class:`RuntimeWarning` says so -- a warning, NOT an
+            error, so existing callers keep working).
         battery_controls: optional feature columns feeding the linear
             battery of the incremental gate; without them that gate is
             reported inconclusive (not triggered) and everything else
@@ -2035,9 +2195,10 @@ def run_ml_kill_protocol(
 
     Returns:
         One dict: ``{verdict, kills, n_events, n_rows, folds, models
-        (per-model verdicts/EV/gates/importances), baseline, battery,
-        incremental, dsr_detail, ev_model, ev_baseline, ev_battery,
-        deflated_sharpe, importance_stability, powered, n_min_events,
+        (per-model verdicts/EV/gates/importances/taken book),
+        baseline, battery, incremental, dsr_detail, ev_model,
+        ev_baseline, ev_battery, deflated_sharpe,
+        importance_stability, powered, n_min_events, prereg_hash,
         config}``.  ``verdict`` is an evaluation verdict of the run:
         ``SURVIVES`` / ``DEAD(<gate>)`` / ``UNDERPOWERED``.
         ``UNDERPOWERED`` is reported, not a kill: the run is undecided,
@@ -2083,14 +2244,26 @@ def run_ml_kill_protocol(
         ...         "n_min_events": 5,
         ...         "checks": {"deflated_sharpe": False},
         ...         "model_params": {"gbm": {"n_estimators": 25}},
+        ...         "prereg_hash": "b2c3d4e5",
         ...     },
         ... )
         >>> report["verdict"]
         'SURVIVES'
         >>> round(report["ev_model"], 4)
         0.0104
+        >>> report["prereg_hash"]
+        'b2c3d4e5'
     """
     cfg = _validate_config(_merge_config(config))
+    if cfg["prereg_hash"] is None:
+        # backward-compat warning, deliberately NOT a ValueError: an
+        # unanchored kill verdict still runs, it just says so loudly
+        warnings.warn(
+            "no prereg_hash in config — the kill verdict is unanchored "
+            "to a frozen preregistration",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     run_data = _validate_inputs(
         features, target, exec_returns, times_us, battery_controls
     )
@@ -2159,8 +2332,146 @@ def run_ml_kill_protocol(
             for entry in models_report.values()
         ),
         "n_min_events": cfg["n_min_events"],
+        "prereg_hash": cfg["prereg_hash"],
         "config": _echo_config(cfg),
     }
+
+
+# ---------------------------------------------------------------------------
+# deployment bridge: walk-forward verdict -> live track record
+# ---------------------------------------------------------------------------
+_FORWARD_ROUTE = "ml_taken_book → track_record.live_verdict"
+"""Value of the ``route`` key: the exact delegation of
+:func:`ml_forward_check` -- the walk-forward taken book's live track
+routed through the track-record contract test."""
+
+
+def ml_forward_check(
+    report: dict[str, Any],
+    live_returns: Any,
+    *,
+    expected_sharpe: float,
+    n_backtest: int,
+    periods: int = 252,
+    kill_z: float = 1.64,
+    dd_floor: float = -0.25,
+    min_observations: int = 252,
+) -> dict[str, Any]:
+    """Route a deployed ML taken book's live track through live_verdict.
+
+    The bridge between the walk-forward verdict and the live track --
+    the ML analogue of the rule-based forward gate.  NOT a gate and
+    NOT part of the walk-forward: forward tracking happens after
+    deployment, when the survived model's taken book has accrued a
+    real live record.  The helper extracts the primary model's
+    taken-book per-trade stream from the engine report (the
+    ``taken_exec`` block of ``report["models"][primary]``),
+    normalizes both streams (finite-value filter, flat 1-D), and
+    delegates the verdict entirely to
+    :func:`atropos.track_record.live_verdict` -- the same two
+    preregistered kill rules (drawdown barrier, then the
+    prereg-divergence z at the decision point).  No ML-specific kill
+    logic is added here: the verdict IS the track-record verdict, so
+    a live ML book is held to exactly the standard a rule-based
+    strategy is.
+
+    Args:
+        report: a report from :func:`run_ml_kill_protocol`; the
+            primary model is resolved exactly like the engine's flat
+            aliases (``config["model"]`` when it is among the
+            evaluated models, else the first evaluated model).  The
+            model entry must carry ``taken_exec``.
+        live_returns: per-period live returns of the deployed taken
+            book since deployment (lists / Series / arrays accepted).
+        expected_sharpe: annualized Sharpe promised by the prereg;
+            validated by :func:`atropos.track_record.live_verdict`.
+        n_backtest: observations behind the preregistered estimate
+            (the walk-forward run's independent events are the honest
+            choice -- see ``report["n_events"]``).
+        periods: periods per year of the live stream (252 = daily).
+        kill_z: one-sided kill threshold in sigmas.
+        dd_floor: preregistered drawdown barrier, negative.
+        min_observations: preregistered decision point length.
+
+    Returns:
+        The :func:`atropos.track_record.live_verdict` verdict dict
+        (``verdict`` / ``reason`` / ``n_obs`` / ``live_sharpe`` /
+        ``z`` / ``mdd`` / ...) plus the bridge keys: ``route`` (the
+        delegation, fixed string), ``model`` (the primary model the
+        track belongs to), ``bt_n_trades`` / ``bt_ev`` (the
+        walk-forward taken book's size and mean per-trade executable
+        value -- the anchor the live per-trade statistics can be
+        eyeballed against) and ``bt_verdict`` (the walk-forward
+        verdict the live track must not contradict).
+
+    Raises:
+        ValueError: if ``report`` is not an engine report with a
+            non-empty ``models`` dict, if the primary model entry
+            carries no ``taken_exec`` stream, or through
+            :func:`atropos.track_record.live_verdict` on invalid
+            prereg parameters.
+
+    Example::
+
+        >>> import numpy as np
+        >>> report = {
+        ...     "config": {"model": "gbm"},
+        ...     "models": {"gbm": {
+        ...         "verdict": "SURVIVES",
+        ...         "taken_exec": np.array([0.010, 0.006, 0.012]),
+        ...     }},
+        ... }
+        >>> live = np.linspace(0.0005, 0.0015, 300)
+        >>> out = ml_forward_check(
+        ...     report, live, expected_sharpe=5.0, n_backtest=843
+        ... )
+        >>> out["verdict"]
+        'LIVE_OK'
+        >>> out["route"]
+        'ml_taken_book → track_record.live_verdict'
+        >>> out["model"]
+        'gbm'
+        >>> round(out["bt_ev"], 4)
+        0.0093
+    """
+    models = report.get("models")
+    if not isinstance(models, dict) or not models:
+        raise ValueError(
+            "report must be a run_ml_kill_protocol report with a "
+            "non-empty 'models' dict"
+        )
+    config = report.get("config")
+    configured = config.get("model") if isinstance(config, dict) else None
+    primary = configured if configured in models else next(iter(models))
+    entry = models[primary]
+    taken_exec = entry.get("taken_exec") if isinstance(entry, dict) else None
+    if taken_exec is None:
+        raise ValueError(
+            f"report['models']['{primary}'] carries no 'taken_exec' "
+            "stream: the bridge needs the walk-forward taken-book "
+            "per-trade returns the engine reports"
+        )
+    book = clean_1d(taken_exec)
+    live = clean_1d(live_returns)
+    verdict = live_verdict(
+        live,
+        expected_sharpe,
+        n_backtest=n_backtest,
+        periods=periods,
+        kill_z=kill_z,
+        dd_floor=dd_floor,
+        min_observations=min_observations,
+    )
+    book_ev = float(book.mean()) if book.size else math.nan
+    out: dict[str, Any] = dict(verdict)
+    out["route"] = _FORWARD_ROUTE
+    out["model"] = primary
+    out["bt_n_trades"] = int(book.size)
+    out["bt_ev"] = book_ev if math.isfinite(book_ev) else None
+    out["bt_verdict"] = (
+        entry.get("verdict") if isinstance(entry, dict) else None
+    )
+    return out
 
 
 def _echo_config(cfg: dict[str, Any]) -> dict[str, Any]:

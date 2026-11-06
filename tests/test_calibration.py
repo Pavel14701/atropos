@@ -7,15 +7,27 @@ detector: peeking leaks, broken benchmarks and double counting all
 show up as inflated rejection rates long before any single input
 fails.  All tests here are marked ``slow``; each runs in seconds on
 the fixed seeds below (total well under 30 seconds).
+
+ML-engine calibration (P3 close-out): the walk-forward engine's
+incremental gate and its deflated-Sharpe p-values get the same
+null-world treatment (100 seeded noise worlds through the full
+``run_ml_kill_protocol`` path).  Both probes are currently
+ANTI-CONSERVATIVE -- documented findings pinned as ``xfail(strict)``:
+the day the engine calibration is fixed, the tests XPASS and strict
+semantics force the markers to be removed, never the asserts.
 """
 
 from __future__ import annotations
+
+import warnings
+from typing import Any
 
 import numpy as np
 import pandas as pd
 import pytest
 from atropos.bootstrap_ci import block_bootstrap_ci
 from atropos.evaluation_metrics import deflated_sharpe
+from atropos.ml_training import run_ml_kill_protocol
 from atropos.null_control_suite import (
     calendar_control,
     placebo_placebo,
@@ -25,6 +37,63 @@ from atropos.null_control_suite import (
 from atropos.power_calculator import _power_at, simulate_power
 from atropos.walkforward_framework import walkforward
 from scipy import stats
+
+HOUR_US = 3_600_000_000
+
+
+def _ml_null_world(seed: int) -> dict[str, Any]:
+    """One seeded pure-noise world through the ML kill protocol.
+
+    ``logit`` on three noise features against a linear battery on the
+    same features plus two noise controls, symmetric +/-0.8% executable
+    returns, hourly stamps (n=2000, ~83 days): a TRUE null for every
+    gate -- no incremental edge, no cost-clearing book, no stable
+    importances, no DSR.  Deterministic: fixed seeds at every layer.
+    Returns the logit model entry's gate records and DSR p-value.
+    """
+    rng = np.random.default_rng(80_000 + seed)
+    n_rows = 2000
+    feats = rng.standard_normal((n_rows, 3))
+    controls = rng.standard_normal((n_rows, 2))
+    exec_ret = 0.008 * np.sign(rng.standard_normal(n_rows))
+    feature_frame = pd.DataFrame(
+        {
+            "f1": feats[:, 0],
+            "f2": feats[:, 1],
+            "f3": feats[:, 2],
+            "c1": controls[:, 0],
+            "c2": controls[:, 1],
+        }
+    )
+    labels = (exec_ret > 0.004).astype(np.int64)
+    stamps = np.arange(n_rows, dtype=np.int64) * HOUR_US
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        report = run_ml_kill_protocol(
+            feature_frame,
+            labels,
+            exec_ret,
+            stamps,
+            config={
+                "model": "logit",
+                "k_blocks": 3,
+                "bootstrap_b": 100,
+                "n_min_events": 5,
+                "prereg_hash": "calibration-null",
+                "checks": {
+                    "deflated_sharpe": True,
+                    "importance_stability": False,
+                },
+            },
+            battery_controls=["c1", "c2"],
+        )
+    entry = report["models"]["logit"]
+    gates = {gate["check"]: gate for gate in entry["kills"]}
+    return {
+        "incremental": gates["incremental"],
+        "dsr_p": entry["deflated_sharpe"],
+        "n_events": entry["n_events"],
+    }
 
 
 @pytest.mark.slow
@@ -283,3 +352,87 @@ def test_simulate_power_calibrates_against_analytic_power() -> None:
             analytic,
             empirical,
         )
+
+
+# ---------------------------------------------------------------------------
+# ML engine calibration (P3 close-out): the walk-forward gates under null
+# ---------------------------------------------------------------------------
+@pytest.mark.slow
+@pytest.mark.xfail(
+    reason=(
+        "FINDING (anti-conservative, P3 close-out): the incremental "
+        "gate false-passes ~43-46 of 100 pure-noise worlds -- the "
+        "paired bootstrap t of the EV difference between two thin "
+        "EV-argmax books is over-dispersed under the null (measured "
+        "P(t>2) ~= 0.45, P(|t|>2) ~= 0.9, max t 177 at b=100 / 728 at "
+        "b=2000): row resampling does not reproduce the winner's-curse "
+        "selection of the fold thresholds, so the observed EV "
+        "difference rides into the draws and inflates t.  Among the "
+        "21 powered worlds (>= 500 events) it is still 7-8/21.  The "
+        "assert below is the CALIBRATION CONTRACT (<= 10%); do not "
+        "weaken it -- fix the statistic (e.g. post-selection or "
+        "book-stable resampling) and remove the marker."
+    )
+)
+def test_ml_engine_incremental_gate_fpr_under_noise_null() -> None:
+    """True null: the incremental gate must kill noise, FPR <= 10%.
+
+    The gate's job on this world is to TRIGGER (no incremental edge
+    over the battery); a world where it stays off is a false pass --
+    the engine waving a noise model through the incrementality
+    criterion.  100 seeded worlds, logit vs a linear battery with two
+    noise controls (measured on the fixed seeds: 43/100 false passes
+    at bootstrap_b=100, 46/100 at the production b=2000; the two
+    configs bracket the rate, the config below freezes the fast one).
+    Budget: ~4 s measured (100 engine runs at reduced capacity), well
+    under the 120 s budget.
+    """
+    false_passes = 0
+    for seed in range(100):
+        world = _ml_null_world(seed)
+        gate = world["incremental"]
+        assert isinstance(gate["enabled"], bool)
+        if not gate["triggered"] and not gate["inconclusive"]:
+            false_passes += 1
+    assert false_passes <= 10, false_passes
+
+
+@pytest.mark.slow
+@pytest.mark.xfail(
+    reason=(
+        "FINDING (P3 close-out): the engine's deflated-Sharpe CDF "
+        "values are not uniform under the null -- KS p ~= 0.001 over "
+        "the 98 finite null-world p-values (median ~= 0.37, i.e. "
+        "skewed low / over-rejecting), although the rejection rate at "
+        "0.05 stays under the 10% bound (~0.08 measured).  The KS "
+        "assert below is the CALIBRATION CONTRACT; when the DSR "
+        "standardization on short zero-padded daily streams is fixed, "
+        "the test XPASSes and strict semantics force the marker out."
+    )
+)
+def test_ml_engine_deflated_sharpe_pvalues_ks_uniform_under_null() -> None:
+    """True null: engine DSR p-values ~U(0,1), KS p > 0.01, FPR <= 10%.
+
+    The engine reports the DSR CDF value as ``deflated_sharpe``; under
+    a true null that number IS a p-value and must spread roughly
+    uniformly.  100 seeded noise worlds through the full engine path
+    (logit, daily EV streams over ~83 zero-padded days, n_trials=5
+    against the run's own three-stream family).  Two contracts: the
+    rejection rate at 0.05 stays <= 10%, and the KS uniformity holds
+    at p > 0.01.  Budget: ~4 s measured (100 engine runs at reduced
+    capacity), well under the 120 s budget.
+    """
+    pvalues: list[float] = []
+    for seed in range(100):
+        world = _ml_null_world(seed)
+        dsr_p = world["dsr_p"]
+        if dsr_p is not None:
+            assert 0.0 <= float(dsr_p) <= 1.0
+            pvalues.append(float(dsr_p))
+    # at most a couple of worlds may leave the book empty (no DSR
+    # decision); the uniformity sample must stay representative
+    assert len(pvalues) >= 95, len(pvalues)
+    rejection_rate = float(np.mean(np.asarray(pvalues) < 0.05))
+    assert rejection_rate <= 0.10, rejection_rate
+    ks_pvalue = float(stats.kstest(np.asarray(pvalues), "uniform").pvalue)
+    assert ks_pvalue > 0.01, ks_pvalue
