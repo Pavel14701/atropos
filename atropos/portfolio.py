@@ -494,7 +494,10 @@ def filter_by_correlation(
         open_positions_r_streams: mapping position-label -> R-proxy
             series of each OPEN position.
         corr_cap: ``|Spearman|`` rejection threshold in ``[0, 1]``.
-        min_overlap: minimum overlapping bars for a verdict, >= 2.
+        min_overlap: minimum overlapping bars required for a
+            correlation estimate; a pair with fewer overlapping bars
+            admits (insufficient data is not correlation), integer
+            >= 2.
         window: recent bars each proxy is truncated to, >= 1.
 
     Returns:
@@ -1074,8 +1077,11 @@ def run_portfolio_replay(
             ``decision_idx`` (int >= 0, fill at ``decision_idx + 1``
             must exist in the panel), ``side`` ("long"/"short"),
             ``instrument`` (panel key), ``sl`` / ``tp`` (finite
-            levels), ``score`` (finite, within-group rank-normalized
-            upstream); optional ``priority`` (default 0.0),
+            levels), ``score`` (finite; MUST be within-group
+            rank-normalized upstream via
+            :func:`atropos.ranking.rank_normalize_group` -- raw
+            cross-model probabilities are not comparable); optional
+            ``priority`` (default 0.0),
             ``atr_entry`` (default 0.0), ``risk_ref`` and ``r_proxy``
             (required when ``corr_cap`` is set: the instrument's
             GROWING R-proxy series from one common anchor through

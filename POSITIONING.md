@@ -17,7 +17,14 @@ pipeline — simulate → rank → admission → metrics
 (`atropos.backtesting`, `atropos.ranking`, `atropos.backtest_metrics`)
 — which asks the next question: is the survivor *tradeable* at all
 once one slot at a time, real taker costs, and a past-only ranking
-oracle are imposed on it?
+oracle are imposed on it? The portfolio layer (`atropos.portfolio`)
+asks the question after that: does the book still hold up with
+concurrent positions — slot admission with replacement,
+correlation-aware admission (a candidate whose recent return proxy is
+|Spearman|-correlated with an open position's above the cap never
+enters), and portfolio-level gates (deflated Sharpe on the daily EV
+stream, drawdown floor, same-side concentration) over the realized
+equity.
 
 **What Atropos does not do.** It does not optimize strategy parameters
 or search the space of profitable configurations — a candidate that
@@ -30,7 +37,11 @@ slot-admission policies.  What it deliberately does not provide: no
 portfolio construction, no brokerage integration, no parameter sweeps,
 no market data handling — those live in general-purpose engines
 (vectorbt / backtrader / qlib), and mixing the two roles would
-compromise the falsification-first contract. And nothing here guarantees
+compromise the falsification-first contract. The portfolio layer
+sharpens rather than weakens this line: portfolio SIMULATION is not
+portfolio CONSTRUCTION — `atropos.portfolio` replays a fixed slot cap
+to gate a stream; it does not optimize weights, allocate capital, or
+trade live, and every position enters at exactly one risk unit. And nothing here guarantees
 profit: `SURVIVES` means "not killed by every attack we ran", never
 "trading-ready", and a passing backtest is one more non-kill, not a
 promise.
@@ -49,6 +60,7 @@ YOUR pipeline and keep your own data, execution and sizing layers.
 | Check a survivor's tradeability | `docs/examples/backtest_pipeline.py` (simulate → rank → admission → metrics) — how-to 06 |
 | Compare rankers honestly | `atropos.ranking` + `RANKING_METRICS` — how-to 07 |
 | Choose a slot admission policy | `atropos.backtesting.run_admission_policy` — how-to 08 |
+| Compare portfolio admission policies / portfolio gates | `atropos.portfolio` (`run_portfolio_replay`, `run_portfolio`) — how-to 09 |
 
 **The one-paragraph pitch** (and the honest version of it):
 

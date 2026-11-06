@@ -2,13 +2,13 @@
 
 Covers (adapted from the source protocol's mechanics suite plus the
 engine's own gates): rolling z / threshold / EV mechanics, purge +
-embargo masking on microsecond stamps, fold construction, paired
-bootstrap behaviour, deflated-Sharpe monotonicity, importance
-stability, orchestrator verdicts (planted edge, noise, underpowered --
-including whole-run underpowering through a secondary model, gate
-priority, config overrides, deep-merged model_params, gate-threshold
-range validation, ValueError validation), report determinism and a
-per-model contract parametrized over the whole
+embargo masking on microsecond stamps, fold construction, paired and
+threshold-sensitive bootstrap behaviour, deflated-Sharpe monotonicity,
+importance stability, orchestrator verdicts (planted edge, noise,
+underpowered -- including whole-run underpowering through a secondary
+model, gate priority, config overrides, deep-merged model_params,
+gate-threshold range validation, ValueError validation), report
+determinism and a per-model contract parametrized over the whole
 :class:`atropos.ml_training.MODEL_REGISTRY` (new registry entries are
 covered automatically; the ml_ensemble registration side effects are
 pinned read-only).
@@ -38,6 +38,7 @@ from atropos.ml_training import (
     DEFAULT_TRAINING_CONFIG,
     MODEL_REGISTRY,
     _gate_deflated_sharpe,
+    _incremental_bootstrap_diff,
     _merge_config,
     _validate_config,
     _verify_vrp_panic_demo,
@@ -432,6 +433,110 @@ def test_paired_bootstrap_rejects_bad_params() -> None:
             n_boot=10,
             seed=2.5,  # type: ignore[arg-type]
         )
+
+
+# ---------------------------------------------------------------------------
+# threshold-sensitive bootstrap (incremental gate statistic)
+# ---------------------------------------------------------------------------
+def test_incremental_bootstrap_diff_identical_arms_exact_zero() -> None:
+    """Identical score vectors cancel draw by draw -> exact zeros."""
+    rng = np.random.default_rng(11)
+    proba = rng.random(300) * 0.5 + 0.25
+    exec_vals = rng.normal(0.0, 0.01, 300)
+    outcome = _incremental_bootstrap_diff(
+        proba,
+        proba,
+        exec_vals,
+        DEFAULT_TRAINING_CONFIG["threshold_grid"],
+        n_boot=100,
+        seed=42,
+    )
+    assert outcome == (0.0, 0.0, 0.0, 100)
+
+
+def test_incremental_bootstrap_diff_separates_aligned_from_mirror() -> None:
+    """Scores aligned with returns beat mirrored scores, CI above 0.
+
+    The aligned arm's EV-argmax book feeds on the best rows while the
+    mirrored arm's feeds on the worst, so the full-procedure EV
+    difference is positive with its 95% percentile CI clear of zero.
+    """
+    rng = np.random.default_rng(12)
+    exec_vals = rng.normal(0.0005, 0.01, 600)
+    # ascending ranks: 0 on the worst row, 599 on the best row
+    ranks = np.argsort(np.argsort(exec_vals)).astype(np.float64)
+    top_rank = float(np.max(ranks))
+    aligned = 0.30 + 0.40 * (ranks / top_rank)
+    mirrored = 0.30 + 0.40 * ((top_rank - ranks) / top_rank)
+    mean_diff, ci_low, ci_high, valid = _incremental_bootstrap_diff(
+        aligned,
+        mirrored,
+        exec_vals,
+        DEFAULT_TRAINING_CONFIG["threshold_grid"],
+        n_boot=200,
+        seed=42,
+    )
+    assert valid == 200
+    assert mean_diff > 0.0
+    assert 0.0 < ci_low <= ci_high
+
+
+def test_incremental_bootstrap_diff_seed_determinism() -> None:
+    """Same seed -> identical tuple; different seed -> different draws."""
+    rng = np.random.default_rng(13)
+    proba_a = rng.random(200) * 0.4 + 0.3
+    proba_b = rng.random(200) * 0.4 + 0.3
+    exec_vals = rng.normal(0.0, 0.01, 200)
+    grid = DEFAULT_TRAINING_CONFIG["threshold_grid"]
+    first = _incremental_bootstrap_diff(
+        proba_a, proba_b, exec_vals, grid, n_boot=60, seed=5
+    )
+    repeat = _incremental_bootstrap_diff(
+        proba_a, proba_b, exec_vals, grid, n_boot=60, seed=5
+    )
+    assert first == repeat
+    other = _incremental_bootstrap_diff(
+        proba_a, proba_b, exec_vals, grid, n_boot=60, seed=6
+    )
+    assert other != first
+
+
+def test_incremental_bootstrap_diff_all_invalid_draws_is_nan() -> None:
+    """A book that never trades poisons every draw -> NaN, 0 valid."""
+    rng = np.random.default_rng(14)
+    exec_vals = rng.normal(0.0, 0.01, 100)
+    mean_diff, ci_low, ci_high, valid = _incremental_bootstrap_diff(
+        rng.random(100),
+        np.zeros(100),
+        exec_vals,
+        DEFAULT_TRAINING_CONFIG["threshold_grid"],
+        n_boot=30,
+        seed=3,
+    )
+    assert valid == 0
+    assert math.isnan(mean_diff)
+    assert math.isnan(ci_low)
+    assert math.isnan(ci_high)
+
+
+def test_incremental_bootstrap_diff_rejects_bad_inputs() -> None:
+    """n_boot >= 2, integer seeds and equal lengths are enforced."""
+    proba = np.array([0.4, 0.6])
+    exec_vals = np.array([0.001, 0.002])
+    grid = (0.3, 0.5)
+    with pytest.raises(ValueError, match="n_boot"):
+        _incremental_bootstrap_diff(proba, proba, exec_vals, grid, n_boot=1)
+    with pytest.raises(ValueError, match="seed"):
+        _incremental_bootstrap_diff(
+            proba,
+            proba,
+            exec_vals,
+            grid,
+            n_boot=10,
+            seed=1.5,  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="share one length"):
+        _incremental_bootstrap_diff(proba, proba[:-1], exec_vals, grid)
 
 
 # ---------------------------------------------------------------------------
@@ -935,7 +1040,10 @@ def test_planted_nonlinear_edge_survives() -> None:
     assert entry["importance_stability"] is not None
     assert entry["importance_stability"] >= 0.5
     t_stat = report["incremental"]["gbm"]["t_vs_battery"]
-    assert t_stat is not None and t_stat > 2.0
+    # threshold-sensitive bootstrap era: the pinned detail entry is the
+    # bootstrap MEAN EV difference vs the battery (not a t-statistic);
+    # the SURVIVES verdict above already pins CI_low > 0
+    assert t_stat is not None and t_stat > 0.0
     # the linear battery only captures the linear f3 term
     assert report["ev_battery"] is not None
     assert entry["ev"] > report["ev_battery"]
@@ -976,20 +1084,26 @@ def test_underpowered_secondary_underpowers_whole_run() -> None:
     """Primary SURVIVES + secondary UNDERPOWERED -> powered=False.
 
     ``powered`` speaks for the WHOLE run and the run verdict echoes
-    the first non-surviving model: with a healthy primary (gbm, 6
-    events) and a thin-trading secondary (the label-bar-compressed
-    logit, 3 events under the 5-event floor), the run verdict is
+    the first non-surviving model: with a healthy primary (gbm, 24
+    events) and a thin-trading secondary (extratrees, 2 events under
+    the 5-event floor on this seeded world), the run verdict is
     UNDERPOWERED -- reported, not a kill: the run is undecided, not
-    dead.  Seeded world: gbm=6 / logit=3 events at the FAST config.
+    dead.  Seeded world: gbm=24 / extratrees=2 events at the FAST
+    config.  (Fixture history: the pre-threshold-sensitive-bootstrap
+    world compressed the label bar until the LOGIT traded 3 events,
+    but that compression also starves the battery book, and the
+    recalibrated full-procedure gate cannot certify any 6-trade
+    primary -- the old SURVIVES there rode the retired
+    anti-conservative statistic.)
     """
-    dataset = _planted_dataset(label_bar=0.008)
-    report = _run(dataset, config={"models": ["gbm", "logit"]})
+    dataset = _planted_dataset()
+    report = _run(dataset, config={"models": ["gbm", "extratrees"]})
     assert report["models"]["gbm"]["verdict"] == "SURVIVES"
     assert report["models"]["gbm"]["n_events"] >= 5
-    assert report["models"]["logit"]["verdict"] == "UNDERPOWERED"
-    # the power gate wins BEFORE the gates: the logit's gate flags are
-    # still evaluated and reported, but cannot name the verdict
-    assert report["models"]["logit"]["kills"]
+    assert report["models"]["extratrees"]["verdict"] == "UNDERPOWERED"
+    # the power gate wins BEFORE the gates: the secondary's gate flags
+    # are still evaluated and reported, but cannot name the verdict
+    assert report["models"]["extratrees"]["kills"]
     assert report["powered"] is False
     assert report["verdict"] == "UNDERPOWERED"
 
@@ -1047,7 +1161,10 @@ def test_battery_absent_incremental_inconclusive() -> None:
     assert report["battery"]["available"] is False
     assert report["ev_battery"] is None
     assert report["incremental"]["gbm"]["t_vs_battery"] is None
-    assert report["incremental"]["gbm"]["t_vs_baseline"] is not None
+    baseline_diff = report["incremental"]["gbm"]["t_vs_baseline"]
+    # threshold-sensitive bootstrap era: the pinned detail entry is the
+    # bootstrap MEAN EV difference vs the baseline (not a t-statistic)
+    assert baseline_diff is not None and math.isfinite(baseline_diff)
     # the planted edge still clears the other gates
     assert report["models"]["gbm"]["ev"] >= 0.004
 

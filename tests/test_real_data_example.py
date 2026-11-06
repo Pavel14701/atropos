@@ -34,9 +34,19 @@ SNAPSHOT = EXAMPLE_DIR / "data" / "SPY.csv"
 SIDECAR = EXAMPLE_DIR / "data" / "SPY.csv.sha256"
 
 QUICK_TIMEOUT_S = 120
-# the deterministic --quick verdicts on the committed snapshot
-QUICK_RUN_VERDICT = "run verdict : DEAD(importance_stability)"
-QUICK_GBM_VERDICT = "verdict=DEAD(importance_stability)"
+# the deterministic --quick verdicts on the committed snapshot.
+# Verdict history: until the incremental gate was recalibrated (the
+# full-procedure threshold-sensitive bootstrap replaced the retired
+# fixed-threshold paired bootstrap t, which false-passed 43-46 of 100
+# pure-noise worlds), this run read DEAD(importance_stability) -- the
+# old t spuriously certified "beats the battery incrementally" and
+# instability named the kill.  The calibrated statistic measures NO
+# incremental edge on this snapshot (bootstrap mean EV diff ~ -0.0020,
+# 95% CI straddling zero), so the incremental gate -- gate #1 --
+# triggers and names the verdict while importance_stability still
+# triggers alongside it.
+QUICK_RUN_VERDICT = "run verdict : DEAD(incremental)"
+QUICK_GBM_VERDICT = "verdict=DEAD(incremental)"
 
 
 def test_snapshot_matches_sha256_sidecar() -> None:

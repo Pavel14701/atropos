@@ -74,7 +74,7 @@ params = {
     ],
     "kill_criteria": [
         {
-            "criterion": "paired bootstrap t of taken-trade EV vs "
+            "criterion": "full-procedure bootstrap CI of taken-trade EV vs "
                          "linear battery",
             "comparison": "<",
             "threshold": 2.0,

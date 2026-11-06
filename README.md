@@ -21,7 +21,11 @@ it is *tradeable*. Atropos ships a reference backtest pipeline for that
 through a taker cost model with stop-first pessimism, rank them within
 groups with a past-only oracle, replay slot admission
 (FCFS vs REPLACE), and read per-trade metrics
-(`per_trade_sharpe`, `pooled_stats`). The kill-protocol is the product;
+(`per_trade_sharpe`, `pooled_stats`). `atropos.portfolio` extends the
+same discipline to concurrent positions: multi-slot replay with
+correlation-aware admission and portfolio-level gates (deflated
+Sharpe, drawdown floor, same-side concentration) on the daily EV
+stream. The kill-protocol is the product;
 the backtest pipeline is its reference companion, not the other way
 around — see `POSITIONING.md`.
 
@@ -122,6 +126,7 @@ uv run python -m atropos.ensemble_pipeline   # 10 cases, verdict matrix
 uv run python -m atropos.track_record        # live PnL vs prereg
 uv run python -m atropos.ml_training         # planted edge, 8-model registry, documented-kill reproduction (VRP panic, calibrated to a closed-corpus tombstone)
 uv run python -m atropos.kill_chain          # rule x ML unified verdict
+uv run python -m atropos.portfolio           # multi-slot replay, correlation cap, portfolio gates
 ```
 
 Every module ships a runnable demo: `uv run python -m atropos.<module>`.
@@ -137,8 +142,8 @@ random, deterministic seed).
 1. `POSITIONING.md` — what Atropos does, what it does not, how the
    kill-protocol and the backtest pipeline relate.
 2. `docs/how-to/` — step-by-step guides, including the ML kill
-   protocol (`run_ml_kill_protocol`) and the backtest pipeline
-   (how-to 06-08).
+   protocol (`run_ml_kill_protocol`), the backtest pipeline
+   (how-to 06-08) and the portfolio layer (how-to 09).
 3. `GLOSSARY.md` — prereg, kill criteria, COD, graveyard, the backtest
    pipeline's vocabulary.
 4. `FRAMEWORK.md` §1-3 — philosophy, pipeline, six laws.

@@ -10,8 +10,12 @@ gates per model (plus an opt-in fifth, default off):
 
 * ``incremental``          the model's taken-trade EV must beat a
                            linear-battery logit (features + caller
-                           supplied control columns) by a paired
-                           bootstrap t;
+                           supplied control columns) by a full-
+                           procedure (threshold-sensitive) paired
+                           bootstrap: every resample re-picks BOTH
+                           arms' EV-argmax thresholds, and the gate
+                           triggers when the mean EV difference or
+                           its 95% CI lower bound is <= 0;
 * ``cost_line``            the merged-OOS EV of taken trades must
                            clear ``profit_bar``;
 * ``importance_stability`` per-fold permutation importances must rank
@@ -159,6 +163,10 @@ DEFAULT_TRAINING_CONFIG: dict[str, Any] = {
     # touching the four-gate contract of existing runs
     "checks": {
         "incremental": True,
+        # retained for config backward compatibility (validated, echoed
+        # into the config report); the recalibrated incremental gate
+        # no longer thresholds a t-statistic -- it triggers on the
+        # full-procedure bootstrap mean diff / CI lower bound <= 0
         "incremental_t": 2.0,
         "cost_line": True,
         "importance_stability": True,
@@ -579,6 +587,143 @@ def paired_bootstrap_t_stat(
         return 0.0, skipped
     t_stat = float(draw_arr.mean() / (spread / math.sqrt(draw_arr.size)))
     return t_stat, skipped
+
+
+def _incremental_bootstrap_diff(
+    model_proba_oos: np.ndarray,
+    battery_proba_oos: np.ndarray,
+    exec_returns_oos: np.ndarray,
+    threshold_grid: tuple[float, ...],
+    *,
+    n_boot: int = 500,
+    seed: int = 42,
+) -> tuple[float, float, float, int]:
+    """Full-procedure paired bootstrap: BOTH arms re-select per draw.
+
+    Row resampling alone underestimates the variance of a
+    threshold-selection procedure (the winner's curse of picking the
+    argmax-EV threshold is not reproduced when rows are resampled but
+    the threshold is held fixed).  This bootstrap re-selects the
+    threshold on each resampled draw -- for the MODEL and for the
+    BATTERY alike -- which propagates threshold-selection variance
+    into the EV difference while keeping the two arms symmetric.
+
+    The symmetry is load-bearing, not cosmetic.  A draft design that
+    re-selected only the model's threshold and kept the battery's
+    realized taken flags fixed was measured and REJECTED: the model
+    arm then carries a fresh in-draw winner's curse (argmax over the
+    grid, evaluated on the very rows it was selected on) while the
+    battery arm stays honest, so under a true null the draw
+    distribution is biased positive by construction and the percentile
+    CI sits above zero for a large fraction of noise worlds
+    (measured: 14/100 false passes at n_boot=1000, p(diff <= 0) as
+    low as 1.1% in the passing worlds -- no draw count can fix a
+    biased draw distribution).  The engine's battery is itself a
+    threshold-selecting procedure (``pick_threshold`` on its train
+    folds), so the full-procedure bootstrap must reproduce its
+    selection too; with both arms re-selecting, the null draw
+    distribution is centered at zero and the gate's 95% percentile CI
+    covers zero at the nominal ~97.5% rate.
+
+    Args:
+        model_proba_oos: model scores on the merged OOS rows.
+        battery_proba_oos: battery (linear comparator) scores on the
+            same rows.
+        exec_returns_oos: per-event executable returns of the rows.
+        threshold_grid: the run's strictly increasing threshold grid.
+        n_boot: number of bootstrap draws, integer >= 2.
+        seed: RNG seed.
+
+    Returns:
+        ``(mean_diff, ci_low, ci_high, n_valid)``: the mean EV
+        difference over valid draws, the 2.5/97.5 percentile bounds
+        and the number of valid draws.  All-NaN statistics when fewer
+        than 30% of draws are valid (a draw is invalid when either
+        book takes no trade in it, so its EV is undefined).
+
+    Raises:
+        ValueError: if ``n_boot`` is not an integer >= 2, ``seed`` is
+            not an integer >= 0, or the input lengths disagree.
+
+    Example::
+
+        >>> exec_vals = np.array([0.02, 0.01, -0.01, -0.02, -0.03])
+        >>> aligned = np.array([0.9, 0.8, 0.3, 0.2, 0.1])
+        >>> mean_diff, ci_low, ci_high, valid = _incremental_bootstrap_diff(
+        ...     aligned,
+        ...     aligned[::-1],
+        ...     exec_vals,
+        ...     (0.15, 0.4, 0.85),
+        ...     n_boot=200,
+        ...     seed=42,
+        ... )
+        >>> (round(mean_diff, 4), ci_low > 0.0, ci_high >= ci_low, valid)
+        (0.0282, True, True, 200)
+        >>> # identical arms cancel exactly, draw by draw
+        >>> same = _incremental_bootstrap_diff(
+        ...     aligned, aligned, exec_vals, (0.15, 0.4, 0.85), n_boot=50
+        ... )
+        >>> (same[0], same[1], same[2], same[3])
+        (0.0, 0.0, 0.0, 50)
+        >>> # a book that never trades poisons every draw -> NaN, 0 valid
+        >>> dead = _incremental_bootstrap_diff(
+        ...     aligned,
+        ...     np.zeros(5),
+        ...     exec_vals,
+        ...     (0.15, 0.4, 0.85),
+        ...     n_boot=10,
+        ...     seed=1,
+        ... )
+        >>> (math.isnan(dead[0]), math.isnan(dead[1]), dead[3])
+        (True, True, 0)
+    """
+    n_boot = validate_int("n_boot", n_boot, minimum=2)
+    seed = validate_int("seed", seed, minimum=0)
+    model_arr = np.asarray(model_proba_oos, dtype=np.float64)
+    battery_arr = np.asarray(battery_proba_oos, dtype=np.float64)
+    exec_arr = np.asarray(exec_returns_oos, dtype=np.float64)
+    n_rows = exec_arr.size
+    if not (model_arr.size == battery_arr.size == n_rows):
+        raise ValueError(
+            f"inputs must share one length, got model "
+            f"{model_arr.size}, battery {battery_arr.size}, exec "
+            f"{n_rows}"
+        )
+    rng = np.random.default_rng(seed)
+    diffs: list[float] = []
+    valid = 0
+    for _ in range(n_boot):
+        draw_index = rng.integers(0, n_rows, size=n_rows)
+        proba_draw = model_arr[draw_index]
+        battery_proba_draw = battery_arr[draw_index]
+        exec_draw = exec_arr[draw_index]
+        # Re-select BOTH thresholds on the BOOTSTRAP draw (the
+        # winner's curse is reproduced inside the resampling
+        # distribution, symmetrically across the two arms)
+        model_threshold = pick_threshold(
+            proba_draw, exec_draw, threshold_grid
+        )
+        battery_threshold = pick_threshold(
+            battery_proba_draw, exec_draw, threshold_grid
+        )
+        ev_model = ev_of_taken(exec_draw, proba_draw > model_threshold)
+        ev_battery = ev_of_taken(
+            exec_draw, battery_proba_draw > battery_threshold
+        )
+        diff = ev_model - ev_battery
+        if math.isfinite(diff):
+            diffs.append(diff)
+            valid += 1
+    if not diffs or valid < n_boot * 0.3:
+        return math.nan, math.nan, math.nan, valid
+    draw_arr = np.asarray(diffs, dtype=np.float64)
+    ci_low, ci_high = np.percentile(draw_arr, [2.5, 97.5])
+    return (
+        float(draw_arr.mean()),
+        float(ci_low),
+        float(ci_high),
+        valid,
+    )
 
 
 def stream_stats(stream: np.ndarray) -> dict[str, float]:
@@ -1845,9 +1990,30 @@ def _gate_incremental(
     taken: dict[str, np.ndarray],
     cfg: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Incremental gate: model must beat the linear battery (t > 2)."""
+    """Incremental gate: model must beat the linear battery.
+
+    The comparison statistic is the FULL-PROCEDURE (threshold-
+    sensitive) paired bootstrap of the taken-book EV difference
+    (:func:`_incremental_bootstrap_diff`): every resample re-picks
+    BOTH arms' EV-argmax thresholds from the run's grid, so the
+    selection variance of the threshold search (the winner's curse of
+    picking the argmax-EV threshold) lands inside the bootstrap
+    distribution instead of riding a fixed-threshold point estimate.
+    The gate triggers when the bootstrap mean difference is <= 0 OR
+    its 95% percentile-CI lower bound is <= 0 -- either reads as "no
+    significant incremental edge over the battery".
+
+    Detail-key note (frozen API contract, pinned by the report key
+    sets): the ``t_vs_battery`` / ``t_vs_baseline`` entries carry the
+    bootstrap MEAN EV DIFFERENCE (not a t-statistic) since the
+    threshold-sensitive bootstrap replaced the fixed-threshold paired
+    bootstrap t, and ``skipped_draws`` counts the invalid draws of
+    the decisive (battery) comparison.
+    """
     checks = cfg["checks"]
     battery_on = _BATTERY_NAME in taken
+    grid = tuple(cfg["threshold_grid"])
+    model_proba = np.asarray(oos["proba"][name], dtype=np.float64)
     detail: dict[str, Any] = {
         "t_vs_battery": None,
         "t_vs_baseline": None,
@@ -1858,16 +2024,16 @@ def _gate_incremental(
             _gate_entry("incremental", False, False, False, None),
             detail,
         )
-    t_base, skipped_base = paired_bootstrap_t_stat(
-        oos["exec"],
-        taken[name],
-        oos["exec"],
-        taken[_BASELINE_NAME],
+    mean_base, _, _, valid_base = _incremental_bootstrap_diff(
+        model_proba,
+        np.asarray(oos["proba"][_BASELINE_NAME], dtype=np.float64),
+        np.asarray(oos["exec"], dtype=np.float64),
+        grid,
         n_boot=cfg["bootstrap_b"],
         seed=cfg["bootstrap_seed"],
     )
-    detail["t_vs_baseline"] = t_base
-    detail["skipped_draws"] = skipped_base
+    detail["t_vs_baseline"] = mean_base
+    detail["skipped_draws"] = int(cfg["bootstrap_b"]) - valid_base
     if not battery_on:
         reason = (
             "battery controls not supplied: incremental edge over a "
@@ -1877,20 +2043,28 @@ def _gate_incremental(
             _gate_entry("incremental", True, False, True, reason),
             detail,
         )
-    t_battery, skipped = paired_bootstrap_t_stat(
-        oos["exec"],
-        taken[name],
-        oos["exec"],
-        taken[_BATTERY_NAME],
+    mean_diff, ci_low, ci_high, valid = _incremental_bootstrap_diff(
+        model_proba,
+        np.asarray(oos["proba"][_BATTERY_NAME], dtype=np.float64),
+        np.asarray(oos["exec"], dtype=np.float64),
+        grid,
         n_boot=cfg["bootstrap_b"],
         seed=cfg["bootstrap_seed"],
     )
-    detail["t_vs_battery"] = t_battery
-    detail["skipped_draws"] = skipped
-    if not math.isfinite(t_battery) or (t_battery <= checks["incremental_t"]):
+    detail["t_vs_battery"] = mean_diff
+    detail["skipped_draws"] = int(cfg["bootstrap_b"]) - valid
+    no_edge = (
+        not math.isfinite(mean_diff)
+        or not math.isfinite(ci_low)
+        or mean_diff <= 0.0
+        or ci_low <= 0.0
+    )
+    if no_edge:
         reason = (
-            f"paired bootstrap t vs linear battery {t_battery:.3f} "
-            f"<= {checks['incremental_t']}: no incremental edge"
+            f"threshold-sensitive bootstrap EV diff vs linear battery "
+            f"{mean_diff:.6f} (95% CI [{ci_low:.6f}, "
+            f"{ci_high:.6f}], {valid}/{cfg['bootstrap_b']} valid "
+            "draws): no incremental edge"
         )
         return (
             _gate_entry("incremental", True, True, False, reason),
@@ -2834,8 +3008,8 @@ def _verify_demo(
         assert entry["deflated_sharpe"] is not None and (
             entry["deflated_sharpe"] >= 1.0
         )
-        t_stat = report["incremental"][name]["t_vs_battery"]
-        assert t_stat is not None and t_stat > 2.0
+        mean_diff = report["incremental"][name]["t_vs_battery"]
+        assert mean_diff is not None and mean_diff > 0.0
     assert report["verdict"] == "SURVIVES"
     assert report["ev_model"] is not None and report["ev_model"] <= 0.02
     assert noise_report["verdict"] != "SURVIVES"
@@ -2915,7 +3089,7 @@ def _print_vrp_panic_refs(
         if ev is not None
         else math.nan
     )
-    t_battery = report["incremental"]["gbm"]["t_vs_battery"]
+    diff_battery = report["incremental"]["gbm"]["t_vs_battery"]
     print("tombstone (closed donor corpus, VRP-panic entry):")
     print(
         "  panic straddle -7.98%/trade (t -10.03, n=23, hit 0%); "
@@ -2935,8 +3109,9 @@ def _print_vrp_panic_refs(
         f"implied t {implied_t:.2f})"
     )
     print(
-        f"  incremental t vs battery {t_battery:.2f} "
-        f"(<= 2.0 -> no incremental edge)"
+        f"  incremental EV diff vs battery "
+        f"{_fmt_bp(diff_battery)} "
+        "(<= 0 or CI low <= 0 -> no incremental edge)"
     )
     print(
         "  realized corpus: panic median gap "

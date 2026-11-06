@@ -208,7 +208,11 @@ cut) while `ev_threshold` returns `(-inf, 0.03, 3)` — the floor wins.
 signal closes the open trade at its decision bar and the row's isolated
 `r_pess`/`exit_idx` stay STALE — read `force_close_r` instead. Example:
 isolated `exit_idx` 5 but force-closed at bar 3 → `force_close_r`
-`0.697` next to the stale `exit_idx` 5.
+`0.697` next to the stale `exit_idx` 5. The portfolio replay reuses
+the field for displaced trades (`atropos.portfolio.run_portfolio_replay`):
+the replaced position's partial-hold P&L is recomputed to the
+replacement bar, while its equity credit still follows the policy — 0
+under `replace_low`, isolated `r_pess` under `replace_high`.
 
 **same_bar_reentry** — the `run_position_state_machine` flag deciding
 whether a signal decided on the exit bar may take the freed slot:
@@ -221,6 +225,48 @@ that already OPENS beyond the stop: the trade is a scratch at costs
 (exit on the entry bar), never a +R windfall in gap-distance units.
 Example: a long planned with a stop at 102 fills at the 101 open →
 `r_opt -0.253` / `r_pess -0.404`, `exit_idx` = the entry bar.
+
+## Portfolio layer
+
+The concurrent-positions generalization of the admission replay
+(`atropos.portfolio`; how-to 09). Its vocabulary:
+
+**Portfolio replay** — the multi-slot replay
+(`atropos.portfolio.run_portfolio_replay`): candidate signals are
+processed in deterministic order over N concurrent slots, a signal
+decided at bar `d` fills at `d + 1`, and every outcome lands in a
+ledger row — `accepted` / `rejected` / `replaced` with reasons
+(`capacity`, `inferior_score`, `correlation_cap`, `cooldown`). Example:
+slots=2, both occupied, FCFS → the newcomer joins `rejected` with
+`capacity`.
+
+**Slot admission** — which slot a portfolio candidate takes
+(`atropos.portfolio`): the correlation filter consults the OCCUPIED
+slots first, then a free slot wins (lowest index) or the admission
+policy decides; a trade holds its slot through its exit bar plus the
+per-slot `cooldown`, and an unresolved trade holds it to the end of
+the data.
+
+**Correlation cap** — the `|Spearman|` admission threshold
+(`atropos.portfolio.filter_by_correlation`): a candidate whose recent
+R proxy correlates strictly above the cap with ANY open position's
+proxy is rejected (reason `correlation_cap`); insufficient overlap is
+inconclusive and admits — not-enough-data is not correlation. Example:
+a second signal on an instrument with an OPEN position carries
+|rho| = 1 against it and dies under any cap below 1.
+
+**Exposure (gross/net)** — the per-bar position series of a replay
+(`atropos.portfolio.ExposureSeries`): `gross` counts held positions,
+`net` is the signed sum (longs minus shorts), both bounded by the slot
+count; `net` is what the same-side concentration gate reads. Example:
+two longs and one short open → gross 3, net 1.
+
+**Portfolio DSR** — the deflated Sharpe computed on the portfolio's
+per-period EV stream (`atropos.portfolio.portfolio_gates`, delegating
+to `atropos.evaluation_metrics.deflated_sharpe_from_moments`): R
+credited per aggregation period is the stream, and a non-finite DSR
+fails closed. Example: a 120-bar book with 3 credited trades →
+DSR ≈ 0 → `DEAD(deflated_sharpe)` once `min_trades` is met.
 
 ## Doctrine
 

@@ -61,7 +61,7 @@ print(report["verdict"], report["n_events"], sorted(report["models"]))
 
 | Gate | Check |
 |---|---|
-| `incremental` | the model's EV on taken trades beats the linear-battery logit (paired bootstrap t >= incremental_t) |
+| `incremental` | the model's EV on taken trades beats the linear-battery logit (full-procedure bootstrap CI of taken-trade EV vs the linear battery) |
 | `cost_line` | merged-OOS EV on taken trades >= `profit_bar` |
 | `importance_stability` | per-fold permutation importances rank consistently (median pairwise Spearman >= `importance_rho_min`) |
 | `deflated_sharpe` | deflated Sharpe (Bailey & Lopez de Prado 2014) of the daily EV stream >= `dsr_min` |

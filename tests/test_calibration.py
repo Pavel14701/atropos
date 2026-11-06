@@ -11,10 +11,15 @@ the fixed seeds below (total well under 30 seconds).
 ML-engine calibration (P3 close-out): the walk-forward engine's
 incremental gate and its deflated-Sharpe p-values get the same
 null-world treatment (100 seeded noise worlds through the full
-``run_ml_kill_protocol`` path).  Both probes are currently
-ANTI-CONSERVATIVE -- documented findings pinned as ``xfail(strict)``:
-the day the engine calibration is fixed, the tests XPASS and strict
-semantics force the markers to be removed, never the asserts.
+``run_ml_kill_protocol`` path).  The incremental-gate probe is now
+CALIBRATED (the retired fixed-threshold paired bootstrap t
+false-passed 43-46 of 100 pure-noise worlds; the full-procedure
+bootstrap that re-picks BOTH arms' EV-argmax thresholds inside every
+resample holds the false-pass rate at 0/100) and runs as a plain
+contract test.  The deflated-Sharpe probe remains ANTI-CONSERVATIVE
+-- a documented finding pinned as ``xfail(strict)``: the day that
+calibration is fixed, the test XPASSes and strict semantics force
+the marker to be removed, never the assert.
 """
 
 from __future__ import annotations
@@ -358,22 +363,6 @@ def test_simulate_power_calibrates_against_analytic_power() -> None:
 # ML engine calibration (P3 close-out): the walk-forward gates under null
 # ---------------------------------------------------------------------------
 @pytest.mark.slow
-@pytest.mark.xfail(
-    reason=(
-        "FINDING (anti-conservative, P3 close-out): the incremental "
-        "gate false-passes ~43-46 of 100 pure-noise worlds -- the "
-        "paired bootstrap t of the EV difference between two thin "
-        "EV-argmax books is over-dispersed under the null (measured "
-        "P(t>2) ~= 0.45, P(|t|>2) ~= 0.9, max t 177 at b=100 / 728 at "
-        "b=2000): row resampling does not reproduce the winner's-curse "
-        "selection of the fold thresholds, so the observed EV "
-        "difference rides into the draws and inflates t.  Among the "
-        "21 powered worlds (>= 500 events) it is still 7-8/21.  The "
-        "assert below is the CALIBRATION CONTRACT (<= 10%); do not "
-        "weaken it -- fix the statistic (e.g. post-selection or "
-        "book-stable resampling) and remove the marker."
-    )
-)
 def test_ml_engine_incremental_gate_fpr_under_noise_null() -> None:
     """True null: the incremental gate must kill noise, FPR <= 10%.
 
@@ -381,10 +370,25 @@ def test_ml_engine_incremental_gate_fpr_under_noise_null() -> None:
     over the battery); a world where it stays off is a false pass --
     the engine waving a noise model through the incrementality
     criterion.  100 seeded worlds, logit vs a linear battery with two
-    noise controls (measured on the fixed seeds: 43/100 false passes
-    at bootstrap_b=100, 46/100 at the production b=2000; the two
-    configs bracket the rate, the config below freezes the fast one).
-    Budget: ~4 s measured (100 engine runs at reduced capacity), well
+    noise controls.
+
+    Calibration history of the statistic (all measured on these fixed
+    seeds): the retired fixed-threshold paired bootstrap t -- rows
+    resampled, thresholds and books held fixed -- false-passed 43/100
+    at bootstrap_b=100 and 46/100 at the production b=2000, because
+    the winner's-curse selection of the fold thresholds never entered
+    the draws and the observed EV difference rode into the resample
+    mean.  A first full-procedure repair that re-picked ONLY the
+    model's threshold per draw (battery flags fixed) was measured at
+    14/100 false passes at b=1000 and rejected: the model arm then
+    carries a fresh in-draw winner's curse while the battery arm
+    stays honest, so the null draw distribution is biased positive by
+    construction (p(diff <= 0) as low as 1.1% in the false-pass
+    worlds).  The shipped statistic re-picks BOTH arms' EV-argmax
+    thresholds inside every resample, which centers the null draw
+    distribution at zero: measured 0/100 false passes at b=100 and
+    0/100 at b=500 (the config below freezes the fast one).
+    Budget: ~10 s measured (100 engine runs at reduced capacity), well
     under the 120 s budget.
     """
     false_passes = 0
