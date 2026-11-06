@@ -73,19 +73,21 @@ verdict ``SURVIVES_CS_ONLY``) or together with the series inputs.
 
 Run ``python -m atropos.ensemble_pipeline`` for the ten synthetic
 verification cases: a genuine edge must SURVIVE; a SLOW genuine edge
-(smoothed driver) must SURVIVE - the battery passes slow-robust edges;
-a momentum echo must die as REPACKAGING; an edge concentrated in the
-first third of the sample must die as ARTIFACT; a genuine edge behind
-an unreachable entry threshold must die as DEAD; a genuine edge under
-prohibitive costs must die as COST_DEATH; a genuine edge under a strict
-drawdown mandate must die as RISK; a genuine cross-sectional panel must
-report SURVIVES_CS_ONLY (only the cross-sectional attack ran); a thin
-panel must report SURVIVES_CS_ONLY_WITH_WARNINGS; a pure-noise panel
-must die as CS_NO_EDGE.  NO_OOS_EDGE and INCONCLUSIVE are the two
-verdicts without a demo case: NO_OOS_EDGE is unreachable in the current
-tree (the stage-1 subperiod-concentration control pre-empts time-decayed
-edges - the blocker is pinned and analysed in
-tests/test_ensemble_pipeline.py), and INCONCLUSIVE needs a
+(smoothed driver) must SURVIVE - the battery passes slow-robust edges
+(9/10 swept seeds; seed 7 stops on the ATR-04 FRAGILE kill); a momentum
+echo must die as REPACKAGING; an edge concentrated in the first third
+of the sample is caught by the OOS evaluation as NO_OOS_EDGE (its
+single stage-1 concentration FAIL is only a WARN under ATR-12); a
+genuine edge behind an unreachable entry threshold must die as DEAD; a
+genuine edge under prohibitive costs must die as COST_DEATH; a genuine
+edge under a strict drawdown mandate must die as RISK; a genuine
+cross-sectional panel must report SURVIVES_CS_ONLY (only the
+cross-sectional attack ran); a thin panel must report
+SURVIVES_CS_ONLY_WITH_WARNINGS; a pure-noise panel must die as
+CS_NO_EDGE.  ARTIFACT and INCONCLUSIVE are the two verdicts without a
+demo case: ARTIFACT needs two independent stage-1 rejections with
+clean factor controls (ATR-12; no honest synthetic reaches it - pinned
+in tests/test_ensemble_pipeline.py), and INCONCLUSIVE needs a
 walk-forward configuration that outgrows the data (unit-tested).
 """
 
@@ -424,7 +426,15 @@ def _stage_1_null_controls(
         for name, result in results.items()
         if result["verdict"] == "INCONCLUSIVE"
     ]
-    status = "FAIL" if failed else ("WARN" if inconclusive else "PASS")
+    # ATR-12: null-control hierarchy — one FAIL flags (WARN), two or
+    # more independent rejections kill.  A single false positive at
+    # alpha=0.05 across 6 controls is expected by chance (~26%); two
+    # simultaneous rejections are unlikely enough to warrant a kill.
+    status = (
+        "FAIL"
+        if len(failed) >= 2
+        else ("WARN" if failed or inconclusive else "PASS")
+    )
     summary = f"{len(results) - len(failed)}/6 controls passed"
     if failed:
         summary += f"; failed: {', '.join(failed)}"
@@ -899,7 +909,9 @@ def _stage_6_predictive_eval(
             f"(rho={stab['mean_pairwise_spearman']:.2f})"
         )
     if dp["verdict"] == "FAIL":
-        warns.append(
+        # ATR-08: DSR FAIL is a KILL in both chains (aligned with
+        # ml_training _gate_deflated_sharpe hard DEAD)
+        fails.append(
             f"deflated Sharpe p={dp['p_value']:.3f} "
             f"(n_strategies={dp['n_strategies']})"
         )
@@ -1354,7 +1366,9 @@ def _make_synthetic(
       multi-row window, so the battery's smoothing OVERLAPS the
       information window instead of washing past it: the edge
       attenuates but never inverts, and the battery correctly lets
-      the slow class through on every swept seed.  The window is
+      the slow class through on 9/10 swept seeds (seed 7 reads FRAGILE
+      3/7 and stops under the ATR-04 ROBUSTNESS-DEATH - pinned in
+      tests/test_pipeline_sweep.py).  The window is
       deliberately modest: per-day evidence is ~ slow**2, and a
       ~20-row window concentrates that evidence into subperiod
       chunks (max_share above the stage-1 cap -> ARTIFACT kill on
@@ -1365,12 +1379,16 @@ def _make_synthetic(
     Two kill worlds:
 
     * ``kind='momentum_echo'`` - signal = momentum + noise (no new
-      information) -> stage-1 REPACKAGING kill.
+      information) -> stage-1 known-features FAIL (a WARN under the
+      ATR-12 hierarchy) -> stage-2 REPACKAGING kill.
     * ``kind='concentrated_edge'`` - a genuine driver edge that only
       ever existed in the first ``_CONCENTRATED_EDGE_FRACTION`` of the
       sample (full-sample regressions stay significant); the evidence
       concentrates in one subperiod -> stage-1 subperiod control FAIL
-      -> ARTIFACT (concentration, not repackaging).
+      (a single FAIL is only a WARN under ATR-12, factor controls
+      clean) -> the stage-6 OOS evaluation catches the edge-free tail
+      -> NO_OOS_EDGE at n_obs=400 (at 900 rows the deeper stages keep
+      passing and the run survives with the stage-1 warning).
 
     Known features are built from PAST information only (no lookahead):
 
@@ -1530,9 +1548,9 @@ def _verify_demo_cases(
     Layer-0 self-check of the demo: every case's overall verdict must
     match its expected label, the canonical kills must land at the right
     stage with the right cause, and the achieved verdict-matrix coverage
-    is printed (10/12 - NO_OOS_EDGE is pinned as unbuildable and
-    INCONCLUSIVE is config-driven; both are unit-tested in
-    tests/test_ensemble_pipeline.py).
+    is printed (10/12 - ARTIFACT needs a two-rejection stage-1 world no
+    honest synthetic reaches, and INCONCLUSIVE is config-driven; both
+    are pinned in tests/test_ensemble_pipeline.py).
     """
     checks = [
         (
@@ -1555,8 +1573,14 @@ def _verify_demo_cases(
     )
     # canonical kills land at the right stages with the right causes
     assert res_a["killed_by_stage"] is None
-    assert res_b["killed_by_stage"] == 1
+    # momentum echo: the single stage-1 known-features FAIL is only a
+    # WARN (ATR-12); the stage-2 curve finds no surviving CONTROLLED
+    # spec and kills as REPACKAGING
+    assert res_b["killed_by_stage"] == 2
+    assert res_b["overall_verdict"] == "REPACKAGING"
+    assert res_b["stages"][0]["status"] == "WARN"
     assert res_b["stages"][0]["repackaging"] is True
+    assert res_b["stages"][1]["status"] == "FAIL"
     assert res_c["killed_by_stage"] is None
     # panel-only survivor: CS-scoped verdict, never a plain SURVIVES
     assert res_c["overall_verdict"] == "SURVIVES_CS_ONLY"
@@ -1587,31 +1611,38 @@ def _verify_demo_cases(
         battery_table.loc[battery_table["test"] == "OVERALL", "note"].iloc[0]
     )
     assert "no active days" in overall_note
-    # concentrated edge: stage-1 concentration kill, NOT repackaging
-    assert res_j["killed_by_stage"] == 1
+    # concentrated edge: the single stage-1 concentration FAIL is only
+    # a WARN (ATR-12), the factor controls stay clean (NOT repackaging),
+    # and the stage-6 OOS evaluation kills the edge-free tail
+    assert res_j["overall_verdict"] == "NO_OOS_EDGE"
+    assert res_j["killed_by_stage"] == 6
+    assert res_j["stages"][0]["status"] == "WARN"
     assert res_j["stages"][0]["repackaging"] is False
     assert (
         res_j["stages"][0]["results"]["subperiod_stability"]["verdict"]
         == "FAIL"
     )
+    assert res_j["stages"][5]["name"] == "predictive_model_eval"
+    assert res_j["stages"][5]["status"] == "FAIL"
     covered = {
         "SURVIVES",
         "SURVIVES_WITH_WARNINGS",
         "SURVIVES_CS_ONLY",
         "SURVIVES_CS_ONLY_WITH_WARNINGS",
         "REPACKAGING",
-        "ARTIFACT",
         "DEAD",
         "COST_DEATH",
         "RISK",
         "CS_NO_EDGE",
+        "NO_OOS_EDGE",
     }
     print(
         f"verdict matrix coverage: {len(covered)}/12 "
-        "(missing NO_OOS_EDGE: no honest series construction in the "
-        "current tree, and INCONCLUSIVE: needs an undersized walk-"
-        "forward configuration - both pinned in "
-        "tests/test_ensemble_pipeline.py)"
+        "(missing ARTIFACT: a stage-1 kill needs two independent "
+        "rejections under ATR-12 and no honest synthetic fails two "
+        "controls while keeping the factor controls clean, and "
+        "INCONCLUSIVE: needs an undersized walk-forward configuration "
+        "- both pinned in tests/test_ensemble_pipeline.py)"
     )
     print("all verification checks passed")
 
@@ -1623,13 +1654,12 @@ def run_all_examples() -> None:
     repackaging, panel-only CS-scoped survive, cost death); E-F pin the
     panel kill and the risk-mandate kill; G-J complete the verdict
     matrix (slow-class survive, thin-panel CS-scoped warnings,
-    unreachable-threshold DEAD, concentration ARTIFACT).  NO_OOS_EDGE
+    unreachable-threshold DEAD, concentration NO_OOS_EDGE).  ARTIFACT
     and INCONCLUSIVE are the two verdicts without a demo case:
-    NO_OOS_EDGE is unreachable in the current tree (the stage-1
-    subperiod-concentration control pre-empts time-decayed edges
-    before the walk-forward ever runs), and INCONCLUSIVE needs a
-    walk-forward configuration that outgrows the data - both are pinned
-    in tests/test_ensemble_pipeline.py.
+    ARTIFACT needs two independent stage-1 rejections with clean
+    factor controls (ATR-12; no honest synthetic reaches it), and
+    INCONCLUSIVE needs a walk-forward configuration that outgrows the
+    data - both are pinned in tests/test_ensemble_pipeline.py.
     """
 
     def thin_edge_data() -> dict[str, Any]:
@@ -1749,11 +1779,19 @@ def run_all_examples() -> None:
             "label": "case J concentration",
             "title": (
                 "CASE J: edge concentrated in the first third "
-                "(must die ARTIFACT)"
+                "(stage-1 concentration FAIL is only a WARN per ATR-12; "
+                "the OOS evaluation catches the edge-free tail - "
+                "NO_OOS_EDGE)"
             ),
-            "data": _make_synthetic("concentrated_edge", seed=4),
+            # n_obs=400 (the sweep scale the test suite pins): at the
+            # demo-default 900 rows the deeper stages keep passing (the
+            # expanding walk-forward never leaves the edge era) and the
+            # single stage-1 FAIL would only WARN the run into a plain
+            # SURVIVES_WITH_WARNINGS; at 400 rows stage 6 reads the
+            # edge-free tail as a sign-consistency FAIL -> NO_OOS_EDGE.
+            "data": _make_synthetic("concentrated_edge", n_obs=400, seed=4),
             "config": None,
-            "expect": "ARTIFACT",
+            "expect": "NO_OOS_EDGE",
         },
     ]
     results: list[dict[str, Any]] = []

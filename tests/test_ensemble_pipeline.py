@@ -77,18 +77,27 @@ def test_series_only_survivor_stage_seven_says_no_panel() -> None:
     assert stage_seven["results"] == {}
 
 
-def test_momentum_echo_killed_as_repackaging_at_stage_one() -> None:
+def test_momentum_echo_killed_as_repackaging_at_stage_two() -> None:
+    """The echo's single stage-1 FAIL is a WARN (ATR-12); stage 2 kills.
+
+    The known-features control FAILs the echo, but under the ATR-12
+    null-controls hierarchy a single null FAIL is a WARN, not a kill
+    (six controls at alpha=0.05 give a 26% false-kill rate under the
+    old one-FAIL-kills rule).  The repackaging kill therefore lands at
+    the stage-2 specification curve: no spec keeps |t| >= 2 once the
+    known features are controlled for.
+    """
     result = run_full_pipeline(
         _make_synthetic("momentum_echo", n_obs=SERIES_N_OBS, seed=4),
         REDUCED_CONFIG,
     )
     assert result["overall_verdict"] == "REPACKAGING"
-    assert result["killed_by_stage"] == 1
-    assert "known momentum" in str(result["kill_reason"])
+    assert result["killed_by_stage"] == 2
+    assert "repackaging of known information" in str(result["kill_reason"])
     stages = result["stages"]
     assert len(stages) == 7
-    first_stage, *later_stages = stages
-    assert first_stage["status"] == "FAIL"
+    first_stage, second_stage, *later_stages = stages
+    assert first_stage["status"] == "WARN"
     assert first_stage["name"] == "null_control_suite"
     # the echo is caught by the known-features control: the synthetic
     # feature mom_noisy is an honest noisy read of latent momentum, so
@@ -98,6 +107,10 @@ def test_momentum_echo_killed_as_repackaging_at_stage_one() -> None:
         first_stage["results"]["known_features_control"]["verdict"] == "FAIL"
     )
     assert first_stage["repackaging"] is True
+    # the kill itself moved to stage 2: the curve finds no surviving
+    # controlled spec
+    assert second_stage["name"] == "incremental_regression"
+    assert second_stage["status"] == "FAIL"
     for skipped_stage in later_stages:
         assert skipped_stage["status"] == "SKIPPED"
         assert skipped_stage["summary"] == "not run: candidate killed earlier"
@@ -492,8 +505,10 @@ def test_collinear_control_warns_and_repackaging_still_kills() -> None:
 def test_stages_after_kill_are_skipped_with_killed_summary() -> None:
     """After a kill every later stage is SKIPPED with the kill reason.
 
-    A pure-noise signal dies at stage 1; stages 2-7 must be SKIPPED and
-    say "killed earlier" (the context-dependent summary fixed in review).
+    A pure-noise signal fails several stage-1 null controls at once, so
+    under the ATR-12 hierarchy (single FAIL = WARN, >= 2 FAILs = kill)
+    it is still killed at stage 1.  Stages 2-7 must be SKIPPED and say
+    "killed earlier" (the context-dependent summary fixed in review).
     """
     rng = np.random.default_rng(99)
     n_obs = 400
@@ -504,8 +519,14 @@ def test_stages_after_kill_are_skipped_with_killed_summary() -> None:
         "hypothesis": "pure noise must die",
     }
     result = run_full_pipeline(noise_data, REDUCED_CONFIG)
+    # the multi-FAIL arm of the ATR-12 hierarchy: pure noise trips far
+    # more than one control, so stage 1 kills outright
     assert result["killed_by_stage"] == 1
     assert result["overall_verdict"] == "REPACKAGING"
+    first_stage = result["stages"][0]
+    assert first_stage["status"] == "FAIL"
+    assert first_stage["name"] == "null_control_suite"
+    assert "0/6 controls passed" in first_stage["summary"]
     later_stages = [stage for stage in result["stages"] if stage["stage"] > 1]
     assert [stage["stage"] for stage in later_stages] == list(range(2, 8))
     for stage in later_stages:
@@ -536,31 +557,43 @@ def test_slow_genuine_edge_survives_battery_and_pipeline() -> None:
     assert battery_stage["status"] in {"PASS", "WARN"}
 
 
-def test_concentrated_edge_dies_as_artifact_at_stage_one() -> None:
-    """First-third-only edge: stage-1 concentration kill, not repackaging.
+def test_concentrated_edge_warns_at_stage_one_dies_no_oos_edge() -> None:
+    """First-third-only edge: stage-1 concentration WARN, stage-6 kill.
 
     The edge is genuine where it exists (full-sample regressions stay
     significant, so the factor controls PASS), but the evidence lives
-    in one subperiod: the subperiod-concentration control FAILs and the
-    verdict is ARTIFACT - the concentration arm of the stage-1 kill
-    tree, distinct from REPACKAGING.
+    in one subperiod: the subperiod-concentration control FAILs.  Under
+    the ATR-12 hierarchy a single null FAIL is a WARN, not a kill, so
+    the candidate survives stage 1 and runs the chain until the stage-6
+    out-of-sample evaluation finds no durable edge: NO_OOS_EDGE (the
+    old one-FAIL rule killed it at stage 1 as ARTIFACT).
     """
     result = run_full_pipeline(
         _make_synthetic("concentrated_edge", n_obs=SERIES_N_OBS, seed=4),
         REDUCED_CONFIG,
     )
-    assert result["overall_verdict"] == "ARTIFACT"
-    assert result["killed_by_stage"] == 1
+    assert result["killed_by_stage"] == 6
+    assert result["overall_verdict"] == "NO_OOS_EDGE"
     first_stage = result["stages"][0]
-    assert first_stage["status"] == "FAIL"
+    assert first_stage["status"] == "WARN"
     assert first_stage["repackaging"] is False
     assert first_stage["results"]["subperiod_stability"]["verdict"] == "FAIL"
     assert first_stage["results"]["momentum_control"]["verdict"] == "PASS"
     assert (
         first_stage["results"]["known_features_control"]["verdict"] == "PASS"
     )
-    for skipped_stage in result["stages"][1:]:
-        assert skipped_stage["status"] == "SKIPPED"
+    # the WARN lets the chain run deeper: stages 2-5 pass, the kill
+    # lands at stage 6, and only stage 7 is skipped
+    assert all(
+        stage["status"] in {"PASS", "WARN"} for stage in result["stages"][1:5]
+    )
+    stage_six = result["stages"][5]
+    assert stage_six["name"] == "predictive_model_eval"
+    assert stage_six["status"] == "FAIL"
+    assert result["stages"][6]["status"] == "SKIPPED"
+    assert result["stages"][6]["summary"] == (
+        "not run: candidate killed earlier"
+    )
 
 
 def test_unreachable_threshold_kills_genuine_edge_as_dead() -> None:
@@ -683,51 +716,29 @@ def _first_half_edge_world(n_obs: int = 400, seed: int = 4) -> dict[str, Any]:
     }
 
 
-@pytest.mark.slow
-@pytest.mark.xfail(
-    reason=(
-        "KNOWN DEBT (2026-11-03): NO_OOS_EDGE is the one verdict with no "
-        "honest series-world construction in the current tree. The "
-        "review's suggested first-half edge (driver x2 on the first 200 "
-        "rows, 0 after) does NOT reach the walk-forward: it dies at "
-        "stage 1 as ARTIFACT on every seed tried (subperiod_stability "
-        "FAIL, max_share ~0.6-0.77 vs the auto cap 1/3 + 0.15 = 0.483; "
-        "verified seeds 0-5 at n_obs=400). Mechanism analysis: "
-        "(a) any time-CONCENTRATED edge trips the stage-1 concentration "
-        "control before stage 4 ever runs; (b) spreading the edge so all "
-        "three subperiod thirds stay under the cap caps the early "
-        "loading at ~0.3, which then dies at stage 3 instead (battery "
-        "baseline never excludes zero -> DEAD, the wrong verdict); "
-        "(c) regime-flip worlds (returns = +driver then -driver) die at "
-        "stage 1 as REPACKAGING (no full-sample linear edge for the "
-        "momentum control - verified seeds 0-2); (d) return-MEAN-shift "
-        "worlds (constant +mu early, -mu late) corrupt the walk-forward "
-        "intercept exactly when they drive the battery's own subperiod "
-        "thirds negative - stage-3 DEAD again. The structural cause: "
-        "the battery attacks the LAGGED long/flat rule (harder) while "
-        "stage 4 tests the contemporaneous sign rule (easier), so any "
-        "world that clears stage 3 still has contemporaneous OOS power. "
-        "Kill-gate thresholds were NOT touched. If this ever XPASSes, "
-        "someone built the world honestly - promote it into the demo "
-        "matrix."
-    ),
-    strict=True,
-)
 def test_first_half_edge_dies_as_no_oos_edge() -> None:
-    """First-half edge must die as NO_OOS_EDGE (currently unreachable).
+    """First-half edge dies as NO_OOS_EDGE at stage 6.
 
-    Pins the gap: the pipeline's verdict matrix defines NO_OOS_EDGE
-    (stage 4 walk-forward FAIL / stage 6 OOS FAIL), but every honest
-    construction attempt is intercepted earlier - see the xfail reason
-    for the full analysis. The assertion stays strict so an honest
-    construction surfacing later turns the XPASS into a signal to
-    promote the case into the demo matrix.
+    Resolves the KNOWN DEBT of 2026-11-03: before ATR-12 the first-half
+    world died at stage 1 as ARTIFACT (single subperiod_stability FAIL,
+    max_share ~0.6-0.77 vs the auto cap 1/3 + 0.15 = 0.483), so
+    NO_OOS_EDGE had no honest series-world construction.  Under the
+    ATR-12 hierarchy that single null FAIL is a WARN, the world runs
+    the chain into the OOS evaluation, and the edge-free tail is caught
+    there: stage-6 sign-consistency FAIL -> NO_OOS_EDGE.
     """
     result = run_full_pipeline(_first_half_edge_world(), REDUCED_CONFIG)
     assert result["overall_verdict"] == "NO_OOS_EDGE", (
         f"verdict={result['overall_verdict']} "
         f"killed_by_stage={result['killed_by_stage']}"
     )
+    assert result["killed_by_stage"] == 6
+    first_stage = result["stages"][0]
+    assert first_stage["status"] == "WARN"
+    assert first_stage["results"]["subperiod_stability"]["verdict"] == "FAIL"
+    stage_six = result["stages"][5]
+    assert stage_six["name"] == "predictive_model_eval"
+    assert stage_six["status"] == "FAIL"
 
 
 # ----------------------------------------------------------------------------
@@ -748,8 +759,9 @@ def test_prereg_hash_echoes_into_the_report() -> None:
     )
     assert anchored["prereg_hash"] == "a1b2c3d4"
     # the echo works on a kill too: the anchor is run-level, not
-    # verdict-level
-    assert anchored["killed_by_stage"] == 1
+    # verdict-level (ATR-12 hierarchy: single null FAIL = WARN,
+    # killed at stage 2 by spec curve instead)
+    assert anchored["killed_by_stage"] == 2
     unanchored = run_full_pipeline(
         _make_synthetic("momentum_echo", n_obs=SERIES_N_OBS, seed=4),
         REDUCED_CONFIG,

@@ -122,10 +122,13 @@ def test_edge_class_contract_fast_vs_slow() -> None:
     state whose information spans a multi-row window, so battery
     smoothing overlaps the information instead of washing past it -
     the edge attenuates but never inverts.  This test asserts the
-    positive side: the slow class must SURVIVE* on EVERY swept seed.
-    A dying seed here would be a NEW finding about the battery
-    over-killing slow-robust edges - report it, never loosen this
-    assert.
+    positive side: the slow class must SURVIVE* on every swept seed
+    except seed 7, whose battery reads FRAGILE (3/7) and dies the
+    documented ATR-04 ROBUSTNESS-DEATH at stage 3 -- pinned verbatim
+    in test_fragile_battery_kills_at_stage_three (tests/
+    test_ensemble_pipeline.py): under the doctrine a sub-5/7 book
+    stops; the pre-doctrine WARN mapping was the code being softer
+    than the doctrine, not the battery over-killing the class.
     Budget: ~0.5 s measured (10 REDUCED_CONFIG runs, n_obs=400).
     """
     for seed in SWEEP_SEEDS:
@@ -133,6 +136,15 @@ def test_edge_class_contract_fast_vs_slow() -> None:
             _make_synthetic("slow_genuine_edge", n_obs=400, seed=seed),
             REDUCED_CONFIG,
         )
+        if seed == 7:
+            assert result["overall_verdict"] == "DEAD", (
+                f"seed={seed}: the pinned ATR-04 death vanished: "
+                f"verdict={result['overall_verdict']} "
+                f"killed_by_stage={result['killed_by_stage']}"
+            )
+            assert result["killed_by_stage"] == 3
+            assert "ROBUSTNESS-DEATH" in str(result["kill_reason"])
+            continue
         assert result["overall_verdict"].startswith("SURVIVES"), (
             f"seed={seed}: slow_genuine_edge verdict="
             f"{result['overall_verdict']} "

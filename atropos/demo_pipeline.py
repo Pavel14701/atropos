@@ -592,3 +592,9 @@ def run_demo_pipeline(  # noqa: PLR0912, PLR0915  (one block per stage)
         "market_r_pess": market_r_pess,
         "pipeline_completed": bool(pipeline_completed),
     }
+
+
+if __name__ == "__main__":
+    # same contract as ``atropos demo``: exit 0 only when the pipeline
+    # completed (the ranking gate verdict is reported, not fatal)
+    raise SystemExit(0 if run_demo_pipeline()["pipeline_completed"] else 1)

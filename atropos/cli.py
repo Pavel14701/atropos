@@ -826,6 +826,7 @@ def main(
         15-robustness-battery
         16-walkforward-calendar
         17-backtest-pipeline
+        18-read-portfolio-results
         0
     """
     parser = _build_parser()

@@ -11,26 +11,30 @@ aggregate of the two chain verdicts.  A kill in either chain kills
 the hypothesis; survival needs every executed chain to survive.
 
 Unified verdict matrix (documented aggregate; ``SURVIVES*`` abbreviates
-both alive forms ``SURVIVES`` / ``SURVIVES_WITH_WARNINGS``, ``[...]``
+the four alive forms ``SURVIVES`` / ``SURVIVES_WITH_WARNINGS`` /
+``SURVIVES_CS_ONLY`` / ``SURVIVES_CS_ONLY_WITH_WARNINGS``, ``[...]``
 names ``unified["source"]``)::
 
     rule overall_verdict | ml verdict   | unified verdict
     ---------------------+--------------+----------------------
     SURVIVES*            | (not run)    | SURVIVES
     any kill verdict     | (not run)    | KILLED   [rule]
+    INCONCLUSIVE         | (not run)    | INCONCLUSIVE [rule]
     SURVIVES*            | SURVIVES     | SURVIVES
     SURVIVES*            | DEAD(...)    | KILLED   [ml]
     SURVIVES*            | UNDERPOWERED | INCONCLUSIVE [ml]
     any kill verdict     | SURVIVES     | KILLED   [rule]
     any kill verdict     | DEAD(...)    | KILLED   [rule+ml]
     any kill verdict     | UNDERPOWERED | KILLED   [rule]
+    INCONCLUSIVE         | any decision | INCONCLUSIVE [rule]
 
-Rule kill verdicts are every ``overall_verdict`` outside the two alive
-forms: ``REPACKAGING``, ``ARTIFACT``, ``DEAD``, ``NO_OOS_EDGE``,
-``COST_DEATH``, ``RISK``, ``CS_NO_EDGE``.  The ML verdict is
-``UNDERPOWERED`` when the declustered event floor is not met: that is
-reported undecided, NOT a death, so it maps to ``INCONCLUSIVE`` (a
-fresh snapshot with more power may still decide the hypothesis).
+Rule kill verdicts are every ``overall_verdict`` outside the four alive
+forms and ``INCONCLUSIVE``: ``REPACKAGING``, ``ARTIFACT``, ``DEAD``,
+``NO_OOS_EDGE``, ``COST_DEATH``, ``RISK``, ``CS_NO_EDGE``.  Undecided
+is not death on either chain: a rule ``INCONCLUSIVE`` (a walk-forward
+configuration the data cannot carry, ATR-06) and the ML ``UNDERPOWERED``
+(the declustered event floor is not met) both map to ``INCONCLUSIVE`` --
+a fresh snapshot with more power may still decide the hypothesis.
 
 Run ``python -m atropos.kill_chain`` for the asserted demo: a
 rule-only noise case dies from the rule chain, a genuine rule edge
@@ -51,7 +55,16 @@ from atropos.ml_training import run_ml_kill_protocol
 
 __all__ = ["run_full_kill_chain"]
 
-_RULE_ALIVE_VERDICTS = frozenset({"SURVIVES", "SURVIVES_WITH_WARNINGS"})
+_RULE_ALIVE_VERDICTS = frozenset(
+    {
+        "SURVIVES",
+        "SURVIVES_WITH_WARNINGS",
+        # panel-only alive forms: only the cross-sectional attack ran
+        # (ATR-03) -- still a survival, with the scope kept visible
+        "SURVIVES_CS_ONLY",
+        "SURVIVES_CS_ONLY_WITH_WARNINGS",
+    }
+)
 _RULE_SERIES_KEYS = ("returns", "signal")
 _RULE_PANEL_KEYS = ("panel_signal", "panel_returns")
 _ML_DATASET_KEYS = ("features", "target", "exec_returns", "times_us")
@@ -158,6 +171,20 @@ def _unify(rule_verdict: str, ml_verdict: str | None) -> dict[str, Any]:
             "source": "ml",
             "reason": f"ml chain killed: {ml_verdict}",
         }
+    if rule_verdict == "INCONCLUSIVE":
+        # ATR-06: a walk-forward configuration the data cannot carry is
+        # undecided, not a kill -- "could not test" is not evidence of
+        # "no edge", so it can never read KILLED [rule] or SURVIVES
+        return {
+            "verdict": "INCONCLUSIVE",
+            "rule_verdict": rule_verdict,
+            "ml_verdict": ml_verdict,
+            "source": "rule",
+            "reason": (
+                f"rule chain undecided: {rule_verdict} (undecided is "
+                "not death; decide on a wider snapshot)"
+            ),
+        }
     if ml_verdict is not None and ml_verdict != "SURVIVES":
         return {
             "verdict": "INCONCLUSIVE",
@@ -187,7 +214,7 @@ def run_full_kill_chain(
 ) -> dict[str, Any]:
     """Run both kill chains on one hypothesis; aggregate one verdict.
 
-    The rule chain (7 adversarial stages, 9 verdicts) always runs on
+    The rule chain (7 adversarial stages, 12 verdicts) always runs on
     ``rule_data``; the ML chain (walk-forward gates) runs only when
     ``ml_dataset`` is given.  The wrapper adds no gates and makes no
     choice between the chains: ``rule`` and ``ml`` carry the engine
