@@ -43,11 +43,19 @@ examples/real_data/
 ├── README.md                   # this file
 ├── data/SPY.csv                # committed daily snapshot (5033 bars)
 ├── data/SPY.csv.sha256         # pins the snapshot bytes
+├── data/<ETF>.csv x 10         # sector SPDR snapshots (see provenance)
+├── data/<ETF>.csv.sha256 x 10  # per-ticker hash pins
 ├── download_data.py            # refresh utility (Stooq -> Yahoo fallback)
 ├── strategies/spy_tsmom.py     # load_spy / make_features / make_events
+├── strategies/spy_rsi.py       # RSI(2) mean-reversion negative control
+├── strategies/sector_momentum.py  # 10-sector XS momentum panel/datasets
 ├── preregistration.py          # frozen params-dict for generate_prereg
 ├── run_example.py              # --quick / full: prereg -> run -> verdicts
-└── expected_output.md          # actual transcript of the --quick run
+├── run_rsi_example.py          # RSI(2) through the ML kill protocol
+├── run_portfolio_controls.py   # 3-phase portfolio controls (see below)
+├── expected_output.md          # actual transcript of the --quick run
+├── expected_rsi_output.md      # actual transcript of the RSI --quick run
+└── expected_portfolio_controls.md  # actual FULL transcript + analysis
 ```
 
 ## Data provenance and caveats
@@ -75,6 +83,50 @@ examples/real_data/
 - **Cost model**: a flat 2 bps round-trip per monthly trade.  Real
   books face spreads/impact/funding; raising the cost changes the
   economics, not the code.
+
+### Sector SPDR snapshots (portfolio controls)
+
+- **Snapshots**: `data/<TICKER>.csv` for the ten Select Sector SPDR
+  ETFs `XLF XLE XLK XLI XLV XLY XLP XLRE XLU XLB`, same column
+  layout as `data/SPY.csv` (`AdjClose` split- AND dividend-adjusted).
+  Request window 2005-01-01..2025-01-01; nine ETFs return 5033 bars
+  (2005-01-03..2024-12-31), `XLRE` returns 2323 (2015-10-08, its
+  inception — there is no `XRE` ticker, and the 10-name
+  cross-section only exists from that date).
+- **Source**: Yahoo Finance chart API, retrieved 2026-11-06 (the
+  Stooq endpoint served its proof-of-work challenge to plain HTTP
+  clients, same as for SPY).  Each vintage is pinned by a
+  `data/<TICKER>.csv.sha256` sidecar;
+  `download_data.py` verifies per ticker and raises on any drift
+  (fresh pins are written only for tickers with no sidecar yet).
+- **Rights**: not for redistribution — source data belongs to the
+  provider; the committed snapshots are for reproducing these
+  examples only.
+
+## Portfolio controls: momentum vs noise on 10 sector SPDRs
+
+`run_portfolio_controls.py` runs three preregistered phases over the
+sector panel with the portfolio layer (`atropos.portfolio`): a null
+admission control (random-selection books over 100 seeded worlds —
+the FPR calibration), the cross-sectional 12-1 momentum book as the
+positive control, and a seeded noise book through the full machinery
+(negative control).  Each phase prints its frozen prereg (with spec
+hash) BEFORE its run; verdicts are recorded, never enforced.
+
+```bash
+uv run python examples/real_data/run_portfolio_controls.py --quick   # CI preview
+uv run python examples/real_data/run_portfolio_controls.py           # full contract
+```
+
+Recorded full-run outcomes (see
+[expected_portfolio_controls.md](expected_portfolio_controls.md) for
+the verbatim transcript and the what-each-phase-calibrates analysis):
+null FPR 0/100 worlds certified; momentum book `DEAD(deflated_sharpe)`
+(the XLRE-constrained 2016-2024 window carries no sector XS momentum
+edge — the pre-run idealized audit measures Sharpe about -0.11); noise
+book refused by the side-concentration gate after passing the DSR and
+drawdown gates on luck.  All three outcomes are the controls working;
+the transcript dissects each.
 
 ## The frozen protocol (what the runner does)
 

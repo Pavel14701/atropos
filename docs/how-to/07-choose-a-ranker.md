@@ -241,7 +241,8 @@ is not a finding. The arms here are per-group floats of the SAME
 groups (NaN pairs are dropped, rows resampled jointly); the caller owns
 the group set being comparable — `embargo_until` is carried on
 `CandidateGroup` but NOT enforced inside the bootstrap (pinned in the
-docstring; tracked in `KNOWN-ISSUES.md` §5b).
+docstring; `atropos.ranking.compare_rankers_on_intersection` makes
+the intersection the default path in one call).
 
 ## Step 5. When to reach for the lambdarank oracle
 

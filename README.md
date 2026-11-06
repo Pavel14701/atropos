@@ -147,6 +147,8 @@ random, deterministic seed).
 3. `GLOSSARY.md` — prereg, kill criteria, COD, graveyard, the backtest
    pipeline's vocabulary.
 4. `FRAMEWORK.md` §1-3 — philosophy, pipeline, six laws.
+5. `docs/calibration.md` — how the portfolio kill gates are calibrated
+   on public data, and the blind-run protocol for private systems.
 
 Committed demo transcripts (what the demos actually print) live in
 `docs/examples/`.

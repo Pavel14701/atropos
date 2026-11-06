@@ -61,6 +61,7 @@ YOUR pipeline and keep your own data, execution and sizing layers.
 | Compare rankers honestly | `atropos.ranking` + `RANKING_METRICS` — how-to 07 |
 | Choose a slot admission policy | `atropos.backtesting.run_admission_policy` — how-to 08 |
 | Compare portfolio admission policies / portfolio gates | `atropos.portfolio` (`run_portfolio_replay`, `run_portfolio`) — how-to 09 |
+| Portfolio kill protocol calibration | `docs/calibration.md` — public-data gate progression, prereg hash, blind-run protocol |
 
 **The one-paragraph pitch** (and the honest version of it):
 

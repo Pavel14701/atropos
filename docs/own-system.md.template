@@ -1,0 +1,76 @@
+<!--
+PRIVATE — do not commit. This template documents a blind run of YOUR
+system; the aggregate verdict may be shared, the details stay private.
+
+How to use: copy this file to your private repo (never into the
+atropos repository), fill it after the calibration.md phases are all
+PASS and your prereg hash is committed. Only the aggregate verdict
+(kill verdict + portfolio verdict + prereg_hash) is meant to leave
+your machine.
+-->
+
+# Case study: <SYSTEM NAME> (blind run)
+
+> **PRIVATE — do not commit.** This template documents a blind run of
+> YOUR system; the aggregate verdict may be shared, the details stay
+> private.
+
+## Run metadata
+
+| Field | Value |
+|---|---|
+| System name | <name> |
+| Data window | <start .. end, e.g. 2015-01-01 .. 2025-06-30> |
+| Instruments | <count or list; keep identities private if you prefer> |
+| prereg_hash | <hash from prereg.json, committed before this run> |
+| Blind run date | <YYYY-MM-DD — must postdate the prereg commit> |
+
+Precondition: every phase in `docs/calibration.md` is `PASS` and the
+`prereg.json` hash above is committed BEFORE this run — the commit
+date must precede the blind run date. If it does not, the run was not
+blind; write that down here instead of deleting the row.
+
+## Hypothesis (frozen)
+
+<The one-paragraph hypothesis, exactly as frozen in the prereg BEFORE
+the run: what the signal claims, on what instruments, over what
+holding period. Frozen means frozen — if you edit this paragraph
+after seeing the verdict, the document is void. Paste the committed
+version.>
+
+## Pipeline run
+
+- Kill verdict: <SURVIVES / SURVIVES_WITH_WARNINGS / REPACKAGING /
+  ARTIFACT / DEAD / NO_OOS_EDGE / COST_DEATH / RISK / CS_NO_EDGE>
+- Portfolio verdict: <SURVIVES / DEAD(<gate>) / UNDERPOWERED>
+
+<One sentence on what ran: entry point, slots, policy, corr_cap,
+hold_bars — the fields the prereg froze.>
+
+## Gates triggered
+
+| Gate | value | floor | triggered |
+|---|---|---|---|
+| deflated_sharpe | <dsr> | <dsr_min> | <yes/no> |
+| drawdown_floor | <max drawdown> | <dd_floor> | <yes/no> |
+| side_concentration | <same-side share> | <cap> | <yes/no> |
+
+<If `UNDERPOWERED`: the credited-trade count and the frozen
+`min_trades`. Undecided is undecided — record it; lowering
+`min_trades` after the fact voids the run.>
+
+## Interpretation
+
+<What the verdict means for THIS system, in verdict vocabulary. A
+`DEAD(<gate>)` from gates calibrated on public data is a kill by a
+standard anyone can verify; a `SURVIVES` means "not killed by the
+calibrated gates" — the `POSITIONING.md` line applies: one more
+non-kill, not a promise.>
+
+## Delta vs donor engine (PRIVATE ARTIFACT)
+
+<Where YOUR pipeline differs from the reference engine: entry rule,
+exit contract, cost model, sizing, the oracle that produced the
+scores. This section is the reason the file stays private — the delta
+is your edge or your bug, and it never leaves your repo.
+`docs/examples/backtest_pipeline.py` is the reference to diff against.>

@@ -13,6 +13,13 @@ they legitimately vary across BLAS builds.
 The RSI(2) tests below pin the SECOND real-data example, the negative
 control: a book whose recorded verdict is a kill, on the same
 committed snapshot.
+
+The portfolio-controls tests pin the THIRD example: the 10-sector
+SPDR portfolio controls (momentum positive control + random negative
+controls).  The ten sector snapshots are checksum-pinned the same way,
+the `--quick` runner must exit cleanly through all three phases, and
+the null phase must return a WELL-FORMED gate report -- the FPR number
+itself is a random quantity by nature and is deliberately NOT pinned.
 """
 
 from __future__ import annotations
@@ -240,3 +247,145 @@ def test_rsi_is_negative_control() -> None:
         "the recorded anatomy matters: the book dies on instability "
         "while clearing the cost line -- keep that honest"
     )
+
+
+# ---------------------------------------------------------------------------
+# Portfolio controls (strategies/sector_momentum.py + the 10 sector SPDRs)
+# ---------------------------------------------------------------------------
+
+CONTROLS_RUNNER = EXAMPLE_DIR / "run_portfolio_controls.py"
+CONTROLS_STRATEGY = EXAMPLE_DIR / "strategies" / "sector_momentum.py"
+CONTROLS_QUICK_TIMEOUT_S = 300
+
+
+def _load_controls_module() -> ModuleType:
+    spec = importlib.util.spec_from_file_location(
+        "run_portfolio_controls_under_test", CONTROLS_RUNNER
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_sector_strategy_module() -> ModuleType:
+    spec = importlib.util.spec_from_file_location(
+        "sector_momentum_under_test", CONTROLS_STRATEGY
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_sector_snapshot_checksums() -> None:
+    """All ten sector snapshots are byte-identical to their hash pins."""
+    strategy = _load_sector_strategy_module()
+    for ticker in strategy.SECTOR_TICKERS:
+        snapshot = EXAMPLE_DIR / "data" / f"{ticker}.csv"
+        sidecar = EXAMPLE_DIR / "data" / f"{ticker}.csv.sha256"
+        assert snapshot.is_file(), f"committed snapshot {ticker} is missing"
+        assert sidecar.is_file(), f"checksum sidecar {ticker} is missing"
+        pinned = sidecar.read_text(encoding="ascii").split()[0]
+        digest = hashlib.sha256(snapshot.read_bytes()).hexdigest()
+        assert digest == pinned, (
+            f"{ticker}.csv drifted from its sha256 pin; re-pin the "
+            "vintage consciously or restore the committed bytes"
+        )
+
+
+def _run_controls_quick() -> str:
+    completed = subprocess.run(
+        [sys.executable, "-I", str(CONTROLS_RUNNER), "--quick"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=CONTROLS_QUICK_TIMEOUT_S,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+        cwd=str(EXAMPLE_DIR),
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return completed.stdout
+
+
+def test_portfolio_controls_quick_runs() -> None:
+    """--quick exits 0 and runs all three preregistered phases."""
+    stdout = _run_controls_quick()
+    assert "PHASE A. NULL" in stdout, "null phase did not run"
+    assert "PHASE B. MOMENTUM PORTFOLIO" in stdout, (
+        "positive control did not run"
+    )
+    assert "PHASE C. RANDOM PORTFOLIO" in stdout, (
+        "negative control did not run"
+    )
+    # prereg-then-results discipline, phase by phase: each phase's
+    # rendered prereg (spec hash) precedes its first verdict line
+    for phase_marker in ("PHASE A", "PHASE B", "PHASE C"):
+        phase_at = stdout.find(phase_marker)
+        assert phase_at != -1
+        hash_at = stdout.find("- **Spec hash:**", phase_at)
+        assert hash_at != -1, f"{phase_marker} prereg hash not printed"
+    for verdict_token in ("portfolio verdict:", "FALSE-CERTIFICATION"):
+        assert verdict_token in stdout, f"missing {verdict_token!r}"
+    assert "SUMMARY" in stdout, "no summary table printed"
+
+
+def test_null_phase_structure() -> None:
+    """The null phase returns a well-formed gate report without crashing.
+
+    The FPR number itself is a random quantity by nature (random books,
+    random scores) and is deliberately NOT pinned here; the STRUCTURE
+    is: three gates in the engine's fixed order, a resolvable verdict,
+    a finite equity curve of credited trades, and every accepted trade
+    resolved inside the data (no open-ended credits).
+    """
+    controls = _load_controls_module()
+    strategy = _load_sector_strategy_module()
+    panel = strategy.load_prices()
+    null = strategy.build_null_signals(
+        panel, controls.NULL_BASE_SEED, include_r_proxy=False
+    )
+    signals = null["signals"]
+    assert not signals.empty, "null construction produced no signals"
+    replay = controls.run_portfolio_replay(
+        signals,
+        panel,
+        slots=controls.SLOTS,
+        policy=controls.POLICY,
+        corr_cap=None,
+        hold_bars=controls.HOLD_BARS,
+        cost=null["cost_model"],
+    )
+    assert replay["summary"]["n_accepted"] > 0, "nothing admitted"
+    assert replay["summary"]["n_unresolved"] == 0, (
+        "open-ended trades: the hold-window guard failed"
+    )
+    equity = np.asarray(replay["equity_curve"], dtype=float)
+    assert equity.size >= controls.MIN_TRADES, "book below the floor"
+    assert bool(np.isfinite(equity).all())
+    # the same per-bucket EV stream run_portfolio builds internally
+    ev = np.zeros(len(panel), dtype=float)
+    for row in replay["accepted"]:
+        ev[int(row["credit_bar"])] += float(row["credit_r"])
+    report = controls.portfolio_gates(
+        equity,
+        ev,
+        dsr_min=controls.DSR_MIN,
+        dd_floor=controls.DD_FLOOR,
+        max_same_side_share=controls.MAX_SAME_SIDE,
+        n_trials=controls.N_TRIALS,
+        min_trades=controls.MIN_TRADES,
+        concurrent=replay["exposure"]["concurrent"],
+        net_exposure=replay["exposure"]["net"],
+    )
+    assert [gate["gate"] for gate in report["gates"]] == [
+        "deflated_sharpe",
+        "drawdown_floor",
+        "side_concentration",
+    ]
+    verdict = report["portfolio_verdict"]
+    assert verdict in ("SURVIVES", "UNDERPOWERED") or verdict.startswith(
+        "DEAD"
+    ), f"unresolvable null verdict {verdict!r}"
+    assert report["n_trades"] == int(equity.size)
