@@ -55,6 +55,9 @@ _ENGINE_REPORT_KEYS = frozenset(
         "importance_stability",
         "powered",
         "n_min_events",
+        # additive (P3 close-out): the engine report now echoes the
+        # prereg anchor; the ensemble report inherits it verbatim
+        "prereg_hash",
         "config",
     }
 )

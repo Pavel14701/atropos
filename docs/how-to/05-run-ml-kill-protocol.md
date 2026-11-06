@@ -416,6 +416,27 @@ INCONCLUSIVE: the incremental edge over the linear battery is
 justification for the hypothesis — drop `battery_controls` deliberately
 or do not drop them at all.
 
+### The opt-in fifth gate: robustness (threshold sensitivity)
+
+`checks.robustness` (default `False`) enables an opt-in fifth gate
+against the donor finding "beats the battery at one threshold, dies
+when the threshold moves": after the walk-forward has picked each
+fold's threshold, the merged OOS book is re-scored at every fold
+threshold scaled by `(1 - checks.robustness_shift)` and
+`(1 + checks.robustness_shift)` — a fraction of the chosen threshold,
+default 0.20, valid range [0.05, 0.5] (no refit, no leakage: the
+already-computed OOS probabilities are just re-cut). The gate TRIGGERs
+when the taken-book EV flips sign at either shifted book (any negative
+shifted EV against a positive base EV included) and degrades to
+INCONCLUSIVE when a shifted book takes fewer than 10 trades (or the
+base book is empty) — a thin book cannot power a sensitivity reading.
+Enabling it is additive: the kills list gains a fifth entry (after
+`deflated_sharpe`), a per-model `robustness` detail block
+(base/shifted taken counts and EVs) appears in
+`report["models"][name]`, and `DEAD(robustness)` becomes a possible
+verdict — runs that leave it off keep the exact four-gate contract
+documented above.
+
 ### Noise must die: DEAD(<gate>)
 
 ```python
