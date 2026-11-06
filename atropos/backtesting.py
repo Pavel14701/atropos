@@ -1307,6 +1307,11 @@ def run_admission_policy(
 ) -> dict[str, Any]:
     """Replay one portfolio admission policy over a candidate stream.
 
+    The policies are A PRIORI rules, not fitted parameters: neither
+    FCFS nor REPLACE-low/high is tuned on the stream it is judged on,
+    so the admission layer adds no in-sample contamination to the
+    verdict it accompanies.
+
     Engine finding (robustness checks): first-come-first-served
     capping rejects BETTER trades - on the donor's measured 1040-trade
     stream the rejected mean r_pess was +0.484R vs +0.441R for the

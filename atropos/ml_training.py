@@ -2009,7 +2009,13 @@ def run_ml_kill_protocol(
         features: DataFrame of float feature columns, chronological
             rows.  Columns named in ``battery_controls`` are EXCLUDED
             from the models' own feature set and ADDED to the linear
-            battery comparator.
+            battery comparator.  Boundary note: the engine cannot tell
+            whether a feature column itself peeks into the future --
+            feature causality is the caller's discipline.  What the
+            walk-forward structure guarantees is that a leaky feature's
+            CONSEQUENCES are caught: past-only training with embargo
+            means an OOS fold never shares rows with its fit, so a
+            look-ahead edge collapses on unseen blocks.
         target: 0/1 integer labels of the run's direction.
         exec_returns: executable per-event returns (costs already
             netted by the caller); they drive thresholds, EV, the
