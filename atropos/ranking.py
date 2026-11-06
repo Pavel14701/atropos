@@ -46,6 +46,15 @@ candidate groups (kNN/QDA) -- for groups under ~10 candidates prefer
 ``logit`` / ``gbm`` / ``hist_gbm``.  The registry accepts every
 model; nothing is refused.
 
+Cross-ranker comparisons run on the scored INTERSECTION, never on the
+full lists (``n_skipped`` is per-run, so unequal skip sets would fake
+a gap): :func:`compare_rankers_on_intersection` computes every
+:data:`RANKING_METRICS` metric per common group for two reports and
+attaches a :func:`paired_bootstrap_diff` CI on the difference.  The
+paired bootstrap itself takes an opt-in ``enforce_embargo`` that
+drops pairs whose ``CandidateGroup.embargo_until`` exceeds the fold
+being decided.
+
 Donor-corpus ports kept semantically DISTINCT from their closest
 house relatives (the difference is pinned in each docstring):
 :func:`ev_threshold` vs
@@ -78,6 +87,7 @@ __all__ = [
     "BootstrapDiff",
     "CandidateGroup",
     "apply_rule_table",
+    "compare_rankers_on_intersection",
     "ev_threshold",
     "fit_rule_table",
     "mean_reciprocal_rank",
@@ -528,7 +538,8 @@ def rank_within_groups(
     groups of THIS run only (too few rows / single-class).  When
     comparing two rankers via ``RANKING_METRICS``, compare them on the
     INTERSECTION of ``scored_group_ids`` so unequal skip sets cannot
-    fake a difference.
+    fake a difference -- :func:`compare_rankers_on_intersection`
+    implements exactly this.
         >>> report["selected"]
         [8, 11]
         >>> rank_within_groups(report["groups"], top_s=1)["selected"]
@@ -1026,6 +1037,233 @@ is capped at the group size; ``spearman`` additionally requires
 
 
 # ---------------------------------------------------------------------------
+# cross-ranker comparison on the scored intersection
+# ---------------------------------------------------------------------------
+def _ideal_order_from_labels(
+    candidates: list[str], labels: np.ndarray
+) -> list[str]:
+    """Ideal ordering of one group's candidates (best label first).
+
+    NaN labels (untradeable candidates) sort last; label ties break by
+    candidate id ascending -- the same deterministic tie-break the
+    scored ordering uses, so even a fully tied group has one
+    well-defined ideal order.
+    """
+
+    def sort_key(index: int) -> tuple[tuple[int, float], str]:
+        label = float(labels[index])
+        rank = (0, -label) if np.isfinite(label) else (1, 0.0)
+        return rank, candidates[index]
+
+    order = sorted(range(len(candidates)), key=sort_key)
+    return [candidates[index] for index in order]
+
+
+def _scored_order_from_scores(
+    candidates: list[str], scores: np.ndarray
+) -> list[str]:
+    """Scored ordering of one group's candidates (best score first).
+
+    Ties break by candidate id ascending, matching the oracles'
+    deterministic ``(score desc, candidate id asc)`` tie-break.  Report
+    scores are finite by construction (``CandidateGroup`` validation).
+    """
+    order = sorted(
+        range(len(candidates)),
+        key=lambda index: (-float(scores[index]), candidates[index]),
+    )
+    return [candidates[index] for index in order]
+
+
+def _report_score_lists(report: dict[str, Any]) -> list[list[float]]:
+    """Per-group score lists of a ranker report (key auto-discovered).
+
+    Pointwise and given-scores reports carry ``per_group_proba`` and
+    lambdarank reports ``per_group_score``; a dict with neither is not
+    a ranker report this layer can read.
+    """
+    for score_key in ("per_group_proba", "per_group_score"):
+        if score_key in report:
+            score_lists = report[score_key]
+            if not isinstance(score_lists, list):
+                raise ValueError(
+                    f"report[{score_key!r}] must be a list of per-group "
+                    "score lists"
+                )
+            return score_lists
+    raise ValueError(
+        "report carries neither per_group_proba nor per_group_score: "
+        "cross-ranker comparison needs two rank_within_groups / "
+        "rank_with_lambdarank reports"
+    )
+
+
+def compare_rankers_on_intersection(
+    report_a: dict[str, Any],
+    report_b: dict[str, Any],
+    *,
+    top_k: int = 2,
+) -> dict[str, Any]:
+    """Compare two ranker reports on their scored-group INTERSECTION.
+
+    ``n_skipped`` is per-run: two rankers on the same data can end up
+    with different ``scored_group_ids`` sets, and comparing
+    :data:`RANKING_METRICS` over the full lists lets the skip pattern
+    fake a difference.  This helper makes the safe path (pinned in the
+    :func:`rank_within_groups` docstring and
+    ``docs/how-to/07-choose-a-ranker.md``) the default path: every
+    metric is computed per common group for both rankers, and the
+    per-group paired differences go through
+    :func:`paired_bootstrap_diff` for a CI on ``diff``.
+
+    Args:
+        report_a: ranker A's report from :func:`rank_within_groups`
+            or :func:`rank_with_lambdarank` (needs ``scored_group_ids``,
+            ``groups`` and the per-group score lists).
+        report_b: ranker B's report, same contract.
+        top_k: head size every metric runs at, >= 2 (``spearman``
+            needs at least two head points).
+
+    Returns:
+        Dict with one entry per :data:`RANKING_METRICS` name plus
+        ``groups_used`` (the common group ids actually compared,
+        sorted).  Each metric entry holds ``a`` / ``b`` (mean
+        per-group metric of ranker A / B over those groups), ``diff``
+        (``a - b``, the bootstrap's mean paired difference), the
+        :class:`BootstrapDiff` CI fields ``lo`` / ``hi`` / ``p_le0`` /
+        ``n`` bootstrapped on the paired per-group differences, and
+        ``n_common`` (the group count the means are taken over).
+        Common groups with fewer than two candidates carry no ranking
+        contrast and are excluded on both sides consistently, so the
+        pairing for the bootstrap survives.
+
+    Raises:
+        ValueError: on an empty intersection, a common group ranking
+            different candidate sets on the two sides, a report
+            without ``scored_group_ids`` / ``groups`` / per-group
+            score lists, an intersection with no ranking-usable
+            groups, or a non-integer ``top_k < 2``.
+
+    Example::
+
+        Two reports over one scored world, one of which skipped a day
+        the other scored: the comparison runs on the intersection.
+
+        >>> day_one = CandidateGroup(
+        ...     group_id="d1",
+        ...     candidates=["d1_long", "d1_short"],
+        ...     scores=np.array([0.9, 0.1]),
+        ...     labels=np.array([2.0, 1.0]),
+        ... )
+        >>> day_two = CandidateGroup(
+        ...     group_id="d2",
+        ...     candidates=["d2_long", "d2_short"],
+        ...     scores=np.array([0.8, 0.2]),
+        ...     labels=np.array([1.5, 0.5]),
+        ... )
+        >>> full_report = rank_within_groups([day_one, day_two], top_s=1)
+        >>> trimmed_report = rank_within_groups([day_one], top_s=1)
+        >>> compared = compare_rankers_on_intersection(
+        ...     full_report, trimmed_report
+        ... )
+        >>> compared["groups_used"]
+        ['d1']
+        >>> compared["ndcg@k"]["a"], compared["ndcg@k"]["diff"]
+        (1.0, 0.0)
+        >>> compared["ndcg@k"]["n_common"], compared["mrr"]["p_le0"]
+        (1, 1.0)
+    """
+    top_k = validate_int("top_k", top_k, minimum=2)
+    for report_name, report in (
+        ("report_a", report_a),
+        ("report_b", report_b),
+    ):
+        if not isinstance(report, dict):
+            raise ValueError(
+                f"{report_name} must be a ranker report dict, got "
+                f"{type(report).__name__}"
+            )
+        missing = [
+            key for key in ("scored_group_ids", "groups") if key not in report
+        ]
+        if missing:
+            raise ValueError(
+                f"{report_name} is missing {missing}: cross-ranker "
+                "comparison needs rank_within_groups / "
+                "rank_with_lambdarank reports"
+            )
+    scored_a = list(report_a["scored_group_ids"])
+    scored_b = list(report_b["scored_group_ids"])
+    common = sorted(set(scored_a) & set(scored_b))
+    if not common:
+        raise ValueError(
+            "rankers share no scored group: the scored_group_ids "
+            f"intersection is empty (a scored {len(scored_a)} groups, "
+            f"b scored {len(scored_b)}); compare on common groups or "
+            "check n_skipped first"
+        )
+    groups_a = dict(zip(scored_a, report_a["groups"], strict=True))
+    groups_b = dict(zip(scored_b, report_b["groups"], strict=True))
+    scores_a = dict(zip(scored_a, _report_score_lists(report_a), strict=True))
+    scores_b = dict(zip(scored_b, _report_score_lists(report_b), strict=True))
+    usable: list[Any] = []
+    for group_id in common:
+        group_a = groups_a[group_id]
+        group_b = groups_b[group_id]
+        if set(group_a.candidates) != set(group_b.candidates):
+            raise ValueError(
+                f"common group {group_id!r} ranks different candidate "
+                "sets on the two sides: comparison needs one candidate "
+                "universe per group"
+            )
+        if len(group_a.candidates) >= 2 and len(group_b.candidates) >= 2:
+            usable.append(group_id)
+    if not usable:
+        raise ValueError(
+            "no ranking-usable common group: every group in the "
+            "intersection has fewer than two candidates, and the "
+            "metrics are undefined there"
+        )
+    comparison: dict[str, Any] = {}
+    for metric_name, metric in RANKING_METRICS.items():
+        values_a: list[float] = []
+        values_b: list[float] = []
+        for group_id in usable:
+            group_a = groups_a[group_id]
+            group_b = groups_b[group_id]
+            ideal_a = _ideal_order_from_labels(
+                group_a.candidates, group_a.labels
+            )
+            ideal_b = _ideal_order_from_labels(
+                group_b.candidates, group_b.labels
+            )
+            scored_order_a = _scored_order_from_scores(
+                group_a.candidates, np.asarray(scores_a[group_id])
+            )
+            scored_order_b = _scored_order_from_scores(
+                group_b.candidates, np.asarray(scores_b[group_id])
+            )
+            values_a.append(metric(ideal_a, scored_order_a, top_k))
+            values_b.append(metric(ideal_b, scored_order_b, top_k))
+        bootstrap = paired_bootstrap_diff(
+            np.asarray(values_a, dtype=np.float64),
+            np.asarray(values_b, dtype=np.float64),
+        )
+        comparison[metric_name] = {
+            "a": float(np.mean(values_a)),
+            "b": float(np.mean(values_b)),
+            "diff": bootstrap["diff"],
+            "lo": bootstrap["lo"],
+            "hi": bootstrap["hi"],
+            "p_le0": bootstrap["p_le0"],
+            "n": bootstrap["n"],
+            "n_common": len(usable),
+        }
+    comparison["groups_used"] = usable
+    return comparison
+
+
+# ---------------------------------------------------------------------------
 # admission-bound score normalization
 # ---------------------------------------------------------------------------
 def rank_normalize_group(scores: np.ndarray) -> np.ndarray:
@@ -1281,12 +1519,53 @@ def apply_rule_table(
 # ---------------------------------------------------------------------------
 # paired bootstrap of the ranker-vs-ranker difference (donor port)
 # ---------------------------------------------------------------------------
+def _embargo_keep_mask(
+    n_pairs: int,
+    current_fold: Any,
+    group_ids: Sequence[Any],
+    embargo_until_by_group: dict[Any, int],
+) -> np.ndarray:
+    """Keep-mask excluding pairs embargoed past ``current_fold``.
+
+    One pair per position: the pair at position ``pos`` sits on group
+    ``group_ids[pos]`` and is dropped when that group's
+    ``embargo_until`` entry exceeds ``current_fold`` (the value is not
+    clean for the fold the comparison is made at).  Ids without an
+    entry carry no embargo and stay; metadata for ids absent from
+    ``group_ids`` is ignored.
+
+    Raises:
+        ValueError: on a non-integer ``current_fold`` / embargo entry
+            or a ``group_ids`` length not matching ``n_pairs``.
+    """
+    fold_ref = validate_int("current_fold", current_fold, minimum=0)
+    id_list = list(group_ids)
+    if len(id_list) != n_pairs:
+        raise ValueError(
+            f"group_ids length {len(id_list)} does not match "
+            f"{n_pairs} per-group pairs"
+        )
+    keep = np.ones(n_pairs, dtype=bool)
+    for position, group_key in enumerate(id_list):
+        until = embargo_until_by_group.get(group_key)
+        if until is None:
+            continue
+        until = validate_int("embargo_until entry", until, minimum=0)
+        if until > fold_ref:
+            keep[position] = False
+    return keep
+
+
 def paired_bootstrap_diff(
     arm_a: np.ndarray,
     arm_b: np.ndarray,
     *,
     n_boot: int = 2000,
     seed: int = 7,
+    enforce_embargo: bool = False,
+    current_fold: int | None = None,
+    group_ids: Sequence[Any] | None = None,
+    embargo_until_by_group: dict[Any, int] | None = None,
 ) -> BootstrapDiff:
     """Bootstrap CI for ``mean(arm_a) - mean(arm_b)`` (paired groups).
 
@@ -1301,29 +1580,47 @@ def paired_bootstrap_diff(
     :func:`atropos.ml_training.paired_bootstrap_t_stat` (raw paired
     diff CI + ``p_le0``, no t-stat): that variant resamples
     ``(exec, taken-flag)`` pairs and reports a t-statistic; this one
-    reports the raw paired-difference CI with no t.  The
-    ``embargo_until`` reminder stands: enforcement belongs to the
-    fold scheduler that produced the per-group values (see
-    ``arm_b`` below).
+    reports the raw paired-difference CI with no t.
+
+    Embargo: by default enforcement stays with the fold scheduler that
+    produced the per-group values (the carried
+    ``CandidateGroup.embargo_until`` is not consulted -- the
+    historical caller-owned contract, bit-identical).  With
+    ``enforce_embargo=True`` the helper applies the minimal check
+    itself: pairs whose group's ``embargo_until`` exceeds
+    ``current_fold`` are dropped from BOTH arms before resampling, so
+    values not yet clean for the fold being decided cannot leak into
+    the CI.  The result stays honest about it: ``n`` counts only the
+    pairs that entered the resampling.
 
     Args:
         arm_a: per-group metric values of ranker A.
         arm_b: per-group metric values of ranker B (same groups).  The
-            caller is responsible for the group set being comparable:
-            ``CandidateGroup.embargo_until`` is carried but NOT
-            enforced here (enforcement belongs to the fold scheduler
-            that produced the per-group values).
+            caller is responsible for the group set being comparable.
         n_boot: number of bootstrap draws, integer >= 2.
         seed: RNG seed, integer >= 0.
+        enforce_embargo: opt-in embargo enforcement; False (default)
+            keeps the caller-owned scheduling behavior exactly.
+        current_fold: the fold the comparison is made at, integer
+            >= 0; required when ``enforce_embargo`` is True.
+        group_ids: group id of each arm position, aligned with
+            ``arm_a`` / ``arm_b``; required when ``enforce_embargo``
+            is True.
+        embargo_until_by_group: mapping group id -> its
+            ``embargo_until`` fold; ids without an entry carry no
+            embargo; required when ``enforce_embargo`` is True.
 
     Returns:
         :class:`BootstrapDiff` (``diff``, ``lo``, ``hi``, ``p_le0``,
-        ``n``); the empty-after-drop input degrades to an all-zero
-        payload with ``p_le0 == 1.0``.
+        ``n``); the empty-after-drop input (NaN pairs or
+        embargo-violating pairs) degrades to an all-zero payload with
+        ``p_le0 == 1.0``.
 
     Raises:
         ValueError: if ``n_boot`` is not an integer >= 2 or ``seed``
-            is not an integer >= 0.
+            is not an integer >= 0; if the embargo inputs are given
+            without ``enforce_embargo=True`` or are incomplete under
+            it; if ``group_ids`` does not match the arm length.
 
     Example::
 
@@ -1333,6 +1630,18 @@ def paired_bootstrap_diff(
         (0.0, 0.0, 0.0)
         >>> identical["p_le0"], identical["n"]
         (1.0, 3)
+        >>> embargoed = paired_bootstrap_diff(
+        ...     arm,
+        ...     arm,
+        ...     n_boot=50,
+        ...     seed=7,
+        ...     enforce_embargo=True,
+        ...     current_fold=1,
+        ...     group_ids=["d1", "d2", "d3"],
+        ...     embargo_until_by_group={"d3": 4},
+        ... )
+        >>> embargoed["n"]
+        2
     """
     n_boot = validate_int("n_boot", n_boot, minimum=2)
     seed = validate_int("seed", seed, minimum=0)
@@ -1343,8 +1652,39 @@ def paired_bootstrap_diff(
             f"arm_a and arm_b must have equal length, got "
             f"{values_a.size} and {values_b.size}"
         )
+    embargo_keep_mask: np.ndarray | None = None
+    if enforce_embargo:
+        if (
+            current_fold is None
+            or group_ids is None
+            or embargo_until_by_group is None
+        ):
+            raise ValueError(
+                "enforce_embargo=True needs current_fold, group_ids "
+                "and embargo_until_by_group: which fold is decided, "
+                "which pair sits on which group, which groups are "
+                "embargoed until when"
+            )
+        embargo_keep_mask = _embargo_keep_mask(
+            int(values_a.size),
+            current_fold,
+            group_ids,
+            embargo_until_by_group,
+        )
+    elif (
+        current_fold is not None
+        or group_ids is not None
+        or embargo_until_by_group is not None
+    ):
+        raise ValueError(
+            "current_fold / group_ids / embargo_until_by_group only "
+            "apply with enforce_embargo=True (passing them without "
+            "the flag is a dead configuration)"
+        )
     rng = np.random.default_rng(seed)
     finite = np.isfinite(values_a) & np.isfinite(values_b)
+    if embargo_keep_mask is not None:
+        finite = finite & embargo_keep_mask
     values_a, values_b = values_a[finite], values_b[finite]
     size = int(values_a.size)
     if size == 0:
