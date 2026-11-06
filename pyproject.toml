@@ -25,6 +25,11 @@ dev = [
 [project.scripts]
 atropos = "atropos.cli:main"
 
+[project.optional-dependencies]
+ranking = [
+    "lightgbm>=4.7.0",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -124,6 +129,19 @@ disallow_untyped_calls = false
 # are safe here.
 [[tool.mypy.overrides]]
 module = "sklearn.*"
+ignore_missing_imports = true
+
+# lightgbm (the optional "ranking" extra; atropos.ranking imports it
+# lazily) DOES ship a py.typed marker, but its inline annotations are
+# strict-hostile: invariant `list` parameters reject plain
+# `list[list[float]]` feature matrices and the return types are unions
+# with spmatrix members mypy cannot index.  `ignore_missing_imports`
+# alone cannot help (the stubs exist, they are just noisy), so the
+# concession mirrors the sklearn pattern one step further: skip the
+# analysis entirely and let every lightgbm symbol flow through `Any`.
+[[tool.mypy.overrides]]
+module = "lightgbm.*"
+follow_imports = "skip"
 ignore_missing_imports = true
 
 # ---------------------------------------------------------------------------

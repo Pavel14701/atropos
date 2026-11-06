@@ -18,6 +18,7 @@ MODULE_PATHS = sorted(PACKAGE_DIR.glob("*.py"))
 # added here when it gains a demo.  kill_chain (follow-up from the ML
 # unification wave) and workspace (runtime scaffolding) assert too.
 ASSERTING_DEMO_MODULES = [
+    "backtesting",
     "bootstrap_ci",
     "cost_model",
     "cross_sectional",

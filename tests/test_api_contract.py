@@ -23,6 +23,12 @@ import atropos
 import numpy as np
 import pandas as pd
 import pytest
+from atropos.backtesting import (
+    pooled_stats,
+    run_admission_policy,
+    simulate_signal,
+    trade_curve_stats,
+)
 from atropos.bootstrap_ci import block_bootstrap_ci, percentile_ci
 from atropos.cost_model import apply_proportional_costs, cost_death_test
 from atropos.cross_sectional import run_cross_sectional_tests
@@ -33,6 +39,7 @@ from atropos.evaluation_metrics import (
 )
 from atropos.incremental_regression import incremental_test
 from atropos.monte_carlo import max_drawdown_distribution
+from atropos.ranking import rank_within_groups
 from atropos.walkforward_framework import walkforward
 
 MODULE_NAMES: tuple[str, ...] = tuple(
@@ -264,6 +271,61 @@ def _ensemble_report_namespace() -> Mapping[str, Any]:
     return namespace
 
 
+def _ranking_report() -> dict[str, Any]:
+    rng = np.random.default_rng(0)
+    n_groups = 6
+    group_size = 3
+    rows = n_groups * group_size
+    quality = np.tile([0.0, 0.5, 1.0], n_groups)
+    feature_frame = pd.DataFrame(
+        {"quality": quality, "noise": rng.standard_normal(rows)}
+    )
+    target = (quality > 0.4).astype(np.int64)
+    group_ids = np.repeat(np.arange(n_groups), group_size)
+    return dict(
+        rank_within_groups(
+            feature_frame,
+            target,
+            group_ids,
+            model="logit",
+            top_s=1,
+            config={"model_params": {"logit": {"max_iter": 100}}},
+        )
+    )
+
+
+def _sim_result() -> Mapping[str, Any]:
+    opens = [100.0, 100.0, 100.0, 100.0]
+    highs = [100.0, 100.0, 102.4, 100.0]
+    lows = [100.0, 100.0, 100.0, 100.0]
+    closes = [100.0, 100.0, 101.0, 100.0]
+    return simulate_signal(
+        opens, highs, lows, closes, 0, "long", 99.0, 102.0, 4, 1.0
+    )
+
+
+def _admission_result() -> Mapping[str, Any]:
+    trades = [
+        {"ts_entry": 0, "ts_exit": 10, "s": 0.8, "r_pess": 1.0},
+        {"ts_entry": 1, "ts_exit": 20, "s": 0.9, "r_pess": 0.5},
+    ]
+    return run_admission_policy(trades, cap=1, policy="fcfs")
+
+
+def _admission_summary() -> Mapping[str, Any]:
+    summary: Mapping[str, Any] = _admission_result()["summary"]
+    return summary
+
+
+def _trade_curve_result() -> Mapping[str, Any]:
+    return trade_curve_stats([0.1, -0.2, 0.3])
+
+
+def _pooled_stats_result() -> Mapping[str, Any]:
+    day = 86_400_000
+    return pooled_stats(np.array([1.0, -1.0]), np.array([0.0, 1 * day]))
+
+
 RESULT_BUILDERS: dict[str, Callable[[], Mapping[str, Any]]] = {
     "sharpe_ratio": _sharpe_result,
     "block_bootstrap_ci": _block_bootstrap_result,
@@ -284,6 +346,12 @@ RESULT_BUILDERS: dict[str, Callable[[], Mapping[str, Any]]] = {
     "run_ml_kill_protocol.incremental": _ml_kill_protocol_incremental,
     "run_ensemble_report": _ensemble_report,
     "run_ensemble_report.ensemble": _ensemble_report_namespace,
+    "rank_within_groups": _ranking_report,
+    "simulate_signal": _sim_result,
+    "run_admission_policy": _admission_result,
+    "run_admission_policy.summary": _admission_summary,
+    "trade_curve_stats": _trade_curve_result,
+    "pooled_stats": _pooled_stats_result,
 }
 
 EXPECTED_KEY_SETS: dict[str, frozenset[str]] = {
@@ -515,6 +583,51 @@ EXPECTED_KEY_SETS: dict[str, frozenset[str]] = {
             "oof_rows",
             "oof_correlations",
             "meta_coefficients",
+        }
+    ),
+    "rank_within_groups": frozenset(
+        {
+            "model",
+            "seed",
+            "top_s",
+            "embargo_groups",
+            "n_groups",
+            "n_rows",
+            "n_scored",
+            "n_skipped",
+            "selected",
+            "per_group_proba",
+            "scored_group_ids",
+            "train_group_counts",
+            "groups",
+        }
+    ),
+    "simulate_signal": frozenset({"r_opt", "r_pess", "exit_idx"}),
+    "run_admission_policy": frozenset(
+        {
+            "policy",
+            "cap",
+            "accepted",
+            "rejected",
+            "replaced",
+            "equity_curve",
+            "max_drawdown_r",
+            "final_equity_r",
+            "summary",
+        }
+    ),
+    "run_admission_policy.summary": frozenset({"n", "ev", "dd", "replaced"}),
+    "trade_curve_stats": frozenset(
+        {"n", "t_stat", "max_dd_r", "profit_factor"}
+    ),
+    "pooled_stats": frozenset(
+        {
+            "mean",
+            "n",
+            "dd",
+            "t_stat_naive",
+            "sharpe_per_trade",
+            "sharpe_ann_bucketed",
         }
     ),
 }
