@@ -6,7 +6,7 @@
 name = "atropos-agent-context"
 version = "0.1.0"          # must match the VERSION file
 schema = 1
-description = "Default agent context: user workflow + 11 skills"
+description = "Default agent context: user workflow + 12 skills"
 
 [[files]]
 path = "AGENTS.md"
@@ -100,4 +100,11 @@ name = "17-backtest-pipeline"
 path = "skills/17-backtest-pipeline.md"
 description = "Build the full backtest pipeline: simulate → state machine → ranking → admission → metrics; backtest a signal, compare rankers, run admission policies"
 when_to_use = "after a hypothesis SURVIVES the kill protocol, to test tradability"
+version = "0.1.0"
+
+[[skills]]
+name = "18-read-portfolio-results"
+path = "skills/18-read-portfolio-results.md"
+description = "Read portfolio-level results from the backtest pipeline"
+when_to_use = "after running run_portfolio or run_portfolio_replay"
 version = "0.1.0"

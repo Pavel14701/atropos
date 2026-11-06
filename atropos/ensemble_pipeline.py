@@ -37,17 +37,30 @@ Decision tree (first FAIL decides):
 * stage 1, momentum / known-features control fails -> ``REPACKAGING``
 * stage 1, other controls fail                     -> ``ARTIFACT``
 * stage 2 curve death                              -> ``REPACKAGING``
-* stage 3 DEAD                                     -> ``DEAD``
+  (a curve SURVIVES call backed by fewer than 5 testable
+  specs is INCONCLUSIVE - a WARN, not a pass)
+* stage 3 DEAD or FRAGILE (fewer than 5/7 battery
+  tests passed: ROBUSTNESS-DEATH)                  -> ``DEAD``
 * stage 4 walk-forward FAIL                        -> ``NO_OOS_EDGE``
+* stage 4 walk-forward cannot run (the
+  configuration exceeds the aligned data)          -> ``INCONCLUSIVE``
 * stage 5 drawdown-tail breach, or a Sharpe-floor
   breach that persists gross of costs              -> ``RISK``
 * stage 5 net-of-cost Sharpe floor breach ONLY (the
   gross envelope passes, drawdown tail intact)     -> ``COST_DEATH``
 * stage 6 OOS evaluation fail                      -> ``NO_OOS_EDGE``
 * stage 7 cross-sectional tests fail               -> ``CS_NO_EDGE``
-* all stages pass, no warnings                     -> ``SURVIVES``
-* all stages pass, some warnings                   ->
+* panel-only mode: stage 7 passes, no warnings     -> ``SURVIVES_CS_ONLY``
+* panel-only mode: stage 7 passes, some warnings   ->
+  ``SURVIVES_CS_ONLY_WITH_WARNINGS``
+* all series stages pass, no warnings              -> ``SURVIVES``
+* all series stages pass, some warnings            ->
   ``SURVIVES_WITH_WARNINGS``
+
+A plain ``SURVIVES`` means EVERY executed attack missed; when only the
+cross-sectional stage ran (panel-only mode), the verdict says so
+(``SURVIVES_CS_ONLY`` / ``SURVIVES_CS_ONLY_WITH_WARNINGS``) instead of
+borrowing the stronger all-stages label.
 
 Input ``data`` keys: ``returns`` (per-period forward returns the signal is
 supposed to predict), ``signal`` (same index), optional ``features``
@@ -55,8 +68,8 @@ supposed to predict), ``signal`` (same index), optional ``features``
 momentum factors; fallback: trailing sums of past returns), optional
 ``hypothesis`` (description string).  Panel mode: ``panel_signal`` /
 ``panel_returns`` DataFrames (rows = dates, columns = assets) enable stage 7;
-they may be supplied alone (stages 1-6 are then SKIPPED: panel-only mode)
-or together with the series inputs.
+they may be supplied alone (stages 1-6 are then SKIPPED: panel-only mode,
+verdict ``SURVIVES_CS_ONLY``) or together with the series inputs.
 
 Run ``python -m atropos.ensemble_pipeline`` for the ten synthetic
 verification cases: a genuine edge must SURVIVE; a SLOW genuine edge
@@ -66,12 +79,14 @@ first third of the sample must die as ARTIFACT; a genuine edge behind
 an unreachable entry threshold must die as DEAD; a genuine edge under
 prohibitive costs must die as COST_DEATH; a genuine edge under a strict
 drawdown mandate must die as RISK; a genuine cross-sectional panel must
-SURVIVE; a thin panel must SURVIVE_WITH_WARNINGS; a pure-noise panel
-must die as CS_NO_EDGE.  NO_OOS_EDGE is the one verdict without a demo
-case: no honest series construction reaches it in the current tree
-(the stage-1 subperiod-concentration control pre-empts time-decayed
-edges) - the blocker is pinned and analysed in
-tests/test_ensemble_pipeline.py.
+report SURVIVES_CS_ONLY (only the cross-sectional attack ran); a thin
+panel must report SURVIVES_CS_ONLY_WITH_WARNINGS; a pure-noise panel
+must die as CS_NO_EDGE.  NO_OOS_EDGE and INCONCLUSIVE are the two
+verdicts without a demo case: NO_OOS_EDGE is unreachable in the current
+tree (the stage-1 subperiod-concentration control pre-empts time-decayed
+edges - the blocker is pinned and analysed in
+tests/test_ensemble_pipeline.py), and INCONCLUSIVE needs a
+walk-forward configuration that outgrows the data (unit-tested).
 """
 
 from __future__ import annotations
@@ -187,7 +202,10 @@ _KILL_REASONS: dict[int, str] = {
         "(alignment / placebo / concentration / calendar)"
     ),
     2: "no specification keeps |t| >= 2 - repackaging of known information",
-    3: "robustness battery catastrophic failure",
+    3: (
+        "robustness battery failed (ROBUSTNESS-DEATH: fewer than 5 of 7 "
+        "tests passed, or a catastrophic test)"
+    ),
     4: "no significant out-of-sample edge (expanding walk-forward)",
     5: "Monte Carlo risk envelope breached (Sharpe floor / drawdown tail)",
     6: "no significant out-of-sample edge (purged CV / rolling walk-forward)",
@@ -201,6 +219,16 @@ _COST_DEATH_REASON = (
     "net-of-cost Sharpe does not clear the floor while the gross envelope "
     "passes - the edge is eaten by transaction costs (COST-DEATH)"
 )
+
+_INCONCLUSIVE_REASON = "insufficient data for walk-forward configuration"
+"""Stage-4 INCONCLUSIVE cause: the configuration cannot fit even one
+fold on the aligned data (ATR-06).  "Could not test" is not evidence
+of "no edge", so this never reads NO_OOS_EDGE."""
+
+# stage 2: minimum number of TESTABLE specs a curve must reach before a
+# SURVIVES call is trusted (max-of-few-specs is a multiple search too
+# small to believe); fewer specs downgrade the stage to INCONCLUSIVE/WARN
+_MIN_CURVE_SPECS = 5
 
 
 def _merge_config(overrides: dict[str, Any] | None) -> dict[str, Any]:
@@ -423,11 +451,38 @@ def _stage_2_specification_curve(
     the other stage functions; the stage is intentionally not
     configurable - the 5 x 2 specification lattice is fixed by design so
     that every candidate faces exactly the same curve.
+
+    Trust conditions on top of the lenient curve verdict:
+
+    * at least one CONTROLLED spec must survive, otherwise the curve is
+      kept alive by uncontrolled specs only (repackaging of known
+      information) -> FAIL;
+    * at least 5 testable specs must reach the summary at all: taking
+      the max over 1-4 specs is a multiple search too small to trust,
+      so a SURVIVES call on a thin curve is downgraded to INCONCLUSIVE
+      (WARN, not a kill - the evidence cannot decide) instead of PASS.
     """
     table = specification_curve(
         al["returns"], [al["features"]], al["signal"], robust=True
     )
     cs = curve_summary(table)
+    n_specs = int(cs["n_specs"])
+    if cs["verdict"] == "SURVIVES" and n_specs < _MIN_CURVE_SPECS:
+        # thin curve: max-of-few-specs is not evidence - INCONCLUSIVE,
+        # never a silent pass
+        return {
+            "stage": 2,
+            "name": _STAGE_NAMES[2],
+            "status": "WARN",
+            "summary": (
+                f"INCONCLUSIVE: only {n_specs} testable specs "
+                f"(< {_MIN_CURVE_SPECS}) reach the summary - max|t|="
+                f"{cs['max_abs_t']:.2f} over so few specs is a multiple "
+                "search too small to trust; the SURVIVES call is not "
+                "treated as a pass"
+            ),
+            "results": {"curve_summary": cs, "spec_table": table},
+        }
     # the lenient curve verdict is not enough: at least one CONTROLLED
     # spec must survive, otherwise the curve is kept alive by
     # uncontrolled specs only (repackaging of known information)
@@ -439,7 +494,7 @@ def _stage_2_specification_curve(
     )
     summary = (
         f"{cs['verdict']}: max|t|={cs['max_abs_t']:.2f} across "
-        f"{cs['n_specs']} specs ({cs['n_surviving']} with |t|>=2, "
+        f"{n_specs} specs ({cs['n_surviving']} with |t|>=2, "
         f"{cs['n_surviving_controlled']} controlled, "
         f"sign_consistent={cs['sign_consistent']})"
     )
@@ -483,7 +538,11 @@ def _stage_3_robustness_battery(
         .eq("PASS")
         .sum()
     )
-    status = {"ROBUST": "PASS", "FRAGILE": "WARN", "DEAD": "FAIL"}[overall]
+    # FRAGILE is a KILL, not a warning: the doctrine (FRAMEWORK.md,
+    # ROBUSTNESS-DEATH) stops the candidate when fewer than 5 of 7
+    # battery tests pass -- a stage status softer than the doctrine
+    # would let sub-5/7 books through on a warning (ATR-04).
+    status = {"ROBUST": "PASS", "FRAGILE": "FAIL", "DEAD": "FAIL"}[overall]
     summary = (
         f"{overall}: {n_pass}/7 tests passed "
         f"(baseline threshold={threshold:.3f})"
@@ -504,7 +563,14 @@ def _stage_3_robustness_battery(
 def _stage_4_walkforward(
     al: dict[str, Any], cfg: dict[str, Any]
 ) -> dict[str, Any]:
-    """Expanding-window walk-forward with anti-peeking enforcement."""
+    """Expanding-window walk-forward with anti-peeking enforcement.
+
+    A :class:`ValueError` whose message marks a configuration the data
+    cannot carry (``"too small"`` / ``"train_window"``: not enough
+    rows for even one fold) is INCONCLUSIVE, not a FAIL (ATR-06) --
+    the configuration did not fit, which says nothing about the edge.
+    Any other walk-forward rejection stays a FAIL.
+    """
     wcfg = cfg["walkforward"]
     df_wf = pd.DataFrame({"signal": al["signal"], "outcome": al["returns"]})
     try:
@@ -517,12 +583,25 @@ def _stage_4_walkforward(
             purge_gap=int(wcfg.get("purge_gap", 0)),
         )
     except ValueError as exc:
+        message = str(exc)
+        undersized = "too small" in message or "train_window" in message
+        if undersized:
+            return {
+                "stage": 4,
+                "name": _STAGE_NAMES[4],
+                "status": "INCONCLUSIVE",
+                "summary": (
+                    "walk-forward could not run: insufficient data for"
+                    f" the configuration ({message})"
+                ),
+                "results": {"error": message},
+            }
         return {
             "stage": 4,
             "name": _STAGE_NAMES[4],
             "status": "FAIL",
-            "summary": f"walk-forward rejected the setup: {exc}",
-            "results": {"error": str(exc)},
+            "summary": f"walk-forward rejected the setup: {message}",
+            "results": {"error": message},
         }
     no_peek = check_no_peeking(wf)
     status = {"PASS": "PASS", "DEGRADED": "WARN", "FAIL": "FAIL"}[
@@ -960,7 +1039,10 @@ def _json_safe_value(value: Any) -> Any:
 # kill-on-first-FAIL decision tree.  Intentionally NOT refactored into a
 # class: the flat return-per-verdict shape is the decision tree.
 def run_full_pipeline(  # noqa: PLR0911, PLR0915
-    data: dict[str, Any], hypothesis_config: dict[str, Any] | None = None
+    data: dict[str, Any],
+    hypothesis_config: dict[str, Any] | None = None,
+    *,
+    prereg_hash: str | None = None,
 ) -> dict[str, Any]:
     """Chain the adversarial stages; kill on the first FAIL.
 
@@ -977,14 +1059,28 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0915
         (nested dicts are merged key-wise).  Notable keys: ``cost.cost_bps``
         (one-way cost in bps, netted out in stage 5), ``model``
         (``"ols"`` | ``"knn"`` | ``"kernel"`` | callable factory, stage 6).
+    prereg_hash : keyword-only hash of the frozen preregistration this run
+        is bound to (e.g. :func:`atropos.prereg_generator.spec_hash` of the
+        frozen params).  Purely an anchor: when given, the report echoes it
+        as ``report["prereg_hash"]`` so a verdict can never drift away from
+        the spec it was preregistered under; ``None`` (the default) leaves
+        the key ``None`` and the run unanchored.
 
     Returns one dict: ``{hypothesis, n_obs, date_range, overall_verdict,
     killed_by_stage, kill_reason, stages (list of per-stage dicts),
-    config, runtime_seconds}``.  Stages after the killer are ``SKIPPED``
-    (with a kill-context summary); in a series-only survival stage 7 is
-    ``SKIPPED`` as an optional stage (no panel data).  The returned
-    ``config`` is a JSON-serializable copy: a callable ``model`` shows up
-    as ``"<callable>"`` while the pipeline itself runs the real factory.
+    config, runtime_seconds, prereg_hash}``.  Verdicts: ``REPACKAGING`` /
+    ``ARTIFACT`` / ``DEAD`` / ``NO_OOS_EDGE`` / ``RISK`` / ``COST_DEATH`` /
+    ``CS_NO_EDGE`` (kills), ``INCONCLUSIVE`` (a walk-forward configuration
+    the data cannot carry -- undecided, not a kill), ``SURVIVES`` /
+    ``SURVIVES_WITH_WARNINGS`` (every executed series attack missed) and
+    the panel-only ``SURVIVES_CS_ONLY`` / ``SURVIVES_CS_ONLY_WITH_WARNINGS``
+    (only the cross-sectional attack ran -- never a plain ``SURVIVES``).
+    Stages after the killer are
+    ``SKIPPED`` (with a kill-context summary); in a series-only survival
+    stage 7 is ``SKIPPED`` as an optional stage (no panel data).  The
+    returned ``config`` is a JSON-serializable copy: a callable ``model``
+    shows up as ``"<callable>"`` while the pipeline itself runs the real
+    factory.
     """
     t0 = time.time()
     cfg = _merge_config(hypothesis_config)
@@ -995,8 +1091,18 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0915
 
     stages: list[dict[str, Any]] = []
 
-    def _finish(killed_stage: int | None) -> dict[str, Any]:
-        if killed_stage is not None:
+    def _finish(
+        killed_stage: int | None,
+        *,
+        panel_only: bool = False,
+        inconclusive_reason: str | None = None,
+    ) -> dict[str, Any]:
+        if killed_stage is None and inconclusive_reason is not None:
+            # "could not test" is not a kill and not a pass: undecided,
+            # with the blocker named (ATR-06)
+            verdict = "INCONCLUSIVE"
+            reason = inconclusive_reason
+        elif killed_stage is not None:
             repack = killed_stage == 1 and bool(
                 _stage_by_id(stages, 1).get("repackaging")
             )
@@ -1015,18 +1121,33 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0915
             else:
                 verdict = _KILL_VERDICTS[killed_stage]
                 reason = _KILL_REASONS[killed_stage]
+        elif panel_only:
+            # only the cross-sectional attack ran: a plain SURVIVES
+            # ("every attack missed") is unreachable -- the CS-only
+            # verdicts keep the scope visible (ATR-03)
+            has_warn = any(stage["status"] == "WARN" for stage in stages)
+            verdict = (
+                "SURVIVES_CS_ONLY_WITH_WARNINGS"
+                if has_warn
+                else "SURVIVES_CS_ONLY"
+            )
+            reason = None
         else:
             has_warn = any(stage["status"] == "WARN" for stage in stages)
             verdict = "SURVIVES_WITH_WARNINGS" if has_warn else "SURVIVES"
             reason = None
         # context-dependent skip summary: after a kill the remaining
-        # stages are moot; a survivor simply lacked panel data for the
-        # optional stage 7
-        skip_summary = (
-            "not run: candidate killed earlier"
-            if killed_stage is not None
-            else "not run: optional stage (no panel data)"
-        )
+        # stages are moot; an inconclusive stop left them untestable; a
+        # survivor simply lacked panel data for the optional stage 7
+        if killed_stage is not None:
+            skip_summary = "not run: candidate killed earlier"
+        elif inconclusive_reason is not None:
+            skip_summary = (
+                "not run: pipeline stopped inconclusive "
+                "(insufficient walk-forward data)"
+            )
+        else:
+            skip_summary = "not run: optional stage (no panel data)"
         next_stage = len(stages) + 1
         stages.extend(
             {
@@ -1053,6 +1174,7 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0915
             "stages": stages,
             "config": _json_safe_config(cfg),
             "runtime_seconds": round(time.time() - t0, 2),
+            "prereg_hash": prereg_hash,
         }
 
     if not has_series:  # panel-only mode: jump straight to stage 7
@@ -1061,7 +1183,10 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0915
                 "stage": skipped,
                 "name": _STAGE_NAMES[skipped],
                 "status": "SKIPPED",
-                "summary": "not run: panel-only mode (no series inputs)",
+                "summary": (
+                    "not run: panel-only mode - only the cross-sectional"
+                    " stage was tested"
+                ),
                 "results": {},
             }
             for skipped in range(1, 7)
@@ -1070,7 +1195,7 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0915
         stages.append(s7)
         if s7["status"] == "FAIL":
             return _finish(7)
-        return _finish(None)
+        return _finish(None, panel_only=True)
 
     # stage 1 -------------------------------------------------------------
     s1 = _stage_1_null_controls(al, cfg)
@@ -1093,6 +1218,8 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0915
     # stage 4 -------------------------------------------------------------
     s4 = _stage_4_walkforward(al, cfg)
     stages.append(s4)
+    if s4["status"] == "INCONCLUSIVE":
+        return _finish(None, inconclusive_reason=_INCONCLUSIVE_REASON)
     if s4["status"] == "FAIL":
         return _finish(4)
 
@@ -1147,6 +1274,8 @@ def _print_report(res: dict[str, Any], title: str) -> None:
         f"n_obs={res['n_obs']}  "
         f"range={res['date_range'][0]} .. {res['date_range'][1]}"
     )
+    if res.get("prereg_hash"):
+        print(f"prereg    : {res['prereg_hash']}")
     header = f"{'stage':>5}  {'module':<24} {'status':<7} summary"
     print(header)
     print("-" * 78)
@@ -1383,9 +1512,10 @@ def _make_panel(
 def _verdict_matches(verdict: str, expected: str) -> bool:
     """Check a demo verdict against its expected label.
 
-    ``"SURVIVES*"`` matches both plain ``SURVIVES`` and
-    ``SURVIVES_WITH_WARNINGS``; any other expected label is an exact
-    equality.
+    ``"SURVIVES*"`` matches every alive form (``SURVIVES``,
+    ``SURVIVES_WITH_WARNINGS``, ``SURVIVES_CS_ONLY``,
+    ``SURVIVES_CS_ONLY_WITH_WARNINGS``); any other expected label is an
+    exact equality.
     """
     if expected == "SURVIVES*":
         return verdict.startswith("SURVIVES")
@@ -1400,7 +1530,8 @@ def _verify_demo_cases(
     Layer-0 self-check of the demo: every case's overall verdict must
     match its expected label, the canonical kills must land at the right
     stage with the right cause, and the achieved verdict-matrix coverage
-    is printed (8/9 - NO_OOS_EDGE is pinned as unbuildable in
+    is printed (10/12 - NO_OOS_EDGE is pinned as unbuildable and
+    INCONCLUSIVE is config-driven; both are unit-tested in
     tests/test_ensemble_pipeline.py).
     """
     checks = [
@@ -1427,6 +1558,8 @@ def _verify_demo_cases(
     assert res_b["killed_by_stage"] == 1
     assert res_b["stages"][0]["repackaging"] is True
     assert res_c["killed_by_stage"] is None
+    # panel-only survivor: CS-scoped verdict, never a plain SURVIVES
+    assert res_c["overall_verdict"] == "SURVIVES_CS_ONLY"
     assert res_c["stages"][6]["status"] == "PASS"
     assert res_d["killed_by_stage"] == 5
     assert res_d["stages"][4]["results"]["cost_breach"] is True
@@ -1437,10 +1570,13 @@ def _verify_demo_cases(
     assert res_f["stages"][4]["results"]["cost_breach"] is False
     assert "mDD" in res_f["stages"][4]["summary"]
     # the slow class survives with the battery stage passing it through
+    # (ROBUST; a FRAGILE battery is a stage-3 kill since ATR-04)
     assert res_g["killed_by_stage"] is None
-    assert res_g["stages"][2]["status"] in {"PASS", "WARN"}
-    # thin panel: INCONCLUSIVE is a warning, not a kill
+    assert res_g["stages"][2]["status"] == "PASS"
+    # thin panel: INCONCLUSIVE is a warning, not a kill; the CS-only
+    # scope stays visible in the verdict
     assert res_h["killed_by_stage"] is None
+    assert res_h["overall_verdict"] == "SURVIVES_CS_ONLY_WITH_WARNINGS"
     assert res_h["stages"][6]["status"] == "WARN"
     assert res_h["stages"][6]["summary"].startswith("INCONCLUSIVE")
     # unreachable threshold: the rule never trades -> DEAD at stage 3
@@ -1461,6 +1597,8 @@ def _verify_demo_cases(
     covered = {
         "SURVIVES",
         "SURVIVES_WITH_WARNINGS",
+        "SURVIVES_CS_ONLY",
+        "SURVIVES_CS_ONLY_WITH_WARNINGS",
         "REPACKAGING",
         "ARTIFACT",
         "DEAD",
@@ -1469,9 +1607,11 @@ def _verify_demo_cases(
         "CS_NO_EDGE",
     }
     print(
-        f"verdict matrix coverage: {len(covered)}/9 "
+        f"verdict matrix coverage: {len(covered)}/12 "
         "(missing NO_OOS_EDGE: no honest series construction in the "
-        "current tree - xfail pin in tests/test_ensemble_pipeline.py)"
+        "current tree, and INCONCLUSIVE: needs an undersized walk-"
+        "forward configuration - both pinned in "
+        "tests/test_ensemble_pipeline.py)"
     )
     print("all verification checks passed")
 
@@ -1479,15 +1619,17 @@ def _verify_demo_cases(
 def run_all_examples() -> None:
     """Verify the ten cases of the 7-stage kill chain.
 
-    Cases A-D are the four canonical verdicts (survive, repackaging,
-    panel survive, cost death); E-F pin the panel kill and the
-    risk-mandate kill; G-J complete the verdict matrix (slow-class
-    survive, thin-panel warnings, unreachable-threshold DEAD,
-    concentration ARTIFACT).  NO_OOS_EDGE is the one verdict without a
-    demo case: no honest series construction reaches it in the current
-    tree (the stage-1 subperiod-concentration control pre-empts
-    time-decayed edges before the walk-forward ever runs) - the
-    blocker is pinned and analysed in tests/test_ensemble_pipeline.py.
+    Cases A-D are the four canonical verdicts (series survive,
+    repackaging, panel-only CS-scoped survive, cost death); E-F pin the
+    panel kill and the risk-mandate kill; G-J complete the verdict
+    matrix (slow-class survive, thin-panel CS-scoped warnings,
+    unreachable-threshold DEAD, concentration ARTIFACT).  NO_OOS_EDGE
+    and INCONCLUSIVE are the two verdicts without a demo case:
+    NO_OOS_EDGE is unreachable in the current tree (the stage-1
+    subperiod-concentration control pre-empts time-decayed edges
+    before the walk-forward ever runs), and INCONCLUSIVE needs a
+    walk-forward configuration that outgrows the data - both are pinned
+    in tests/test_ensemble_pipeline.py.
     """
 
     def thin_edge_data() -> dict[str, Any]:
@@ -1522,11 +1664,12 @@ def run_all_examples() -> None:
         {
             "label": "case C cs panel edge ",
             "title": (
-                "CASE C: cross-sectional edge, panel-only (must SURVIVE)"
+                "CASE C: cross-sectional edge, panel-only "
+                "(must report SURVIVES_CS_ONLY: only the CS attack ran)"
             ),
             "data": _make_panel("genuine_edge", seed=13),
             "config": None,
-            "expect": "SURVIVES*",
+            "expect": "SURVIVES_CS_ONLY",
         },
         {
             "label": "case D cost death    ",
@@ -1577,14 +1720,15 @@ def run_all_examples() -> None:
             "label": "case H thin panel    ",
             "title": (
                 "CASE H: thin cross-sectional panel "
-                "(must SURVIVE_WITH_WARNINGS)"
+                "(must SURVIVES_CS_ONLY_WITH_WARNINGS)"
             ),
             # 15 dates < stage 7's min_dates: the cross-sectional killers
-            # cannot be evaluated -> INCONCLUSIVE -> WARN, and the run
-            # survives WITH WARNINGS (missing data is not a kill)
+            # cannot be evaluated -> INCONCLUSIVE -> WARN; the run
+            # survives WITH WARNINGS under the CS-only verdict (missing
+            # data is not a kill, and only the CS attack ran)
             "data": _make_panel("genuine_edge", n_dates=15, seed=13),
             "config": None,
-            "expect": "SURVIVES_WITH_WARNINGS",
+            "expect": "SURVIVES_CS_ONLY_WITH_WARNINGS",
         },
         {
             "label": "case I dead threshold",

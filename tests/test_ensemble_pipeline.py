@@ -376,19 +376,29 @@ def test_unknown_model_name_is_rejected() -> None:
 # cross-sectional stage 7 (panel mode)
 # ----------------------------------------------------------------------------
 def test_panel_only_mode_runs_stage_seven_alone() -> None:
+    """Panel-only survivor reads SURVIVES_CS_ONLY, never plain SURVIVES.
+
+    ATR-03: stages 1-6 never ran, so "every attack missed" is not
+    established -- the CS-scoped verdict keeps the evidence scope
+    visible, and the skipped stages say only the cross-sectional stage
+    was tested.
+    """
     result = run_full_pipeline(
         _make_panel("genuine_edge", n_dates=200, n_assets=30, seed=13),
         REDUCED_CONFIG,
     )
-    assert result["overall_verdict"].startswith("SURVIVES")
+    assert result["overall_verdict"] == "SURVIVES_CS_ONLY"
+    assert result["overall_verdict"] != "SURVIVES"
+    assert result["killed_by_stage"] is None
+    assert result["kill_reason"] is None
     assert result["n_obs"] == 200
     stages = result["stages"]
     assert [stage["stage"] for stage in stages] == list(range(1, 8))
     for skipped_stage in stages[:6]:
         assert skipped_stage["status"] == "SKIPPED"
-        assert (
-            skipped_stage["summary"]
-            == "not run: panel-only mode (no series inputs)"
+        assert skipped_stage["summary"] == (
+            "not run: panel-only mode - only the cross-sectional stage"
+            " was tested"
         )
     assert stages[6]["name"] == "cross_sectional"
     assert stages[6]["status"] == "PASS"
@@ -446,7 +456,8 @@ def test_thin_panel_stage_seven_inconclusive_warns_not_kills() -> None:
     A panel with fewer effective dates than ``min_dates`` cannot test the
     cross-sectional killers; killing the candidate for missing data would
     violate the FAIL/INCONCLUSIVE taxonomy, so stage 7 must surface WARN
-    and the run must survive with warnings.
+    and the run must survive with warnings -- under the CS-only verdict,
+    since the panel-only run never tested the series attacks (ATR-03).
     """
     result = run_full_pipeline(
         _make_panel("genuine_edge", n_dates=15, n_assets=30, seed=13),
@@ -456,7 +467,7 @@ def test_thin_panel_stage_seven_inconclusive_warns_not_kills() -> None:
     assert stage_seven["status"] == "WARN"
     assert stage_seven["summary"].startswith("INCONCLUSIVE")
     assert result["killed_by_stage"] is None
-    assert result["overall_verdict"] == "SURVIVES_WITH_WARNINGS"
+    assert result["overall_verdict"] == "SURVIVES_CS_ONLY_WITH_WARNINGS"
 
 
 def test_collinear_control_warns_and_repackaging_still_kills() -> None:
@@ -577,6 +588,61 @@ def test_unreachable_threshold_kills_genuine_edge_as_dead() -> None:
     )
 
 
+def test_fragile_battery_kills_at_stage_three() -> None:
+    """FRAGILE (< 5/7 battery) is a stage-3 FAIL -> DEAD, never a WARN.
+
+    ATR-04 doctrine pin (FRAMEWORK.md ROBUSTNESS-DEATH: fewer than 5
+    of 7 tests passed -> stop).  The slow-class world on sweep seed 7
+    reads FRAGILE (3/7) under REDUCED_CONFIG; the pre-doctrine mapping
+    let it through stage 3 on a WARN and the run survived -- the code
+    must not be softer than the doctrine.
+    """
+    result = run_full_pipeline(
+        _make_synthetic("slow_genuine_edge", n_obs=SERIES_N_OBS, seed=7),
+        REDUCED_CONFIG,
+    )
+    assert result["overall_verdict"] == "DEAD"
+    assert result["killed_by_stage"] == 3
+    assert result["kill_reason"] is not None
+    assert "ROBUSTNESS-DEATH" in str(result["kill_reason"])
+    stage_three = result["stages"][2]
+    assert stage_three["status"] == "FAIL"
+    assert stage_three["summary"].startswith("FRAGILE")
+    assert "3/7" in stage_three["summary"]
+    later_stages = result["stages"][3:]
+    for stage in later_stages:
+        assert stage["status"] == "SKIPPED"
+        assert stage["summary"] == "not run: candidate killed earlier"
+
+
+def test_undersized_walkforward_configuration_is_inconclusive() -> None:
+    """train_window beyond the data: INCONCLUSIVE, not NO_OOS_EDGE.
+
+    ATR-06: a configuration that cannot fit even one walk-forward fold
+    (370 aligned observations, train_window=1000) means "could not
+    test" -- undecided, never evidence of a missing edge.
+    """
+    result = run_full_pipeline(
+        _make_synthetic("genuine_edge", n_obs=SERIES_N_OBS, seed=4),
+        REDUCED_CONFIG | {"walkforward": {"train_window": 1000}},
+    )
+    assert result["overall_verdict"] == "INCONCLUSIVE"
+    assert result["killed_by_stage"] is None
+    assert result["kill_reason"] == (
+        "insufficient data for walk-forward configuration"
+    )
+    stage_four = result["stages"][3]
+    assert stage_four["status"] == "INCONCLUSIVE"
+    assert "insufficient data" in stage_four["summary"]
+    assert "train_window" in str(stage_four["results"]["error"])
+    for stage in result["stages"][4:]:
+        assert stage["status"] == "SKIPPED"
+        assert stage["summary"] == (
+            "not run: pipeline stopped inconclusive "
+            "(insufficient walk-forward data)"
+        )
+
+
 def _first_half_edge_world(n_obs: int = 400, seed: int = 4) -> dict[str, Any]:
     """The review's suggested NO_OOS_EDGE world: edge only in row range.
 
@@ -662,3 +728,119 @@ def test_first_half_edge_dies_as_no_oos_edge() -> None:
         f"verdict={result['overall_verdict']} "
         f"killed_by_stage={result['killed_by_stage']}"
     )
+
+
+# ----------------------------------------------------------------------------
+# ATR-07 / ATR-10: prereg anchor + specification-curve trust gates
+# ----------------------------------------------------------------------------
+def test_prereg_hash_echoes_into_the_report() -> None:
+    """The report anchors to the frozen prereg hash verbatim (ATR-07).
+
+    ``prereg_hash`` is a pure echo: the verdict must stay attached to
+    the preregistration it was preregistered under, so the hash passed
+    in comes back on the report; the default (None) marks the run as
+    unanchored instead of pretending an anchor exists.
+    """
+    anchored = run_full_pipeline(
+        _make_synthetic("momentum_echo", n_obs=SERIES_N_OBS, seed=4),
+        REDUCED_CONFIG,
+        prereg_hash="a1b2c3d4",
+    )
+    assert anchored["prereg_hash"] == "a1b2c3d4"
+    # the echo works on a kill too: the anchor is run-level, not
+    # verdict-level
+    assert anchored["killed_by_stage"] == 1
+    unanchored = run_full_pipeline(
+        _make_synthetic("momentum_echo", n_obs=SERIES_N_OBS, seed=4),
+        REDUCED_CONFIG,
+    )
+    assert unanchored["prereg_hash"] is None
+
+
+def test_stage_two_thin_curve_survives_call_is_inconclusive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A SURVIVES call backed by < 5 testable specs must not pass (ATR-10).
+
+    Taking the max over 1-4 specs is a multiple search too small to
+    trust: the stage downgrades it to INCONCLUSIVE (WARN), never a
+    silent pass.  The canned thin curve is unreachable through the
+    pipeline's fixed 5x2 lattice for a non-constant signal (the five
+    uncontrolled specs always test), which is exactly why the gate is
+    asserted directly at the stage level.
+    """
+    table = pd.DataFrame(
+        {
+            "t_new": [3.2, 0.5, -0.4],
+            "verdict": [
+                "SURVIVES",
+                "REPACKAGING-DEATH",
+                "REPACKAGING-DEATH",
+            ],
+        }
+    )
+    thin_summary = {
+        "verdict": "SURVIVES",
+        "n_specs": 3,
+        "n_surviving": 1,
+        "n_surviving_controlled": 1,
+        "max_abs_t": 3.2,
+        "min_abs_t": 0.4,
+        "sign_consistent": False,
+        "t_rule": 2.0,
+        "bonferroni_alpha": 0.05 / 3,
+    }
+    monkeypatch.setattr(
+        ensemble_pipeline,
+        "specification_curve",
+        lambda *_args, **_kwargs: table,
+    )
+    monkeypatch.setattr(
+        ensemble_pipeline,
+        "curve_summary",
+        lambda *_args, **_kwargs: thin_summary,
+    )
+    stage = ensemble_pipeline._stage_2_specification_curve(
+        {"returns": None, "features": None, "signal": None}, {}
+    )
+    assert stage["status"] == "WARN"
+    assert stage["summary"].startswith("INCONCLUSIVE")
+    assert "only 3 testable specs" in stage["summary"]
+
+
+def test_stage_two_five_spec_curve_is_trustworthy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The thin-curve gate boundary: exactly 5 testable specs pass.
+
+    The downgrade fires strictly below 5 specs; a 5-spec SURVIVES call
+    with a controlled survivor is a genuine stage-2 PASS (ATR-10 adds a
+    floor, it does not move the |t| >= 2 rule).
+    """
+    table = pd.DataFrame({"t_new": [2.4, 2.1, 0.5, 0.3, 0.1], "n": [500] * 5})
+    floor_summary = {
+        "verdict": "SURVIVES",
+        "n_specs": 5,
+        "n_surviving": 2,
+        "n_surviving_controlled": 1,
+        "max_abs_t": 2.4,
+        "min_abs_t": 0.1,
+        "sign_consistent": True,
+        "t_rule": 2.0,
+        "bonferroni_alpha": 0.01,
+    }
+    monkeypatch.setattr(
+        ensemble_pipeline,
+        "specification_curve",
+        lambda *_args, **_kwargs: table,
+    )
+    monkeypatch.setattr(
+        ensemble_pipeline,
+        "curve_summary",
+        lambda *_args, **_kwargs: floor_summary,
+    )
+    stage = ensemble_pipeline._stage_2_specification_curve(
+        {"returns": None, "features": None, "signal": None}, {}
+    )
+    assert stage["status"] == "PASS"
+    assert stage["summary"].startswith("SURVIVES")

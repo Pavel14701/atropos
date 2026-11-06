@@ -435,7 +435,35 @@ def test_replaced_list_rows_carry_reason_and_force_fields() -> None:
 # 3. correlation-aware admission
 # ---------------------------------------------------------------------------
 def test_replay_rejects_correlated_clone() -> None:
-    """A candidate whose proxy clones an open position is rejected."""
+    """A same-instrument candidate cloning an open position is rejected."""
+    proxy = np.linspace(-1.0, 1.0, 25)
+    frame = _signals(
+        [0, 2],
+        ["long", "long"],
+        [99.0, 99.0],
+        [200.0, 200.0],
+        [0.5, 0.9],
+        instruments=["AAA", "AAA"],
+        proxies=[proxy, proxy * 1.1],
+    )
+    result = run_portfolio_replay(
+        frame, _multi_panel(), slots=2, hold_bars=4, corr_cap=0.7
+    )
+    assert [row["reason"] for row in result["rejected"]] == [
+        "correlation_cap"
+    ]
+    assert result["summary"]["n_correlation_rejects"] == 1
+
+
+def test_replay_admits_cross_instrument_candidate() -> None:
+    """A candidate on a DIFFERENT instrument is never proxy-compared.
+
+    Regression pin for ATR-02: the replay used to pair the candidate's
+    proxy with every open holder's snapshot regardless of instrument,
+    so an independent instrument carrying a clone-like proxy was
+    rejected with |rho| ~ 1.  The filter consults same-instrument
+    holders only; a cross-instrument candidate takes the free slot.
+    """
     proxy = np.linspace(-1.0, 1.0, 25)
     frame = _signals(
         [0, 2],
@@ -449,14 +477,45 @@ def test_replay_rejects_correlated_clone() -> None:
     result = run_portfolio_replay(
         frame, _multi_panel(), slots=2, hold_bars=4, corr_cap=0.7
     )
-    assert [row["reason"] for row in result["rejected"]] == [
-        "correlation_cap"
+    assert result["rejected"] == []
+    assert result["summary"]["n_correlation_rejects"] == 0
+    assert [row["instrument"] for row in result["accepted"]] == [
+        "AAA",
+        "BBB",
     ]
-    assert result["summary"]["n_correlation_rejects"] == 1
+
+
+def test_replay_admits_stale_cross_instrument_clone() -> None:
+    """A 100-bar clone candidate on ANOTHER instrument admits (ATR-02).
+
+    The proxies are IDENTICAL and the snapshot is stale (10 bars vs
+    100), so under the old instrument-blind extension this pair
+    produced |rho| = 1 and a false reject; the snapshot-extension
+    alignment itself stays same-instrument only.
+    """
+    snapshot = np.linspace(-1.0, 1.0, 10)  # ends at its decision bar
+    longer = np.tile(snapshot, 10)  # 100 bars, same shape -> |rho| = 1
+    frame = _signals(
+        [9, 21],
+        ["long", "long"],
+        [99.0, 99.0],
+        [200.0, 200.0],
+        [0.5, 0.9],
+        instruments=["AAA", "BBB"],
+        proxies=[snapshot, longer],
+    )
+    result = run_portfolio_replay(
+        frame, _multi_panel(), slots=2, hold_bars=4, corr_cap=0.7
+    )
+    assert result["rejected"] == []
+    assert [row["instrument"] for row in result["accepted"]] == [
+        "AAA",
+        "BBB",
+    ]
 
 
 def test_replay_admits_independent_candidate() -> None:
-    """An uncorrelated candidate passes the filter and takes a slot."""
+    """An uncorrelated same-instrument-free candidate takes a slot."""
     zigzag = np.tile([1.0, -1.0], 13)[:25]
     frame = _signals(
         [0, 2],
@@ -480,9 +539,10 @@ def test_replay_admits_independent_candidate() -> None:
 def test_replay_extends_stale_position_snapshots() -> None:
     """Growing common-anchor proxies catch clones across staleness.
 
-    The replay extends the open position's snapshot to the candidate's
-    bar from the candidate's own cell, so a clone is caught even when
-    the candidate's cell is longer.
+    The replay extends the open position's SAME-INSTRUMENT snapshot to
+    the candidate's bar from the candidate's own cell, so a clone is
+    caught even when the candidate's cell is longer (ATR-02 kept this
+    alignment for the same-instrument pair only).
     """
     snapshot = np.linspace(0.0, 1.0, 20)  # ends at its decision bar 19
     longer = np.concatenate(
@@ -494,7 +554,7 @@ def test_replay_extends_stale_position_snapshots() -> None:
         [99.0, 99.0],
         [200.0, 200.0],
         [0.5, 0.9],
-        instruments=["AAA", "BBB"],
+        instruments=["AAA", "AAA"],
         proxies=[snapshot, longer],
     )
     result = run_portfolio_replay(
@@ -771,14 +831,20 @@ def test_gates_report_structure() -> None:
 
 
 def test_dsr_gate_delegates_exactly() -> None:
-    """The DSR value is deflated_sharpe_from_moments of the moments."""
+    """The DSR value is deflated_sharpe_from_moments of the moments.
+
+    The trial variance fed to the formula is the gate's own single-
+    stream estimate ``denom2 / (n_obs - 1)`` in per-period SR units
+    (ATR-01), recomputed here independently.
+    """
     ev_stream = np.arange(10, dtype=np.float64) * 0.05
     spread = float(np.std(ev_stream, ddof=1))
     sr = float(np.mean(ev_stream) / spread)
     skew_val = float(skew(ev_stream))
     kurt_val = float(kurtosis(ev_stream, fisher=False))
+    denom2 = 1.0 - skew_val * sr + ((kurt_val - 1.0) / 4.0) * sr * sr
     expected = deflated_sharpe_from_moments(
-        sr, 10, skew_val, kurt_val, 1.0, n_trials=3
+        sr, 10, skew_val, kurt_val, denom2 / 9.0, n_trials=3
     )
     report = portfolio_gates(
         np.cumsum(ev_stream),
@@ -791,6 +857,40 @@ def test_dsr_gate_delegates_exactly() -> None:
     assert dsr_gate["value"] == expected
     assert dsr_gate["floor"] == 0.90
     assert dsr_gate["triggered"] is False
+
+
+def test_dsr_gate_healthy_book_passes_with_multiple_trials() -> None:
+    """Annual Sharpe ~3 over 500 periods clears the 0.95 floor at 5 trials.
+
+    Regression pin for ATR-01: the gate used to hard-wire a UNIT trial
+    variance, i.e. sibling dispersion of one per-period SR unit -- an
+    annual Sharpe of ~18-20 on a daily grid, which deflated even a
+    real book below any floor.  The variance now comes from the stream
+    itself, so a healthy stream passes with the multiple-testing
+    penalty actually applied (n_trials=5, not the gate-bypassing 1).
+    """
+    daily_sr = 3.0 / math.sqrt(252.0)
+    half_step = 0.01
+    mean_step = daily_sr * half_step
+    ev_stream = np.tile(
+        [mean_step - half_step, mean_step + half_step], 250
+    ).astype(np.float64)
+    assert ev_stream.size == 500
+    spread = float(np.std(ev_stream, ddof=1))
+    sr = float(np.mean(ev_stream) / spread)
+    assert sr == pytest.approx(daily_sr, rel=1e-2)
+    skew_val = float(skew(ev_stream))
+    kurt_val = float(kurtosis(ev_stream, fisher=False))
+    denom2 = 1.0 - skew_val * sr + ((kurt_val - 1.0) / 4.0) * sr * sr
+    expected = deflated_sharpe_from_moments(
+        sr, 500, skew_val, kurt_val, denom2 / 499.0, n_trials=5
+    )
+    report = portfolio_gates(np.cumsum(ev_stream), ev_stream, min_trades=500)
+    dsr_gate = report["gates"][0]
+    assert dsr_gate["value"] == expected
+    assert expected >= 0.95
+    assert dsr_gate["triggered"] is False
+    assert report["portfolio_verdict"] == "SURVIVES"
 
 
 def test_dsr_gate_noise_stream_triggers() -> None:

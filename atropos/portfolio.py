@@ -21,10 +21,12 @@ portfolio-level controls the single-slot engine cannot express:
   motivated by the donor finding that FCFS capping rejects BETTER
   trades.
 * correlation-aware admission -- a candidate whose recent R proxy is
-  |Spearman|-correlated above ``corr_cap`` with ANY open position's
-  proxy is rejected (reason ``"correlation_cap"``); insufficient
-  overlap history is inconclusive and never rejects by itself
-  (not-enough-data is not correlation).
+  |Spearman|-correlated above ``corr_cap`` with any SAME-INSTRUMENT
+  open position's proxy is rejected (reason ``"correlation_cap"``);
+  candidates for a different instrument are never proxy-compared
+  (different price series -- stacking the same book is the risk the
+  filter owns), insufficient overlap history is inconclusive and
+  never rejects by itself (not-enough-data is not correlation).
 
 Realized equity is EVENT-based (R credited at each trade's credit
 bar), so drawdown is not flattered by aggregation.  Portfolio gates
@@ -480,11 +482,14 @@ def filter_by_correlation(
     earlier pair different days and dilute the verdict toward
     inconclusive -- they never fabricate a reject.
     :func:`run_portfolio_replay` keeps its comparisons bar-for-bar by
-    extending every open position's snapshot to the candidate's
-    decision bar from the candidate's own cell (shared anchor), so
-    under the replay contract ("growing series from a common anchor
-    through the row's decision bar") the verdicts are time-aligned by
-    construction.
+    extending every SAME-INSTRUMENT open position's snapshot to the
+    candidate's decision bar from the candidate's own cell (shared
+    anchor), so under the replay contract ("growing series from a
+    common anchor through the row's decision bar") the verdicts are
+    time-aligned by construction.  The replay consults same-instrument
+    holders only: proxies on different instruments are different price
+    series, and a cross-instrument magnitude is not a stacking signal
+    (it contributes no stream and can never reject here).
 
     Args:
         signals_df: signal frame; needs the ``instrument`` and
@@ -693,7 +698,7 @@ def _reconstructed_close_r(
 def _position_streams(
     record: dict[str, Any], occupied_holders: list[dict[str, Any]]
 ) -> dict[int, np.ndarray]:
-    """Open-position R proxies, each extended to the candidate's bar.
+    """Same-instrument open-position proxies, candidate-bar aligned.
 
     Under the replay contract every ``r_proxy`` cell is a growing
     per-bar series from one common anchor, ending at ITS row's
@@ -702,11 +707,22 @@ def _position_streams(
     since then (same instrument, same anchor) and both streams end at
     the candidate's decision bar -- the filter's tail alignment then
     pairs identical bars instead of different days.
+
+    Only SAME-INSTRUMENT holders are consulted (ATR-02): proxies on
+    different instruments come from different price series, so their
+    Spearman magnitude says nothing about stacking the same book --
+    pairing across instruments used to fabricate |rho| ~ 1 for even
+    an independent instrument.  A cross-instrument holder therefore
+    contributes NO stream: the filter sees no pair for it and an
+    absent pair is an admit.
     """
+    candidate_instrument = record["instrument"]
     candidate_proxy: np.ndarray = record["r_proxy"]
     streams: dict[int, np.ndarray] = {}
     for holder in occupied_holders:
         rec = holder["rec"]
+        if rec["instrument"] != candidate_instrument:
+            continue
         snapshot: np.ndarray = rec["r_proxy"]
         stale = candidate_proxy.size - snapshot.size
         if stale > 0:
@@ -1053,8 +1069,11 @@ def run_portfolio_replay(
       its slot to the end);
     * the correlation filter passes (when ``corr_cap`` is set): the
       candidate's ``r_proxy`` must not be |Spearman|-correlated above
-      the cap with any OCCUPIED slot's proxy -- inconclusive pairs
-      (too little overlap, degenerate series) admit.  Same-instrument
+      the cap with any OCCUPIED SAME-INSTRUMENT slot's proxy --
+      inconclusive pairs (too little overlap, degenerate series) admit,
+      and a candidate for a DIFFERENT instrument than an open
+      position is never rejected on that position's proxy (different
+      price series; the pair is not computed).  Same-instrument
       stacking is the extreme case: a second signal on an instrument
       with an OPEN position carries |rho| = 1 against it and is
       rejected under any cap below 1;
@@ -1282,10 +1301,19 @@ def _deflated_sharpe_gate(
     :func:`atropos.evaluation_metrics.deflated_sharpe_from_moments`
     (its single home): the per-period SR, sample skew / Pearson
     kurtosis (NaN below ``_MIN_SKEW_OBS`` observations -- the
-    ``deflated_sharpe`` convention) and a unit trial variance
-    (unit-variance sibling trials in per-period SR units) go in.  A
+    ``deflated_sharpe`` convention) and the trial variance go in.  A
     non-finite DSR triggers FAIL-CLOSED: an unverifiable stream can
     not count as verified.
+
+    ``var_sr`` is in PER-PERIOD SR units like ``sr`` (the formula
+    compares them 1:1) and is estimated from the stream itself -- the
+    Bailey & Lopez de Prado (2014) single-stream fallback for the
+    unknown across-trial dispersion: the asymptotic variance of the SR
+    estimator ``(1 - skew*sr + (kurt-1)/4*sr^2) / (n_obs - 1)``.  A
+    hard-wired unit variance would live in the wrong units (one
+    per-period unit of sibling dispersion reads as an annual Sharpe
+    around 18-20 on a daily grid and deflates every real book to
+    death).
     """
     n_obs = int(ev_stream.size)
     if n_obs >= _MIN_SKEW_OBS:
@@ -1293,12 +1321,15 @@ def _deflated_sharpe_gate(
         sr = float(np.mean(ev_stream) / spread) if spread > 0.0 else math.nan
         skew_val = float(skew(ev_stream))
         kurt_val = float(kurtosis(ev_stream, fisher=False))
+        denom2 = 1.0 - skew_val * sr + ((kurt_val - 1.0) / 4.0) * sr * sr
+        var_sr = denom2 / (n_obs - 1)
     else:
         sr = math.nan
         skew_val = math.nan
         kurt_val = math.nan
+        var_sr = math.nan
     dsr = deflated_sharpe_from_moments(
-        sr, n_obs, skew_val, kurt_val, 1.0, n_trials=n_trials
+        sr, n_obs, skew_val, kurt_val, var_sr, n_trials=n_trials
     )
     if not math.isfinite(dsr):
         triggered = True
@@ -1701,13 +1732,13 @@ def _demo_panel() -> tuple[pd.DataFrame, dict[str, np.ndarray]]:
 def _demo_signals(closes: dict[str, np.ndarray]) -> pd.DataFrame:
     """Schedule with an overlap window, a clone signal and a big score.
 
-    Two AAA longs (bars 240 / 245) hold both slots from bar ~246; the
-    BBB clone signal (bar 246, one bar behind the freshest AAA
-    snapshot so the tail-aligned windows nearly coincide) is the
-    correlation-cap bait, the CCC signal on the same bar is its
-    independent control; the CCC candidate with score 0.95 (bar 250)
-    is the replacement bait; a short CCC (bar 320) gives the exposure
-    series both sides.
+    The first AAA long (bar 240) opens the book; the second AAA long
+    (bar 245) is the correlation-cap bait (same instrument, |rho| ~ 1
+    against the open AAA); the BBB signal (bar 246, a near-clone of
+    AAA by construction) is the cross-instrument control -- ADMITTED,
+    because different instruments are never proxy-compared (ATR-02);
+    the CCC candidate with score 0.95 (bar 250) is the replacement
+    bait; a short CCC (bar 320) gives the exposure series both sides.
     """
     schedule = [
         (240, "AAA", "long", 0.50),
@@ -1729,8 +1760,6 @@ def _demo_signals(closes: dict[str, np.ndarray]) -> pd.DataFrame:
             stop = fill * 1.03
             target = fill * 0.94
         history = closes[instrument][: decision + 1]
-        # growing common-anchor series (returns since bar 0): the
-        # replay extends position snapshots to the candidate's bar
         # growing common-anchor series (returns since bar 0): the
         # replay extends position snapshots to the candidate's bar
         proxy = np.diff(history) / history[:-1]
@@ -1861,29 +1890,29 @@ def _demo_case_portfolio_gates(
         f" corr_rejects={report['summary']['n_correlation_rejects']}"
         f" verdict={report['portfolio_verdict']}"
     )
-    # (c) the correlation policy really filtered candidates: the BBB
-    # clone of an open AAA position, plus same-instrument stacking
-    # (|rho| = 1 against an open CCC/AAA position)
+    # (c) SAME-INSTRUMENT stacking is correlation-killed: the second
+    # AAA long (bar 245) carries |rho| ~ 1 against the open AAA@240
     corr_rejected = [
         row
         for row in report["rejected"]
         if row["reason"] == "correlation_cap"
     ]
-    assert len(corr_rejected) >= 1
-    assert any(
-        row["instrument"] == "BBB" and row["decision_idx"] == 246
-        for row in corr_rejected
-    )
-    # the INDEPENDENT CCC control on the same bar was admitted: the
-    # layer rejects correlation, not co-timing
+    assert len(corr_rejected) == 1
+    assert corr_rejected[0]["instrument"] == "AAA"
+    assert corr_rejected[0]["decision_idx"] == 245
+    # ... while the BBB candidate (a near-clone of AAA by construction)
+    # is ADMITTED on the same bar: cross-instrument proxies are never
+    # compared (ATR-02) -- the layer rejects stacking the same book,
+    # not similar instruments
     accepted_keys = {
         (str(row["instrument"]), int(row["decision_idx"]))
         for row in report["accepted"]
     }
-    assert ("CCC", 246) in accepted_keys
-    # ... while stacking a second CCC long on the open CCC position
-    # is correlation-killed (|Spearman| = 1 against itself)
-    assert any(row["instrument"] == "CCC" for row in corr_rejected)
+    assert ("BBB", 246) in accepted_keys
+    # the third AAA (bar 400) finds no open AAA position anymore: with
+    # no same-instrument holder there is nothing to correlate, so it
+    # takes the free slot
+    assert ("AAA", 400) in accepted_keys
     # (d) the gates returned the full structure
     assert len(report["gates"]) == 3
     for gate in report["gates"]:

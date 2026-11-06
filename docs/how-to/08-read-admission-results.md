@@ -3,7 +3,7 @@
 > **Estimated time:** 10 minutes (the snippets run in ~1 second)
 >
 > **You will need:** the atropos repository with a set-up environment
-> (`uv sync`), Python 3.11+. No data needed — the candidate stream
+> (`uv sync`), Python 3.12. No data needed — the candidate stream
 > here is a hand-built four-trade example; every number is real
 > output.
 

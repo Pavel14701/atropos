@@ -297,6 +297,28 @@ def test_curve_summary_sign_consistent_handles_exact_zero_t() -> None:
     assert all_zero["sign_consistent"] is True
 
 
+def test_curve_summary_reports_bonferroni_alpha() -> None:
+    """ATR-10 watch-item: the per-spec alpha behind the max-t search.
+
+    ``bonferroni_alpha = 0.05 / n_specs`` is the per-spec significance
+    level that would hold the curve-wide false-positive rate at 5%
+    while the verdict gate itself stays at the lenient ``|t| >= 2``
+    rule; a curve with no testable spec reports NaN, not a fake level.
+    """
+    summary = curve_summary(
+        pd.DataFrame({"t_new": [3.0, 0.5, -0.1, 1.0, 2.5]})
+    )
+    assert summary["n_specs"] == 5
+    assert summary["bonferroni_alpha"] == pytest.approx(0.01)
+    degenerate = curve_summary(
+        pd.DataFrame(
+            {"t_new": [np.nan, np.nan], "verdict": ["INCONCLUSIVE"] * 2}
+        )
+    )
+    assert degenerate["n_specs"] == 0
+    assert np.isnan(degenerate["bonferroni_alpha"])
+
+
 def test_curve_on_genuine_edge_survives_every_spec() -> None:
     outcome, controls, signal = _genuine_edge(300, 98)
     table = specification_curve(outcome, [controls], signal, robust=True)

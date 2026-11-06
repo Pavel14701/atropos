@@ -4,7 +4,7 @@
 > total; lightgbm only in the last step)
 >
 > **You will need:** the atropos repository with a set-up environment
-> (`uv sync`), Python 3.11+. The candidate world here is synthetic
+> (`uv sync`), Python 3.12. The candidate world here is synthetic
 > (seeded, reproducible). `lightgbm` is an OPTIONAL dependency — only
 > step 5 needs it (`uv sync --extra ranking`, or
 > `uv pip install lightgbm`); every other path runs

@@ -206,7 +206,9 @@ cut) while `ev_threshold` returns `(-inf, 0.03, 3)` — the floor wins.
 **force_close_r** — the RECONSTRUCTED P&L of a force-closed trade
 (`run_position_state_machine`, `allow_reverse=True`): an opposite-side
 signal closes the open trade at its decision bar and the row's isolated
-`r_pess`/`exit_idx` stay STALE — read `force_close_r` instead. Example:
+`r_pess`/`exit_idx` stay STALE — read `force_close_r` instead,
+recomputed by `simulate_signal` from the ORIGINAL entry with the hold
+truncated to the closing bar. Example:
 isolated `exit_idx` 5 but force-closed at bar 3 → `force_close_r`
 `0.697` next to the stale `exit_idx` 5. The portfolio replay reuses
 the field for displaced trades (`atropos.portfolio.run_portfolio_replay`):
@@ -243,7 +245,9 @@ slots=2, both occupied, FCFS → the newcomer joins `rejected` with
 **Slot admission** — which slot a portfolio candidate takes
 (`atropos.portfolio`): the correlation filter consults the OCCUPIED
 slots first, then a free slot wins (lowest index) or the admission
-policy decides; a trade holds its slot through its exit bar plus the
+policy decides (`atropos.backtesting.run_admission_policy` semantics:
+`fcfs` first-come, `replace_low` / `replace_high` evict the worst open
+score); a trade holds its slot through its exit bar plus the
 per-slot `cooldown`, and an unresolved trade holds it to the end of
 the data.
 

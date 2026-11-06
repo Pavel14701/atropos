@@ -66,6 +66,20 @@ and the typical mistake. Death at any stage is final for the hypothesis in its
 current formulation: a graveyard entry (§8) is mandatory; re-entry under the same
 name is forbidden.
 
+**Implementation map.** The stages above are the researcher's protocol; the
+shipped pipeline (`atropos.ensemble_pipeline.run_full_pipeline`) automates the
+statistical core as its own seven stages, in increasing order of cost:
+null controls (stages 2 and 7 here: permutation/placebo, momentum and
+known-feature repackaging, subperiod concentration, calendar fixed effects) →
+specification curve (stage 4: does ANY reasonable spec keep `|t| >= 2` after
+controls) → robustness battery (stage 5) → walk-forward (stage 6, expanding) →
+Monte Carlo risk envelope (the cost line, law 3, plus drawdown tails) →
+predictive evaluation (purged CV, feature-importance stability, deflated
+Sharpe) → optional cross-sectional panel tests. The premise check (stage 1)
+and the raw-signal sanity look (stage 3) stay with the researcher — a machine
+cannot check that an instrument exists or that the sign matches the
+prediction's rationale.
+
 ### Stage 1. PREMISE-CHECK — does the condition exist in the target market?
 
 **Stage question:** do the structural premises of the hypothesis exist in the
@@ -196,11 +210,27 @@ pass/fail on every test; one leniency devalues all seven tests at once.
 looking at the future?
 
 **Procedure:**
-1. Rolling train→test: fit on a window — apply to the next segment.
+1. Expanding train→test: fit on ALL history before the test segment — apply
+   to the next segment. Every later fold trains on strictly more data.
 2. All thresholds and parameters are frozen at train time; on test they are
    applied as-is, no revising.
-3. Expanding windows are forbidden: "accumulated history" = regular retuning on
-   ever more familiar data.
+3. Purge the rows between train end and test start whose forward-return
+   labels overlap the test window (purge gap = label horizon), so train
+   cannot read the test period through overlapping labels.
+
+**Why expanding, not rolling.** Earlier revisions of this document banned
+expanding windows; that doctrine is obsolete and this paragraph supersedes it.
+For a falsification stage, expanding is the correct shape: the question is
+whether the edge survives out of sample as evidence accumulates, and more
+accumulated history means more held-out evidence and a sharper verdict — a
+rolling window would discard data and make the test WEAKER exactly when
+confidence should grow. Rolling also smuggles in a free hyperparameter (the
+window length) that is itself tunable — a fresh overfitting surface with no
+falsification benefit. Expanding has no such knob: the initial training length
+only seeds the first fold. The reference implementation
+(`atropos.walkforward_framework`) offers no rolling mode at all; it additionally
+de-duplicates overlapping test slices so fold frequency cannot manufacture
+significance.
 
 **Kill criteria:** shrinkage > 2× (the test result is worse than half the train
 result) → OVERFIT-DEATH, stop. The effect's sign flips on test → death, no

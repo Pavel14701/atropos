@@ -3,7 +3,7 @@
 > **Estimated time:** 15 minutes (the examples take ~5 seconds in total)
 >
 > **You will need:** the atropos repository with a set-up environment
-> (`uv sync`), Python 3.11+; pandas/numpy come as dependencies. Bring
+> (`uv sync`), Python 3.12; pandas/numpy come as dependencies. Bring
 > your own hypothesis data — the examples here are synthetic.
 
 ## Why
@@ -66,10 +66,13 @@ The output is a dict with keys:
 `INCONCLUSIVE` is **not** a stage status: it lives inside the results.
 Individual stage-1 controls and the stage-7 overall return
 `INCONCLUSIVE` when a check is not computable (e.g. the signal is
-exactly collinear with a control — "collinear with controls"). Upstairs
-this surfaces as a stage WARN, not a kill: "could not check" ≠ "killed".
-That is the meaning of INCONCLUSIVE across the whole framework — too
-little data or non-computability does not kill a hypothesis.
+exactly collinear with a control — "collinear with controls"), and
+stage 2 reports `INCONCLUSIVE` in its summary when a lenient `SURVIVES`
+call is backed by fewer than 5 testable specs — a multiple search too
+small to trust. Upstairs this surfaces as a stage WARN, not a kill:
+"could not check" ≠ "killed". That is the meaning of INCONCLUSIVE
+across the whole framework — too little data or non-computability does
+not kill a hypothesis.
 
 The seven stages in order: 1 `null_control_suite` (6 null controls),
 2 `incremental_regression` (specification curve), 3

@@ -3,7 +3,7 @@
 > **Estimated time:** 10 minutes
 >
 > **You will need:** the atropos repository with a set-up environment
-> (`uv sync` done), Python 3.11+. Data access is **not needed** for this
+> (`uv sync` done), Python 3.12. Data access is **not needed** for this
 > how-to — and is **forbidden** until the end of step 4 (law 1:
 > preregister before data).
 
@@ -24,7 +24,7 @@ level — use module paths):
 from atropos.prereg_generator import generate_prereg, validate_prereg
 ```
 
-## Step 1. Assemble `params` — 7 required fields
+## Step 1. Assemble `params` — 6 required fields
 
 | Field | Type | What it is |
 |-------|------|------------|
@@ -34,7 +34,14 @@ from atropos.prereg_generator import generate_prereg, validate_prereg
 | `nulls` | `str` or `list[str]` | null explanations of the effect (repackaging, concentration, …) |
 | `kill_criteria` | non-empty `list` of `str`/`dict` | numeric kill thresholds — see below |
 | `power_calc` | `str`, `list[str]`, or `dict` | power calculation: N, alpha, power |
-| `hash` | `str` | hash of the frozen spec |
+
+The spec **hash is not an input**: `generate_prereg` computes it
+automatically — sha256 over the canonical JSON of the frozen fields
+(first 8 hex chars; `atropos.prereg_generator.spec_hash`) — so the
+document always carries the hash of the spec it actually renders.
+Editing any frozen field provably changes the hash (tamper evidence);
+a stale `hash` entry left in `params` is tolerated by validation and
+ignored at render time.
 
 A kill criterion is a hard directional rule, in two forms:
 
@@ -81,7 +88,6 @@ params = {
         "share of total PnL from the best subperiod > 0.6",
     ],
     "power_calc": {"N_required": 2600, "alpha": 0.05, "power": 0.80},
-    "hash": "a1b2c3d4",
 }
 
 problems = validate_prereg(params)
@@ -100,7 +106,7 @@ Example output:
 ```python
 bad_wait = {
     "name": "x", "hypothesis": "h", "construction": "c", "nulls": "n",
-    "power_calc": "p", "hash": "hh",
+    "power_calc": "p",
     "kill_criteria": ["wait 200 days before final check"],
 }
 print(validate_prereg(bad_wait))
@@ -153,7 +159,7 @@ Example output (abridged; the full document is from your run):
 # Preregistration: overnight_imbalance_edge
 
 - **Frozen on:** 2026-11-03
-- **Spec hash:** `a1b2c3d4`
+- **Spec hash:** `31711471`
 
 ## Hypothesis
 
@@ -197,7 +203,9 @@ as a separate amendment with a new hash.
 Note row 2 of the kill-criteria table: for the string form the generator
 extracts the operator and the number itself (">" and "0.6") instead of
 inserting a stub. The date: `date=None` uses today; an explicit date
-must be ISO (`YYYY-MM-DD`), otherwise `ValueError`.
+must be ISO (`YYYY-MM-DD`), otherwise `ValueError`. The `Spec hash`
+line is computed from the frozen fields — your run's hash will differ
+from the one shown, and editing any field in `params` changes it.
 
 ## Step 4. Save `PREREG_<name>_<date>.md` and commit BEFORE the data
 

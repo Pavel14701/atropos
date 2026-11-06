@@ -4,7 +4,7 @@
 > total)
 >
 > **You will need:** the atropos repository with a set-up environment
-> (`uv sync`), Python 3.11+; numpy/pandas/scipy come as dependencies.
+> (`uv sync`), Python 3.12; numpy/pandas/scipy come as dependencies.
 > The data here is a synthetic seeded OHLC world (reproducible
 > byte-for-byte). The snippets run in sequence in one session: from
 > step 2 on they reuse the variables of step 1.

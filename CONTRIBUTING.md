@@ -12,7 +12,7 @@ makes verdicts meaningful.
 
 ## Before you contribute
 
-Set up with `uv sync` (Python 3.11+, pinned in `uv.lock`). All commands
+Set up with `uv sync` (Python 3.12, pinned in `uv.lock`). All commands
 run through `uv run` from the repo root:
 
 ```bash

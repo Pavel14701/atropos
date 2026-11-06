@@ -3,10 +3,10 @@
 Honest inventory of everything the test suite does not prove, and why.
 None of these are silent: each is pinned in the suite (skips are documented
 in code, xfails are `strict=True`, so an unexpected change breaks the build)
-and each names what would resolve it. Last verified: 2309 passed /
-16 skipped / 2 xfailed.
+and each names what would resolve it. Last verified: 2672 passed /
+18 skipped / 3 xfailed.
 
-## 1. Sixteen skipped tests — three documented groups
+## 1. Eighteen skipped tests — four documented groups
 
 ### 1a. Four skips — chaos-matrix deduplication (rule side)
 
@@ -59,6 +59,23 @@ not a defect to fix or a check to weaken.
 Unblocks: nothing known — this is the model class's honest shape.
 The other three contract families (determinism, probability
 validity, full engine path) still cover knn end to end.
+
+### 1d. Two skips — lambdarank oracle without the optional extra
+
+Status: skipped (environment-dependent, by design).
+
+Cause: `tests/test_ranking.py` gates the two lightgbm-backed
+lambdarank tests (`rank_with_lambdarank` determinism/validity and
+`compare_rankers_on_intersection` score-key discovery) behind
+`pytest.importorskip("lightgbm")`. `lightgbm` is the OPTIONAL
+`[ranking]` extra — `atropos.ranking` imports it lazily and every
+other path runs without it — so on an environment without the extra
+the two tests skip instead of failing. In CI (the ranking-extra job)
+lightgbm is installed and both run.
+
+Unblocks: `uv sync --extra ranking` (or any environment with
+`lightgbm>=4.7` installed) — then the group disappears and the suite
+is back to sixteen skips.
 
 ## 2. xfail — fast-only synthetic edge dies on 2/10 sweep seeds
 
@@ -130,26 +147,35 @@ Status: planned.
 
 ### 5a. ML integration gaps (review-tier P3, deliberately deferred)
 
-The ML engine runs four evaluation gates (incremental, cost_line,
-importance_stability, deflated_sharpe). These house-wide integrations
-are scoped and scheduled, NOT forgotten:
+The ML engine runs four default evaluation gates (incremental,
+cost_line, importance_stability, deflated_sharpe) plus an opt-in fifth
+(`checks.robustness`, default off: threshold/window sensitivity over
+OOS probabilities). These house-wide integrations are scoped and
+scheduled, NOT forgotten:
 
-- **ML robustness gate** — `robustness_battery` (threshold/window
-  sensitivity) is not applied to model predictions yet; an ML edge
-  fragile to its own threshold passes all four gates. Resolution:
-  `_gate_robustness` over OOS probabilities in `_evaluate_models`
-  (~1 day).
+- **ML robustness gate is opt-in, not default** — `checks.robustness`
+  (implemented: threshold-shift sensitivity over OOS probabilities,
+  `robustness_shift` ±0.20 by default, INCONCLUSIVE below the event
+  floor) stays off by default so the four-gate contract is unchanged;
+  an ML edge fragile to its own threshold passes unless the caller
+  enables the check. Watch: flip the default after a calibration
+  pass on real data.
 - **ML forward gate** — a `SURVIVES` verdict is still in-sample + OOF;
   no 52-week live-track check exists for ML PnL. Resolution: route ML
   strategy returns through `track_record.live_verdict` (~2 days).
 - **ML prereg enforcement** — `ml_training` accepts a run without a
-  prereg hash; the rule-based chain documents prereg-before-pipeline
-  but ML does not. Resolution: `RuntimeWarning` when
-  `config["prereg_hash"]` is absent (~2 hours).
+  prereg hash (a `RuntimeWarning` fires and the verdict is reported as
+  unanchored); the rule-based chain documents prereg-before-pipeline
+  but ML does not hard-fail. Watch: make the hash mandatory once the
+  workflow tooling always generates one (`spec_hash`).
 - **ML calibration @slow** — DSR p-values under pure null are not
-  KS-tested for the ML stream (rule-side permutation FPR is
-  calibrated). Resolution: `test_ml_calibration.py`, 100 seeded noise
-  worlds (~2 hours).
+  uniform for the ML stream: the KS contract test exists and is pinned
+  as a strict xfail (`tests/test_calibration.py::
+  test_ml_engine_deflated_sharpe_pvalues_ks_uniform_under_null`, 98
+  finite null-world p-values, KS p ~= 0.001, rejection rate ~0.08 —
+  under the 10% bound but skewed low). Resolution: fix the DSR
+  standardization on short zero-padded daily streams; the strict xfail
+  then XPASSes and forces itself out of the suite.
 
 - **Mutation testing** — waiting for external users before the suite
   grows another layer.
@@ -165,21 +191,19 @@ are scoped and scheduled, NOT forgotten:
 Status: tracked, not blocking; the safe usage rule is already
 documented where the hazard lives.
 
-- **`n_skipped` cross-ranker comparability** — `n_skipped` in
-  `rank_within_groups` counts the skipped groups of THIS run only, so
-  two rankers on the same data can end up with different
-  `scored_group_ids` sets; comparing their `RANKING_METRICS` means over
-  the full lists can let unequal skip sets fake a metric difference.
-  The docstring already pins the rule (compare on the INTERSECTION of
-  `scored_group_ids`), and the guide shows the idiom
-  (`docs/how-to/07-choose-a-ranker.md`). Watch: a small helper
-  (`metrics_on_intersection(report_a, report_b)`) would make the safe
-  path the default path.
+- **`n_skipped` cross-ranker comparability** — RESOLVED:
+  `atropos.ranking.compare_rankers_on_intersection` computes both
+  rankers' metrics on the INTERSECTION of `scored_group_ids` and runs
+  the paired bootstrap on it, so unequal skip sets can no longer fake
+  a metric difference; the raw-report idiom stays documented in
+  `docs/how-to/07-choose-a-ranker.md` for callers who need the full
+  lists.
 - **`embargo_until` is not enforced in `paired_bootstrap_diff`** — the
   field is carried on `CandidateGroup` but the paired bootstrap
   resamples whatever per-group values the caller hands it; a caller
   that ignores the embargo when building those values can leak adjacent
   groups into both arms. The docstring warns explicitly (enforcement
-  belongs to the fold scheduler that produced the values). Watch: a
-  possible future `assert`/`RuntimeWarning` when arms carry mismatched
-  or unset embargo windows.
+  belongs to the fold scheduler that produced the values;
+  `compare_rankers_on_intersection` inherits the same rule for its
+  arms). Watch: a possible future `assert`/`RuntimeWarning` when arms
+  carry mismatched or unset embargo windows.

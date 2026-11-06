@@ -18,6 +18,7 @@ from atropos.prereg_generator import (
     _criteria_rows,
     generate_prereg,
     run_all_examples,
+    spec_hash,
     validate_prereg,
 )
 
@@ -42,7 +43,6 @@ def make_valid_params() -> dict[str, Any]:
             "placebo p >= 0.05",
         ],
         "power_calc": {"N": 2600, "power": 0.8},
-        "hash": "9f2c1ab4",
     }
 
 
@@ -231,7 +231,8 @@ def test_generate_prereg_renders_sections_and_table_rows() -> None:
     doc = generate_prereg(make_valid_params(), date="2026-01-15")
     assert doc.splitlines()[0] == "# Preregistration: edge_overnight"
     assert "- **Frozen on:** 2026-01-15" in doc
-    assert "- **Spec hash:** `9f2c1ab4`" in doc
+    # the spec hash is computed from the frozen fields automatically
+    assert f"- **Spec hash:** `{spec_hash(make_valid_params())}`" in doc
     for section in (
         "## Hypothesis",
         "## Construction",
@@ -247,6 +248,58 @@ def test_generate_prereg_renders_sections_and_table_rows() -> None:
     # string criteria show the operator actually used in the text
     assert "| 3 | placebo p >= 0.05 | >= | 0.05 |" in doc
     assert "- **N:** 2600" in doc
+
+
+def test_spec_hash_is_deterministic_and_content_bound() -> None:
+    """Same spec -> same hash; any frozen-field edit changes it."""
+    params = make_valid_params()
+    assert spec_hash(params) == spec_hash(dict(params))
+    # insertion order is irrelevant (canonical JSON sorts keys)
+    reordered = {
+        "power_calc": params["power_calc"],
+        "kill_criteria": params["kill_criteria"],
+        "nulls": params["nulls"],
+        "construction": params["construction"],
+        "hypothesis": params["hypothesis"],
+        "name": params["name"],
+    }
+    assert spec_hash(reordered) == spec_hash(params)
+    # editing any frozen field moves the hash (tamper evidence)
+    tampered = make_valid_params()
+    tampered["kill_criteria"] = [dict(params["kill_criteria"][0])]
+    tampered["kill_criteria"][0]["threshold"] = 1.5
+    assert spec_hash(tampered) != spec_hash(params)
+
+
+def test_user_supplied_hash_is_tolerated_but_ignored() -> None:
+    """'hash' is no longer an input: stale entries never reach the doc.
+
+    Contract change (ATR-07): the spec hash is computed at render time,
+    so a caller-supplied (possibly stale) hash cannot mask an edited
+    spec; validation neither requires nor rejects the field.
+    """
+    stale = make_valid_params()
+    stale["hash"] = "deadbeef"
+    assert validate_prereg(stale) == []
+    doc = generate_prereg(stale, date="2026-01-15")
+    assert "- **Spec hash:** `deadbeef`" not in doc
+    assert f"- **Spec hash:** `{spec_hash(stale)}`" in doc
+    # the stale entry does not participate in the hash itself
+    assert spec_hash(stale) == spec_hash(make_valid_params())
+    # and dropping it entirely is the same spec
+    assert generate_prereg(stale, date="2026-01-15") == generate_prereg(
+        make_valid_params(), date="2026-01-15"
+    )
+
+
+def test_hash_is_no_longer_a_required_field() -> None:
+    """'hash' left REQUIRED_FIELDS: the generator computes it itself."""
+    assert "hash" not in REQUIRED_FIELDS
+    params = make_valid_params()
+    assert validate_prereg(params) == []
+    assert f"- **Spec hash:** `{spec_hash(params)}`" in generate_prereg(
+        params, date="2026-01-15"
+    )
 
 
 def test_generate_prereg_roundtrip_is_deterministic() -> None:

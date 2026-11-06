@@ -6,7 +6,15 @@ predicts the next slice, and stacks the out-of-sample PnL:
 
 * **Expanding, not rolling** - each fold trains on ALL history before the
   test slice (``data.iloc[:t0]``); the framework offers no rolling mode
-  at all.
+  at all.  This is the correct shape for a FALSIFICATION stage: the
+  question is "does the edge hold out of sample as evidence accumulates",
+  and more accumulated history means more held-out evidence and a
+  sharper verdict - discarding it (a rolling window) would make the
+  test WEAKER exactly when confidence should grow.  A rolling window
+  would also smuggle in a free hyperparameter - the window length -
+  which is itself tunable and therefore another overfitting surface;
+  expanding has no such knob (``train_window`` is only the initial
+  seed, every later fold trains on strictly more).
 * **Purge / embargo** - ``purge_gap`` rows directly before each test
   slice are REMOVED from the train slice.  With multi-period forward
   returns the label of row ``t`` covers ``[t, t + horizon)``; without a
@@ -241,7 +249,9 @@ def walkforward(  # noqa: PLR0912, PLR0915  # one branch per stage
     data : DataFrame with feature column(s) and ``outcome_col`` (forward
         return).
     train_window : initial training length; the training set then EXPANDS
-        with every fold (rolling mode is deliberately not implemented).
+        with every fold (rolling mode is deliberately not implemented:
+        for falsification, more accumulated history must mean more
+        confidence, not a fresh tuning knob - see the module docstring).
     test_window, step : test-slice length and fold stride.  With
         ``step < test_window`` the test slices overlap; the statistics
         (``wf_t``, direction consistency) are then computed on the UNION

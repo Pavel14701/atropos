@@ -17,10 +17,15 @@ Two kill rules, deliberately different in strictness:
   reaches |t| >= 2.  ``n_surviving_controlled`` counts the specs that
   survive WITH controls - a curve kept alive purely by uncontrolled
   specs is a repackaging flag even when the lenient verdict says
-  SURVIVES.  A spec whose model is unidentifiable (collinear design,
-  zero-sd z-score, constant outcome, empty alignment) gets a per-spec
-  verdict of ``INCONCLUSIVE``; its non-finite ``t_new`` is excluded
-  from the curve statistics instead of silently counting as a death.
+  SURVIVES.  Taking the max over the grid is itself a multiple search:
+  ``bonferroni_alpha`` (``0.05 / n_specs``) reports the per-spec level
+  that would hold the curve-wide false-positive rate at 5%, and the
+  pipeline's stage-2 gate additionally demands at least 5 testable
+  specs before it trusts a SURVIVES call.  A spec whose model is
+  unidentifiable (collinear design, zero-sd z-score, constant outcome,
+  empty alignment) gets a per-spec verdict of ``INCONCLUSIVE``; its
+  non-finite ``t_new`` is excluded from the curve statistics instead
+  of silently counting as a death.
 
 p-values use the t distribution with ``df = n - k`` degrees of freedom
 -- an asymptotic approximation for HC0 standard errors, kept as the
@@ -68,6 +73,8 @@ DEFAULT_TRANSFORMS: tuple[str, ...] = (
     "demean",
 )
 _T_RULE = 2.0
+# family-wise alpha behind curve_summary's bonferroni_alpha diagnostic
+_CURVE_ALPHA = 0.05
 _SURVIVES = "SURVIVES"
 _DEATH = "REPACKAGING-DEATH"
 _NULL_DEATH = "NULL-DEATH"
@@ -474,6 +481,14 @@ def curve_summary(spec_table: pd.DataFrame) -> dict[str, Any]:
     repackaging flag even when the verdict says SURVIVES.  A spec curve
     where specs flip sign is reported via ``sign_consistent``.
 
+    Taking the max over an N-spec curve is itself a multiple search:
+    ``bonferroni_alpha`` (``0.05 / n_specs``) is the per-spec
+    significance level that would keep the curve-wide false-positive
+    rate at 5%, reported as a diagnostic for the downstream gate (the
+    pipeline stage requires at least 5 testable specs before it trusts
+    a SURVIVES call).  The verdict gate itself stays at ``|t| >= 2``
+    (the lenient-by-design breadth rule).
+
     ``sign_consistent`` is judged on the NONZERO t-values: an exact 0.0
     t-stat carries no sign information (``np.sign(0.0) == 0.0`` would
     otherwise force any curve containing one to look inconsistent), so
@@ -525,6 +540,9 @@ def curve_summary(spec_table: pd.DataFrame) -> dict[str, Any]:
         "min_abs_t": min_abs_t,
         "sign_consistent": sign_consistent,
         "t_rule": _T_RULE,
+        "bonferroni_alpha": (
+            _CURVE_ALPHA / n_specs if n_specs else float("nan")
+        ),
     }
 
 

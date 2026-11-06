@@ -9,7 +9,12 @@ one verdict. The kill-protocol is the product: freeze a preregistration,
 run the 7-stage adversarial pipeline (null controls, specification
 curve, robustness battery, walk-forward, Monte Carlo risk, predictive
 evaluation, cross-sectional tests), read the verdict — from `SURVIVES`
-to `COST_DEATH` — and write the tombstone. The ML chain
+to `COST_DEATH` — and write the tombstone. Plain `SURVIVES` says every
+executed attack missed; a panel-only run (only the cross-sectional
+stage has data) reports `SURVIVES_CS_ONLY` /
+`SURVIVES_CS_ONLY_WITH_WARNINGS` instead, so the evidence scope stays
+in the verdict, and an undersized walk-forward configuration reads
+`INCONCLUSIVE` (undecided), not `NO_OOS_EDGE`. The ML chain
 (`run_ml_kill_protocol`) runs the same doctrine on a feature dataset:
 expanding-block walk-forward (purge + embargo) and four gates. For the
 rare signal that survives, Atropos also ships a reference backtest
@@ -21,10 +26,10 @@ oracle are imposed on it? The portfolio layer (`atropos.portfolio`)
 asks the question after that: does the book still hold up with
 concurrent positions — slot admission with replacement,
 correlation-aware admission (a candidate whose recent return proxy is
-|Spearman|-correlated with an open position's above the cap never
-enters), and portfolio-level gates (deflated Sharpe on the daily EV
-stream, drawdown floor, same-side concentration) over the realized
-equity.
+|Spearman|-correlated with a SAME-INSTRUMENT open position above the
+cap never enters), and portfolio-level gates (deflated Sharpe on the
+daily EV stream, drawdown floor, same-side concentration) over the
+realized equity.
 
 **What Atropos does not do.** It does not optimize strategy parameters
 or search the space of profitable configurations — a candidate that
@@ -70,8 +75,9 @@ YOUR pipeline and keep your own data, execution and sizing layers.
 > write AROUND vectorbt to check that their Sharpe is not an artifact.
 > The portfolio-aware layer closes the 'what about a portfolio of 100
 > names' question without claiming portfolio construction. The novelty
-> is honest verdicts and portfolio-level robustness gates, which
-> competitors do not have. Game-changing? No. Closing a real gap? Yes."
+> is honest verdicts and portfolio-level robustness gates (designed
+> for a niche that general-purpose engines do not cover).
+> Game-changing? No. Closing a real gap? Yes."
 
 Do not upgrade "closing a real gap" to "game-changing" in any pitch:
 falsification is hygiene, not discovery.  It makes research more

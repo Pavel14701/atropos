@@ -3,7 +3,7 @@
 > **Estimated time:** 15 minutes (the snippets run in ~2 seconds)
 >
 > **You will need:** the atropos repository with a set-up environment
-> (`uv sync`), Python 3.11+. No data needed — the world here is a
+> (`uv sync`), Python 3.12. No data needed — the world here is a
 > seeded three-instrument OHLC panel, and every number below is real
 > output. The snippets run in sequence in one session: from step 2 on
 > they reuse the variables of step 1.

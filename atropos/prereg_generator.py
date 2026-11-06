@@ -28,8 +28,14 @@ Required input keys::
                                            # comparison operator to a
                                            # number ("IC < 0.05")
       "power_calc":    str | list | dict,  # power analysis summary
-      "hash":          str,                # content hash of the frozen spec
     }
+
+The spec hash is NOT an input: :func:`generate_prereg` computes it
+automatically (see :func:`spec_hash`), so the rendered document always
+carries the hash of the spec it actually renders - the caller cannot
+forget it, mistype it, or freeze a hash that does not match the frozen
+fields.  A stale ``hash`` entry left in ``params`` is tolerated by
+validation and ignored at render time.
 
 Usage::
 
@@ -44,11 +50,18 @@ Run ``python -m atropos.prereg_generator`` for a synthetic demo.
 from __future__ import annotations
 
 import datetime as _dt
+import hashlib
+import json
 import math
 import re
 from typing import Any
 
-__all__ = ["REQUIRED_FIELDS", "generate_prereg", "validate_prereg"]
+__all__ = [
+    "REQUIRED_FIELDS",
+    "generate_prereg",
+    "spec_hash",
+    "validate_prereg",
+]
 
 REQUIRED_FIELDS: tuple[str, ...] = (
     "name",
@@ -57,7 +70,6 @@ REQUIRED_FIELDS: tuple[str, ...] = (
     "nulls",
     "kill_criteria",
     "power_calc",
-    "hash",
 )
 
 # The frozen threshold is the number a comparison operator points at,
@@ -96,10 +108,10 @@ def _nonempty_str(value: Any) -> bool:
 
 
 def _scalar_field_problems(params: dict[str, Any]) -> list[str]:
-    """Problems with the plain-string fields name/hypothesis/hash."""
+    """Problems with the plain-string fields name/hypothesis."""
     return [
         f"field '{field}' must be a non-empty string"
-        for field in ("name", "hypothesis", "hash")
+        for field in ("name", "hypothesis")
         if not _nonempty_str(params[field])
     ]
 
@@ -226,13 +238,53 @@ def _kill_criteria_problems(kill_criteria: Any) -> list[str]:
     return problems
 
 
+def _canonical_json(params: dict[str, Any]) -> str:
+    """Canonical JSON form hashed by :func:`spec_hash`.
+
+    ``json.dumps`` with sorted keys and ASCII-only output: two dicts
+    that differ only in insertion order hash identically, and the
+    result is stable across platforms, locales and Python versions.
+    The ``hash`` entry (if any) is excluded, so a hash can never hash
+    itself.
+    """
+    frozen = {key: value for key, value in params.items() if key != "hash"}
+    return json.dumps(frozen, sort_keys=True, ensure_ascii=True)
+
+
+def spec_hash(params: dict[str, Any]) -> str:
+    """Content hash of the frozen spec (first 8 sha256 hex chars).
+
+    The hash covers the canonical JSON of ``params`` WITHOUT the
+    ``hash`` key itself, so editing any frozen field (construction,
+    nulls, kill criteria, power, ...) provably changes the hash: the
+    rendered preregistration is tamper-evident by construction.  This
+    is the value rendered as ``Spec hash`` in the document and the one
+    to anchor a pipeline run to (e.g. ``ml_training``'s
+    ``config["prereg_hash"]``).
+
+    Example::
+
+        >>> spec_hash({"name": "edge"}) == spec_hash({"name": "edge"})
+        True
+        >>> spec_hash({"name": "edge"}) == spec_hash({"name": "other"})
+        False
+        >>> a_stale_hash = spec_hash({"name": "edge"})
+        >>> edited = {"name": "edge", "hash": a_stale_hash, "power_calc": "p"}
+        >>> spec_hash(edited) == a_stale_hash
+        False
+    """
+    return hashlib.sha256(
+        _canonical_json(params).encode("utf-8")
+    ).hexdigest()[:8]
+
+
 def validate_prereg(params: Any) -> list[str]:
     """Return the list of validation problems; empty list means valid.
 
     Checks:
       * ``params`` is a dict (anything else is reported as a problem),
       * all REQUIRED_FIELDS present,
-      * name / hypothesis / hash are non-empty strings,
+      * name / hypothesis are non-empty strings,
       * construction / nulls are a non-empty string or list of
         strings; power_calc may also be a non-empty dict,
       * every kill criterion is a hard directional rule.  Dict form:
@@ -241,6 +293,11 @@ def validate_prereg(params: Any) -> list[str]:
         string form: a comparison operator bound to a number
         (``"IC < 0.05"``), so bare numbers in prose ("wait 200 days")
         are rejected.
+
+    ``hash`` is NOT a required field and is not validated: the spec
+    hash is computed by :func:`spec_hash` at render time.  A stale
+    ``hash`` entry left in ``params`` is tolerated (and ignored by
+    :func:`generate_prereg`).
 
     ``~`` is allowed only as an explicit diagnostic/approximate marker;
     a kill criterion written with ``~`` must be understood as
@@ -388,6 +445,10 @@ def _render_attestation_section() -> list[str]:
 def generate_prereg(params: dict[str, Any], date: str | None = None) -> str:
     """Render the preregistration as a markdown string.
 
+    The ``Spec hash`` line is computed automatically from the frozen
+    fields (:func:`spec_hash`); callers never pass a hash.  A stale
+    ``hash`` entry in ``params`` is ignored.
+
     Raises ``ValueError`` listing all validation problems if ``params``
     fails :func:`validate_prereg`, or if ``date`` is given and is not an
     ISO-formatted date (``YYYY-MM-DD``); ``date=None`` stamps today.
@@ -400,7 +461,7 @@ def generate_prereg(params: dict[str, Any], date: str | None = None) -> str:
         ...     "nulls": ["no incremental predictive power"],
         ...     "kill_criteria": [{"criterion": "|t| after controls",
         ...                        "comparison": "<", "threshold": 2.0}],
-        ...     "power_calc": {"N": 2000}, "hash": "abc123",
+        ...     "power_calc": {"N": 2000},
         ... })
         >>> "# Preregistration: edge_x" in doc          # doctest: +SKIP
         True
@@ -425,7 +486,7 @@ def generate_prereg(params: dict[str, Any], date: str | None = None) -> str:
         f"# Preregistration: {params['name'].strip()}",
         "",
         f"- **Frozen on:** {stamp}",
-        f"- **Spec hash:** `{str(params['hash']).strip()}`",
+        f"- **Spec hash:** `{spec_hash(params)}`",
         "",
         "## Hypothesis",
         "",
@@ -445,11 +506,13 @@ def run_all_examples() -> None:
 
     The demo doubles as the layer-0 verification test: the valid spec
     must validate and render (with the kill-criteria table showing the
-    operators actually used), and the soft kill switches (non-numeric
-    threshold, "wait 200 days" prose, dict without a comparison) must
-    all be rejected - a regression crashes the demo, not a hypothesis.
+    operators actually used, and the Spec hash computed from the frozen
+    fields - not caller-supplied), and the soft kill switches
+    (non-numeric threshold, "wait 200 days" prose, dict without a
+    comparison) must all be rejected - a regression crashes the demo,
+    not a hypothesis.
     """
-    params = {
+    params: dict[str, Any] = {
         "name": "demo_overnight_imbalance_edge",
         "hypothesis": (
             "Overnight order-flow imbalance predicts the next-day return "
@@ -491,17 +554,18 @@ def run_all_examples() -> None:
             "alpha": 0.05,
             "power": 0.80,
         },
-        "hash": "9f2c1ab4",
     }
     print("=" * 72)
     print("prereg_generator demo: valid prereg")
     print("=" * 72)
     # layer-0 verification: the valid spec validates and renders with
-    # the kill-criteria table binding the operators actually used
+    # the kill-criteria table binding the operators actually used, and
+    # the Spec hash is derived from the frozen fields automatically
     assert validate_prereg(params) == []
     doc = generate_prereg(params)
     print(doc)
     assert "# Preregistration: demo_overnight_imbalance_edge" in doc
+    assert f"- **Spec hash:** `{spec_hash(params)}`" in doc
     assert "## Attestation" in doc
     assert (
         "| 1 | \\|t\\| of new signal after momentum7 + momentum30"
@@ -566,6 +630,15 @@ def run_all_examples() -> None:
         "dict criterion without 'comparison' must be rejected"
     )
     assert "missing required 'comparison'" in directionless_problems[0]
+
+    # tamper evidence: the Spec hash is derived from the frozen fields,
+    # so moving any threshold after the freeze changes the hash
+    tampered = dict(params)
+    tampered["kill_criteria"] = [dict(params["kill_criteria"][0])]
+    tampered["kill_criteria"][0]["threshold"] = 1.5
+    assert spec_hash(tampered) != spec_hash(params), (
+        "editing a frozen kill threshold must change the spec hash"
+    )
 
 
 if __name__ == "__main__":

@@ -31,7 +31,8 @@ around — see `POSITIONING.md`.
 
 ## Install
 
-Python 3.11+; numpy/pandas/scipy only. `uv sync` — or `pip install -e .`
+Python 3.12; numpy/pandas/scipy/scikit-learn (lightgbm optional for the
+`ranking` extra). `uv sync` — or `pip install -e .`
 
 Fresh repo? `atropos init` generates the hypothesis workspace
 (`GRAVEYARD.md`, `hypotheses/INDEX.csv`) — existing files are never overwritten.
@@ -124,12 +125,12 @@ both survive, INCONCLUSIVE when the data cannot decide.
 ```bash
 uv run python -m atropos.ensemble_pipeline   # 10 cases, verdict matrix
 uv run python -m atropos.track_record        # live PnL vs prereg
-uv run python -m atropos.ml_training         # planted edge, 8-model registry, documented-kill reproduction (VRP panic, calibrated to a closed-corpus tombstone)
+uv run python -m atropos.ml_training         # planted edge, 9-model registry (8 base + ensemble), documented-kill reproduction (VRP panic, calibrated to a closed-corpus tombstone)
 uv run python -m atropos.kill_chain          # rule x ML unified verdict
 uv run python -m atropos.portfolio           # multi-slot replay, correlation cap, portfolio gates
 ```
 
-Every module ships a runnable demo: `uv run python -m atropos.<module>`.
+Most modules ship runnable demos: `uv run python -m atropos.<module>`.
 
 The backtest layer's golden path — one script wiring the full reference
 pipeline: `docs/examples/backtest_pipeline.py`

@@ -4,7 +4,7 @@
 > total)
 >
 > **You will need:** the atropos repository with a set-up environment
-> (`uv sync`), Python 3.11+; scikit-learn comes as a project dependency.
+> (`uv sync`), Python 3.12; scikit-learn comes as a project dependency.
 > Bring your own hypothesis data — here it is a synthetic seeded world
 > (reproducible byte-for-byte). The snippets run in sequence in one
 > session: from step 4 on they reuse the variables of step 3.
