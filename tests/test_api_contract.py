@@ -42,6 +42,11 @@ from atropos.evaluation_metrics import (
 )
 from atropos.incremental_regression import incremental_test
 from atropos.monte_carlo import max_drawdown_distribution
+from atropos.portfolio import (
+    portfolio_gates,
+    run_portfolio,
+    run_portfolio_replay,
+)
 from atropos.ranking import rank_within_groups
 from atropos.walkforward_framework import walkforward
 
@@ -329,6 +334,74 @@ def _pooled_stats_result() -> Mapping[str, Any]:
     return pooled_stats(np.array([1.0, -1.0]), np.array([0.0, 1 * day]))
 
 
+def _portfolio_replay_world() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Tiny one-instrument OHLC panel + two-slot signal frame."""
+    opens = np.full(8, 100.0)
+    highs = np.full(8, 100.5)
+    lows = np.full(8, 99.5)
+    highs[4] = 104.0
+    columns = pd.MultiIndex.from_product(
+        [["open", "high", "low", "close"], ["demo"]]
+    )
+    prices = pd.DataFrame(
+        np.column_stack([opens, highs, lows, opens]), columns=columns
+    )
+    signals = pd.DataFrame(
+        {
+            "decision_idx": [0, 3, 4],
+            "side": ["long", "long", "long"],
+            "instrument": ["demo", "demo", "demo"],
+            "sl": [99.0, 99.0, 99.0],
+            "tp": [104.0, 106.0, 104.0],
+            "score": [0.4, 0.6, 0.9],
+        }
+    )
+    return signals, prices
+
+
+def _portfolio_replay_result() -> Mapping[str, Any]:
+    signals, prices = _portfolio_replay_world()
+    return run_portfolio_replay(signals, prices, slots=2, hold_bars=4)
+
+
+def _portfolio_exposure() -> Mapping[str, Any]:
+    exposure: Mapping[str, Any] = _portfolio_replay_result()["exposure"]
+    return exposure
+
+
+def _portfolio_summary() -> Mapping[str, Any]:
+    summary: Mapping[str, Any] = _portfolio_replay_result()["summary"]
+    return summary
+
+
+def _portfolio_per_slot() -> Mapping[str, Any]:
+    per_slot: Mapping[str, Any] = _portfolio_replay_result()["per_slot"][0]
+    return per_slot
+
+
+def _portfolio_pipeline_result() -> Mapping[str, Any]:
+    signals, prices = _portfolio_replay_world()
+    return run_portfolio(signals, prices, slots=2, hold_bars=4, corr_cap=None)
+
+
+def _portfolio_gates_result() -> Mapping[str, Any]:
+    drift = np.repeat([0.10, 0.05], 5).astype(np.float64)
+    return portfolio_gates(
+        np.cumsum(drift),
+        drift,
+        dsr_min=0.90,
+        min_trades=10,
+        n_trials=1,
+        concurrent=np.full(10, 2.0),
+        net_exposure=np.tile([1.0, -1.0], 5),
+    )
+
+
+def _portfolio_gate_verdict() -> Mapping[str, Any]:
+    gate: Mapping[str, Any] = _portfolio_gates_result()["gates"][0]
+    return gate
+
+
 RESULT_BUILDERS: dict[str, Callable[[], Mapping[str, Any]]] = {
     "sharpe_ratio": _sharpe_result,
     "block_bootstrap_ci": _block_bootstrap_result,
@@ -355,6 +428,13 @@ RESULT_BUILDERS: dict[str, Callable[[], Mapping[str, Any]]] = {
     "run_admission_policy.summary": _admission_summary,
     "trade_curve_stats": _trade_curve_result,
     "pooled_stats": _pooled_stats_result,
+    "run_portfolio_replay": _portfolio_replay_result,
+    "run_portfolio_replay.exposure": _portfolio_exposure,
+    "run_portfolio_replay.summary": _portfolio_summary,
+    "run_portfolio_replay.per_slot": _portfolio_per_slot,
+    "run_portfolio": _portfolio_pipeline_result,
+    "portfolio_gates": _portfolio_gates_result,
+    "portfolio_gates.gate": _portfolio_gate_verdict,
 }
 
 EXPECTED_KEY_SETS: dict[str, frozenset[str]] = {
@@ -518,6 +598,7 @@ EXPECTED_KEY_SETS: dict[str, frozenset[str]] = {
             "importance_stability",
             "powered",
             "n_min_events",
+            "prereg_hash",
             "config",
         }
     ),
@@ -530,6 +611,7 @@ EXPECTED_KEY_SETS: dict[str, frozenset[str]] = {
             "importance_stability",
             "kills",
             "importance_by_fold",
+            "taken_exec",
         }
     ),
     "run_ml_kill_protocol.fold": frozenset(
@@ -570,6 +652,7 @@ EXPECTED_KEY_SETS: dict[str, frozenset[str]] = {
             "importance_stability",
             "powered",
             "n_min_events",
+            "prereg_hash",
             "config",
             "ensemble",
         }
@@ -632,6 +715,64 @@ EXPECTED_KEY_SETS: dict[str, frozenset[str]] = {
             "sharpe_per_trade",
             "sharpe_ann_bucketed",
         }
+    ),
+    "run_portfolio_replay": frozenset(
+        {
+            "slots",
+            "policy",
+            "accepted",
+            "rejected",
+            "replaced",
+            "per_slot",
+            "equity_curve",
+            "max_drawdown_r",
+            "final_equity_r",
+            "exposure",
+            "summary",
+            "gates",
+            "portfolio_verdict",
+        }
+    ),
+    "run_portfolio_replay.exposure": frozenset(
+        {"gross", "net", "concurrent"}
+    ),
+    "run_portfolio_replay.summary": frozenset(
+        {
+            "slots",
+            "policy",
+            "n_accepted",
+            "n_rejected",
+            "n_replaced",
+            "n_correlation_rejects",
+            "n_unresolved",
+            "ev",
+            "dd",
+            "concurrent_max",
+        }
+    ),
+    "run_portfolio_replay.per_slot": frozenset({"slot", "trades", "ev_r"}),
+    "run_portfolio": frozenset(
+        {
+            "slots",
+            "policy",
+            "accepted",
+            "rejected",
+            "replaced",
+            "per_slot",
+            "equity_curve",
+            "max_drawdown_r",
+            "final_equity_r",
+            "exposure",
+            "summary",
+            "gates",
+            "portfolio_verdict",
+        }
+    ),
+    "portfolio_gates": frozenset(
+        {"gates", "portfolio_verdict", "n_trades", "min_trades"}
+    ),
+    "portfolio_gates.gate": frozenset(
+        {"gate", "triggered", "value", "floor", "reason"}
     ),
 }
 
