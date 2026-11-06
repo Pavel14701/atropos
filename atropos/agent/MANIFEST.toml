@@ -6,7 +6,7 @@
 name = "atropos-agent-context"
 version = "0.1.0"          # must match the VERSION file
 schema = 1
-description = "Default agent context: user workflow + 10 skills"
+description = "Default agent context: user workflow + 11 skills"
 
 [[files]]
 path = "AGENTS.md"
@@ -94,3 +94,10 @@ path = "skills/16-walkforward-calendar.md"
 description = "Walk-forward on frozen thresholds + calendar control (stages 6-7/7)"
 when_to_use = "Last, after the robustness battery passes"
 version = "1.0.0"
+
+[[skills]]
+name = "17-backtest-pipeline"
+path = "skills/17-backtest-pipeline.md"
+description = "Build the full backtest pipeline: simulate → state machine → ranking → admission → metrics; backtest a signal, compare rankers, run admission policies"
+when_to_use = "after a hypothesis SURVIVES the kill protocol, to test tradability"
+version = "0.1.0"

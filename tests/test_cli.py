@@ -22,7 +22,7 @@ from atropos.cli import (
     main,
 )
 
-PACKAGE_TEN = [
+PACKAGE_ELEVEN = [
     "01-preregister",
     "02-run-pipeline",
     "03-read-graveyard",
@@ -33,6 +33,7 @@ PACKAGE_TEN = [
     "14-incremental-test",
     "15-robustness-battery",
     "16-walkforward-calendar",
+    "17-backtest-pipeline",
 ]
 
 
@@ -74,14 +75,14 @@ def test_main_without_command_exits_with_usage() -> None:
 def test_list_skills_pinned_layer(
     workdir: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """--list-skills prints the ten packaged skills, exit 0."""
+    """--list-skills prints the eleven packaged skills, exit 0."""
     _, user_dir = workdir
     code, out, err = _run(
         ["agent-context", "--list-skills"], user_dir, capsys
     )
     assert code == 0
     assert err == ""
-    assert out.splitlines() == PACKAGE_TEN
+    assert out.splitlines() == PACKAGE_ELEVEN
 
 
 def test_content_is_default_action(
@@ -102,7 +103,7 @@ def test_content_is_default_action(
 def test_show_sources_defaults(
     workdir: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """--show-sources lists layers, default statuses and 10 skills."""
+    """--show-sources lists layers, default statuses and 11 skills."""
     _, user_dir = workdir
     code, out, _ = _run(["agent-context", "--show-sources"], user_dir, capsys)
     assert code == 0
@@ -110,8 +111,8 @@ def test_show_sources_defaults(
     assert "package  " in out
     assert "AGENTS.md: default" in out
     assert "CLAUDE.md: default" in out
-    assert "skills: 10 active, 0 disabled/empty" in out
-    for name in PACKAGE_TEN:
+    assert "skills: 11 active, 0 disabled/empty" in out
+    for name in PACKAGE_ELEVEN:
         assert name in out
 
 
@@ -141,7 +142,7 @@ def test_skills_only_prints_every_active_skill(
     _, user_dir = workdir
     code, out, _ = _run(["agent-context", "--skills-only"], user_dir, capsys)
     assert code == 0
-    for name in PACKAGE_TEN:
+    for name in PACKAGE_ELEVEN:
         assert f"===== skill: {name} =====" in out
 
 
@@ -210,7 +211,7 @@ def test_skill_override_operations(
     _write(skills_dir / ".disabled", "13-signal-test\n")
     code, out, _ = _run(["agent-context", "--show-sources"], user_dir, capsys)
     assert code == 0
-    assert "skills: 10 active, 1 disabled/empty" in out
+    assert "skills: 11 active, 1 disabled/empty" in out
     assert f"{'01-preregister':<26} replaced" in out
     assert f"{'new-thing':<26} added" in out
     assert f"{'13-signal-test':<26} disabled" in out
@@ -523,9 +524,9 @@ def test_full_verification_scenario(
     tmp_path, user_dir = workdir
     project = tmp_path / ".atropos" / "agent"
 
-    # 1. defaults: ten skills, both files from the package
+    # 1. defaults: eleven skills, both files from the package
     code, out, _ = _run(["agent-context", "--list-skills"], user_dir, capsys)
-    assert out.splitlines() == PACKAGE_TEN
+    assert out.splitlines() == PACKAGE_ELEVEN
 
     # 2. project replacement changes the effective AGENTS.md
     _write(project / "AGENTS.md", "# VERIFICATION REPLACEMENT")
@@ -780,6 +781,56 @@ def test_init_second_run_skips_and_preserves_edits(
     assert "skipped (exists)" in out
     assert "created " not in out
     assert graveyard.read_text(encoding="utf-8") == "user edit\n"
+
+
+# ---------------------------------------------------------------------------
+# demo (packaged backtest demo pipeline)
+# ---------------------------------------------------------------------------
+def test_demo_quick_completes(
+    workdir: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--mode quick prints every stage plus the verdict, exit 0."""
+    pytest.importorskip("atropos.demo_pipeline")
+    _, user_dir = workdir
+    code, out, err = _run(["demo", "--mode", "quick"], user_dir, capsys)
+    assert code == 0
+    assert err == ""
+    for stage in ("STAGE 1", "STAGE 2", "STAGE 3", "STAGE 4", "STAGE 5"):
+        assert stage in out
+    assert "backtest pipeline: all stage checks passed" in out
+    assert "VERDICT" in out
+    assert "pipeline completed" in out
+
+
+def test_demo_same_seed_is_bit_identical(
+    workdir: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Two quick runs with one seed produce identical stdout."""
+    pytest.importorskip("atropos.demo_pipeline")
+    _, user_dir = workdir
+    code_first, out_first, _ = _run(
+        ["demo", "--mode", "quick", "--seed", "41"], user_dir, capsys
+    )
+    code_second, out_second, _ = _run(
+        ["demo", "--mode", "quick", "--seed", "41"], user_dir, capsys
+    )
+    assert code_first == code_second == 0
+    assert out_first == out_second
+    assert out_first != ""
+
+
+def test_demo_help_documents_mode_and_budget(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--help lists --mode quick/full with the runtime expectation."""
+    with pytest.raises(SystemExit) as exit_info:
+        main(["demo", "--help"])
+    assert exit_info.value.code == 0
+    out = capsys.readouterr().out
+    assert "--mode" in out
+    assert "quick" in out
+    assert "full" in out
+    assert "--seed" in out
 
 
 # ---------------------------------------------------------------------------

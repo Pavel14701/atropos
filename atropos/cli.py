@@ -1,6 +1,6 @@
 """Atropos command-line interface (stdlib argparse, no new deps).
 
-Four subcommands:
+Five subcommands:
 
 * ``atropos agent-context`` - print the resolved agent context
   (``--content`` default, ``--path``, ``--show-sources``,
@@ -14,7 +14,11 @@ Four subcommands:
 * ``atropos init`` - create the hypothesis workspace skeleton
   (``GRAVEYARD.md``, ``hypotheses/INDEX.csv``, ``hypotheses/README.md``
   via :func:`atropos.workspace.init_workspace`; existing files are
-  never overwritten - edit them manually after init).
+  never overwritten - edit them manually after init);
+* ``atropos demo`` - run the packaged backtest demo end to end on
+  synthetic data (``--mode quick`` reduced budget, ``--mode full``
+  the docs transcript; ``--seed`` pins the RNG) and print the stage
+  report plus the verdict block.
 
 Every agent-context handler accepts explicit ``user_dir`` /
 ``project_dir`` layer paths (``None`` = platform defaults), which is
@@ -623,10 +627,27 @@ def _cmd_init(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# demo (packaged backtest demo pipeline)
+# ---------------------------------------------------------------------------
+def _cmd_demo(args: argparse.Namespace) -> int:
+    """Handle ``atropos demo``; print stage report + verdict block."""
+    # lazy: keeps atropos.cli importable without the scientific stack
+    # (numpy/pandas/sklearn load only when the demo actually runs)
+    from atropos.demo_pipeline import (  # noqa: PLC0415
+        run_demo_pipeline,
+    )
+
+    summary = run_demo_pipeline(
+        seed=int(args.seed), quick=str(args.mode) == "quick"
+    )
+    return 0 if summary["pipeline_completed"] else 1
+
+
+# ---------------------------------------------------------------------------
 # parser + entry point
 # ---------------------------------------------------------------------------
 def _build_parser() -> argparse.ArgumentParser:
-    """Build the argparse tree for the four CLI subcommands."""
+    """Build the argparse tree for the five CLI subcommands."""
     parser = argparse.ArgumentParser(
         prog=PROG,
         description=(
@@ -734,6 +755,26 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print the plan without writing anything",
     )
+
+    demo_parser = subparsers.add_parser(
+        "demo",
+        help="run the packaged backtest demo end to end (synthetic)",
+    )
+    demo_parser.add_argument(
+        "--mode",
+        choices=["quick", "full"],
+        default="quick",
+        help=(
+            "quick: reduced model budget, seconds (default); "
+            "full: the docs transcript budget, about a minute"
+        ),
+    )
+    demo_parser.add_argument(
+        "--seed",
+        type=int,
+        default=41,
+        help="RNG seed of the synthetic OHLC world (default: 41)",
+    )
     return parser
 
 
@@ -784,6 +825,7 @@ def main(
         14-incremental-test
         15-robustness-battery
         16-walkforward-calendar
+        17-backtest-pipeline
         0
     """
     parser = _build_parser()
@@ -796,6 +838,8 @@ def main(
         return _cmd_agent_setup(args, user_dir, project_dir)
     if command == "init":
         return _cmd_init(args)
+    if command == "demo":
+        return _cmd_demo(args)
     return _cmd_agent_doctor(user_dir, project_dir)
 
 

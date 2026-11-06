@@ -51,14 +51,16 @@ from atropos.track_record import live_verdict
 # production stage for a deployed SURVIVES; LIVE_OK ≠ confirmation.
 ```
 
-## Skills (10)
+## Skills (11)
 
 Core: `01-preregister`, `02-run-pipeline` (the 9-verdict table),
 `03-read-graveyard`, `04-run-ml-kill-protocol` (the ML chain:
 features→target, walk-forward, gates). Stage 1-7 protocols:
 `11-premise-check`, `12-null-control`, `13-signal-test`,
 `14-incremental-test` (the decisive one), `15-robustness-battery`,
-`16-walkforward-calendar`. The order is fixed:
+`16-walkforward-calendar`. After a SURVIVES: `17-backtest-pipeline`
+(simulate → state machine → ranking → admission → metrics; the
+tradability test). The stage order is fixed:
 1 → 2 → 3 → 4 → 5 → 6, each stage cheaper than the next. List:
 `atropos agent-context --list-skills`; text: `--skill=NAME`.
 

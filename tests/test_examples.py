@@ -13,12 +13,22 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 EXAMPLES_DIR = Path(__file__).resolve().parents[1] / "docs" / "examples"
+SMOKE_BACKTEST_SCRIPT = (
+    Path(__file__).resolve().parents[1]
+    / "examples"
+    / "real_data"
+    / "scripts"
+    / "smoke_backtest.py"
+)
 
 # (transcript file, case banner token, recorded verdict token)
 TRANSCRIPT_CASES = [
@@ -98,4 +108,29 @@ def test_examples_source_command_is_real() -> None:
 
     assert importlib.util.find_spec(module_name) is not None, (
         f"capture command references missing module {module_name!r}"
+    )
+
+
+def test_smoke_backtest_script() -> None:
+    """The synthetic smoke backtest runs clean in a fresh interpreter.
+
+    Environment smoke only: the script replays one seeded synthetic
+    signal through the backtest engine and must exit 0 while printing
+    the simulation contract fields (``r_pess`` among them).  No
+    numeric expectations are asserted -- the smoke proves the
+    environment is assembled, not any trading verdict.
+    """
+    assert SMOKE_BACKTEST_SCRIPT.is_file(), "smoke script is missing"
+    completed = subprocess.run(
+        [sys.executable, str(SMOKE_BACKTEST_SCRIPT)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=60,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "r_pess" in completed.stdout, (
+        "smoke output lacks the r_pess contract field"
     )
