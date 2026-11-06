@@ -5,6 +5,13 @@ mini-example of its use. For the full death taxonomy see `FRAMEWORK.md` §4.
 
 ## Lifecycle
 
+**Kill-protocol** — the framework's core loop: a preregistration is
+frozen, the adversarial pipeline runs (rule chain: 7 stages,
+`atropos.ensemble_pipeline.run_full_pipeline`; ML chain:
+`run_ml_kill_protocol`, four gates over purged walk-forward), and the
+hypothesis leaves with exactly one verdict. Example: prereg committed
+Monday → 7 stages Tuesday → `REPACKAGING` at stage 1 → tombstone.
+
 **Preregistration (prereg)** — a hypothesis document frozen *before* the
 data is touched: prediction, construction, nulls, numeric kill criteria,
 power calc, spec hash. Generated and validated from a params dict by
@@ -137,6 +144,83 @@ chains: KILLED if either chain kills, SURVIVES only if every executed
 chain survives, INCONCLUSIVE when a chain cannot decide. Example:
 rule SURVIVES + ML `UNDERPOWERED` -> `INCONCLUSIVE [ml]`; rule
 REPACKAGING + ML DEAD -> `KILLED [rule+ml]`.
+
+## Backtest pipeline
+
+The reference check that runs after a verdict (`POSITIONING.md`):
+simulate → rank → admission → metrics. Its vocabulary:
+
+**CandidateGroup** — the interchange object of the ranking layer
+(`atropos.ranking`): one decision point's candidates with RAW model
+scores and realized labels (`NaN` label = untradeable). The admission
+layer consumes it only after `rank_normalize_group`. Example:
+`CandidateGroup(group_id="2024-01-02", candidates=["c_long",
+"c_short"], scores=[0.9, 0.7], labels=[0.012, -0.004])`.
+
+**RANKING_METRICS** — the open per-group ranking-quality registry in
+`atropos.ranking`: `ndcg@k`, `precision@k`, `mrr`, `spearman`;
+registering a metric (`RANKING_METRICS["ap@k"] = my_fn`) makes it
+available to comparison sweeps. Metrics read RAW scores of scored
+groups only — within a group raw and normalized scores induce the same
+order. Example: the golden path's mrr is 0.759 (gbm) vs 0.556 (random).
+
+**rank_normalize_group** — within-group rank normalization to `[0, 1]`
+with average ties (`atropos.ranking`; `atropos.backtesting` re-exports
+it): best candidate 1.0, worst 0.0, ties share the average rank
+position; a single-candidate group maps to exactly `0.5` (neutral).
+Admission reads ONLY normalized scores — raw cross-model probabilities
+(a logit 0.9, a kNN 0.7) are not comparable. Example: `[5.0, 5.0, 1.0]`
+→ `[0.75, 0.75, 0.0]`.
+
+**Admission policy** — the slot-capacity replay over a candidate
+stream (`atropos.backtesting.run_admission_policy`): `fcfs` (slots
+full → reject), `replace_low` / `replace_high` (a newcomer STRICTLY
+beating the worst open score closes that trade, which contributes 0 /
+keeps its full isolated R). Example: cap=2, the best trade arrives
+while both slots are busy — FCFS rejects it; REPLACE-low swaps out the
+worst holder.
+
+**RANKER_SUITABILITY** — honest per-model suitability marking in
+`atropos.ranking` — information, not a gate: `gbm`/`logit`/`hist_gbm`
+high, `rf`/`extratrees`/`mlp` medium, `knn`/`qda` low (noisy
+probabilities on small candidate groups; under ~10 candidates per
+group prefer the high marks). Example: a 6-candidate group world —
+mrr@2 gbm 0.404, logit 0.397, knn 0.385.
+
+**Pointwise vs lambdarank** — the two ranking oracles in
+`atropos.ranking`: `rank_within_groups` fits any registry classifier
+pointwise on `P(win)` (the default, no extra dependencies), while
+`rank_with_lambdarank` ports the donor `LGBMRanker` fit (lightgbm is
+an optional dependency, imported lazily inside the call). They rank by
+different semantics; compare their picks through `RANKING_METRICS`,
+never assert them equal.
+
+**ev_threshold** — the EV-calibrated probability threshold
+(`atropos.ranking`): scans the grid with INCLUSIVE `>=` plus the
+all-trades floor (`-inf`) and returns `(threshold, ev, n_taken)` —
+deliberately different from `atropos.ml_training.pick_threshold`
+(strict `>`, bare grid, bare threshold float). Example: on the same
+`proba`/`exec_vals`, `pick_threshold` returns `0.5` (a loss-making
+cut) while `ev_threshold` returns `(-inf, 0.03, 3)` — the floor wins.
+
+**force_close_r** — the RECONSTRUCTED P&L of a force-closed trade
+(`run_position_state_machine`, `allow_reverse=True`): an opposite-side
+signal closes the open trade at its decision bar and the row's isolated
+`r_pess`/`exit_idx` stay STALE — read `force_close_r` instead. Example:
+isolated `exit_idx` 5 but force-closed at bar 3 → `force_close_r`
+`0.697` next to the stale `exit_idx` 5.
+
+**same_bar_reentry** — the `run_position_state_machine` flag deciding
+whether a signal decided on the exit bar may take the freed slot:
+default skips it (`same_bar_after_exit` — SL-first pessimism means the
+position is still held during that bar); with the flag the signal
+takes the slot (cooldown still applies on the exit bar).
+
+**Gap-through-stop** — the `simulate_signal` contract for an entry bar
+that already OPENS beyond the stop: the trade is a scratch at costs
+(exit on the entry bar), never a +R windfall in gap-distance units.
+Example: a long planned with a stop at 102 fills at the 101 open →
+`r_opt -0.253` / `r_pess -0.404`, `exit_idx` = the entry bar.
 
 ## Doctrine
 

@@ -502,5 +502,36 @@ number does not exist.
 
 ---
 
+## §9 Reading Verdicts After the Backtest Pipeline
+
+The protocol's `SURVIVES` is a falsification statement: every attack in
+§2 failed to kill the hypothesis. It is NOT a tradeability statement.
+"Not killed" leaves the economic question open — one slot at a time, a
+real cost line, and the mechanics of turning a stream of candidate
+signals into an admitted book are nowhere tested by the seven stages.
+
+That is the job of the backtest pipeline — the reference replay that
+runs AFTER the protocol on the survivor: `simulate_signal` (isolated
+net R under the taker model, with the gap-through-stop scratch
+contract) → `run_position_state_machine` (which signals become trades
+when one slot is occupied) → `rank_within_groups` (which candidate of a
+decision point is picked, trained past-only) → `run_admission_policy`
+(FCFS vs REPLACE under a slot cap) → the per-trade metrics
+(`per_trade_sharpe`, `pooled_stats`, `bucketed_sharpe`). It speaks its
+own language — `mrr` for the ranking oracle, `per_trade_sharpe` (never
+annualized) and `max_drawdown_r` for the book — and a survivor can fail
+here too: a `SURVIVES` signal whose admitted book pays the cost line
+nowhere is not tradeable, whatever its t-statistic was.
+
+The two verdict chains are not interchangeable, and neither can stand in
+for the other. A kill verdict is not a backtest report; a backtest
+report is not a survival verdict (its metrics say nothing about
+incrementality, null controls or calendar contamination). Protocol
+first, pipeline second — read each verdict in its own vocabulary, and
+pass a survivor through both before any capital decision.
+Reference: `POSITIONING.md`, `docs/how-to/06-run-backtest-pipeline.md`.
+
+---
+
 *End of document. Stage order is mandatory, the graveyard is the product, the
 verdict comes only from the protocol.*

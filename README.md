@@ -14,6 +14,17 @@ touched, and every verdict is written down. Verdicts: `SURVIVES`,
 `PASS`/`WARN`/`FAIL`/`SKIPPED`/`INCONCLUSIVE`. Survival is not the end:
 `atropos.track_record.live_verdict` judges live PnL against the prereg.
 
+When a signal survives the kill-protocol, the next question is whether
+it is *tradeable*. Atropos ships a reference backtest pipeline for that
+— simulate → rank → admission → metrics (`atropos.backtesting`,
+`atropos.ranking`, `atropos.backtest_metrics`): replay candidates
+through a taker cost model with stop-first pessimism, rank them within
+groups with a past-only oracle, replay slot admission
+(FCFS vs REPLACE), and read per-trade metrics
+(`per_trade_sharpe`, `pooled_stats`). The kill-protocol is the product;
+the backtest pipeline is its reference companion, not the other way
+around — see `POSITIONING.md`.
+
 ## Install
 
 Python 3.11+; numpy/pandas/scipy only. `uv sync` — or `pip install -e .`
@@ -115,12 +126,22 @@ uv run python -m atropos.kill_chain          # rule x ML unified verdict
 
 Every module ships a runnable demo: `uv run python -m atropos.<module>`.
 
+The backtest layer's golden path — one script wiring the full reference
+pipeline: `docs/examples/backtest_pipeline.py`
+(`uv run python docs/examples/backtest_pipeline.py`): 161 candidate
+signals → 63 slots → 56 ranked groups, mrr 0.759 vs 0.556 (gbm vs
+random, deterministic seed).
+
 ## Read next
 
-1. `docs/how-to/` — step-by-step guides, including the ML kill
-   protocol (`run_ml_kill_protocol`).
-2. `GLOSSARY.md` — prereg, kill criteria, COD, graveyard.
-3. `FRAMEWORK.md` §1-3 — philosophy, pipeline, six laws.
+1. `POSITIONING.md` — what Atropos does, what it does not, how the
+   kill-protocol and the backtest pipeline relate.
+2. `docs/how-to/` — step-by-step guides, including the ML kill
+   protocol (`run_ml_kill_protocol`) and the backtest pipeline
+   (how-to 06-08).
+3. `GLOSSARY.md` — prereg, kill criteria, COD, graveyard, the backtest
+   pipeline's vocabulary.
+4. `FRAMEWORK.md` §1-3 — philosophy, pipeline, six laws.
 
 Committed demo transcripts (what the demos actually print) live in
 `docs/examples/`.

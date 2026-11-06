@@ -159,3 +159,27 @@ are scoped and scheduled, NOT forgotten:
   golden tests are synthetic-only.
 - **Cross-version matrix CI** — conflicts with the single pinned
   `uv.lock`; needs a separate resolution strategy first.
+
+### 5b. Backtest-layer watch-items (tracked)
+
+Status: tracked, not blocking; the safe usage rule is already
+documented where the hazard lives.
+
+- **`n_skipped` cross-ranker comparability** — `n_skipped` in
+  `rank_within_groups` counts the skipped groups of THIS run only, so
+  two rankers on the same data can end up with different
+  `scored_group_ids` sets; comparing their `RANKING_METRICS` means over
+  the full lists can let unequal skip sets fake a metric difference.
+  The docstring already pins the rule (compare on the INTERSECTION of
+  `scored_group_ids`), and the guide shows the idiom
+  (`docs/how-to/07-choose-a-ranker.md`). Watch: a small helper
+  (`metrics_on_intersection(report_a, report_b)`) would make the safe
+  path the default path.
+- **`embargo_until` is not enforced in `paired_bootstrap_diff`** — the
+  field is carried on `CandidateGroup` but the paired bootstrap
+  resamples whatever per-group values the caller hands it; a caller
+  that ignores the embargo when building those values can leak adjacent
+  groups into both arms. The docstring warns explicitly (enforcement
+  belongs to the fold scheduler that produced the values). Watch: a
+  possible future `assert`/`RuntimeWarning` when arms carry mismatched
+  or unset embargo windows.
