@@ -22,11 +22,15 @@ oracle are imposed on it?
 **What Atropos does not do.** It does not optimize strategy parameters
 or search the space of profitable configurations — a candidate that
 survived is not tuned here, and tuning after a verdict would start a
-new hypothesis anyway. The backtest pipeline does not replace a
-dedicated backtesting engine (vectorbt / backtrader / qlib): no
+new hypothesis anyway. The backtest pipeline IS a backtester — but not a general-purpose
+one.  It is a falsification-first replay of the survivor under one
+fixed, documented cost model: bar-level stop/target/time exits with a
+gap-through-stop scratch contract, a one-slot state machine, and
+slot-admission policies.  What it deliberately does not provide: no
 portfolio construction, no brokerage integration, no parameter sweeps,
-no market data handling — it is a reference replay of the survivor
-under one fixed, documented cost model. And nothing here guarantees
+no market data handling — those live in general-purpose engines
+(vectorbt / backtrader / qlib), and mixing the two roles would
+compromise the falsification-first contract. And nothing here guarantees
 profit: `SURVIVES` means "not killed by every attack we ran", never
 "trading-ready", and a passing backtest is one more non-kill, not a
 promise.
