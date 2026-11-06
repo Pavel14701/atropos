@@ -49,3 +49,34 @@ YOUR pipeline and keep your own data, execution and sizing layers.
 | Check a survivor's tradeability | `docs/examples/backtest_pipeline.py` (simulate → rank → admission → metrics) — how-to 06 |
 | Compare rankers honestly | `atropos.ranking` + `RANKING_METRICS` — how-to 07 |
 | Choose a slot admission policy | `atropos.backtesting.run_admission_policy` — how-to 08 |
+
+**The one-paragraph pitch** (and the honest version of it):
+
+> "Atropos is a falsification-first backtest framework. It does not
+> replace vectorbt — it replaces the set of scripts quant researchers
+> write AROUND vectorbt to check that their Sharpe is not an artifact.
+> The portfolio-aware layer closes the 'what about a portfolio of 100
+> names' question without claiming portfolio construction. The novelty
+> is honest verdicts and portfolio-level robustness gates, which
+> competitors do not have. Game-changing? No. Closing a real gap? Yes."
+
+Do not upgrade "closing a real gap" to "game-changing" in any pitch:
+falsification is hygiene, not discovery.  It makes research more
+honest, but it does not create new alpha — that is a different class
+of contribution (a new methodology like DSR, a new data class, new
+infrastructure).
+
+**What would have to happen to earn "game-changing"** (all three are
+earned by adoption and time, none by code):
+
+1. One external case where Atropos killed a hypothesis that
+   competitors passed — proof of value.
+2. One external case where Atropos confirmed a hypothesis that
+   competitors killed falsely — proof of calibration (it can refuse
+   to kill live edges, not only kill everything).
+3. A community that adopts the verdict language — "my signal did not
+   pass the DSR gate in Atropos" as a phrase other people use.
+
+Until all three exist, the honest sentence is: **"It does not change
+the rules of the game — it makes the game more honest."**
+
