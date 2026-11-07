@@ -1599,7 +1599,7 @@ def test_demo_stage5_maker_leg_uses_banner_half_atr_offset() -> None:
     )
     # world separation: the banner offset and the doubled offset differ
     assert at_banner != at_double
-    # the demo's maker leg must be the banner 0.25-ATR offset (fails on
-    # the live double-offset bug - see the xfail reason)
+    # the demo's maker leg must be the banner 0.25-ATR offset (this pin
+    # caught the live double-offset bug before the stage-2 fix)
     assert summary["maker_r_pess"] == pytest.approx(at_banner)
     assert summary["maker_r_pess"] != pytest.approx(at_double)

@@ -43,6 +43,10 @@ _PER_MODULE_TIMEOUT_S = 90
 # bare-invocation demo: ``python -m atropos.cli`` without a
 # subcommand is a usage error and exits 2 BY DESIGN (the subparser is
 # ``required=True``); its dispatch is exercised by tests/test_cli.py.
+# The exit-2 contract itself is behaviorally pinned below
+# (test_cli_bare_invocation_is_a_usage_error) — dropping
+# ``required=True`` fails that pin instead of silently turning cli
+# into a checks-nothing "demo".
 _ARGPARSE_ENTRYPOINTS = frozenset({"cli"})
 
 # OpenBLAS reserves its thread pool lazily per process; interpreters
@@ -132,3 +136,29 @@ def test_argparse_exclusion_stays_honest() -> None:
     unnoticed.
     """
     assert "cli" in set(_discovered_main_guard_modules())
+
+
+def test_cli_bare_invocation_is_a_usage_error() -> None:
+    """Bare ``python -m atropos.cli`` exits 2 — the exemption's teeth.
+
+    Behavioral pin behind the ``_ARGPARSE_ENTRYPOINTS`` exclusion: the
+    subparser is ``required=True``, so a bare invocation is a usage
+    error (exit 2), NOT a silent success.  If cli.py ever drops the
+    ``required=True`` (or the dispatch default changes), bare
+    ``python -m atropos.cli`` would exit 0 and this pin fails — the
+    exemption would then be hiding a runnable-but-checks-nothing demo,
+    the exact rot class the old hand-written CI step had.
+    """
+    completed = subprocess.run(
+        [sys.executable, "-m", "atropos.cli"],
+        capture_output=True,
+        text=True,
+        env=_CHILD_ENV,
+        timeout=_PER_MODULE_TIMEOUT_S,
+        check=False,
+    )
+    assert completed.returncode == 2, (
+        "bare atropos.cli no longer exits 2 (usage error); rc = "
+        f"{completed.returncode}, stderr tail:\n"
+        f"{(completed.stderr or '')[-2000:]}"
+    )

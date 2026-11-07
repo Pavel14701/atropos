@@ -97,22 +97,33 @@ smoothing instead of washing past it, passes the battery on all 10 swept
 seeds (`test_edge_class_contract_fast_vs_slow`). The xfail stays as the
 honest record that the fast class is battery-mortal.
 
-## 3. xfail — no honest synthetic construction for NO_OOS_EDGE
+## 3. Tracked gap — no honest world where the walk-forward itself kills (stage 4)
 
-Status: `xfail(strict=True)`, `tests/test_ensemble_pipeline.py`
-(`test_first_half_edge_dies_as_no_oos_edge`, `@slow`).
+Status: tracked limitation, **no xfail** — there is no test vehicle to
+mark. The stage-6 `NO_OOS_EDGE` path IS pinned by a live, unmarked
+test: `tests/test_ensemble_pipeline.py`
+(`test_first_half_edge_dies_as_no_oos_edge`) builds a first-half-edge
+world that clears stages 1-4 (walk-forward PASS, `wf_shrink_ratio`
+0.246, `verdict_reason is None` — measured and asserted in-test) and
+dies at stage 6 with `NO_OOS_EDGE`. (A prior revision of this entry
+claimed that test was `xfail(strict=True)`; the marker no longer
+exists — the claim was stale, masked by the xfail total of 2 coming
+from §2 and §5a. Rewritten 2026-11-07.)
 
-Cause: `NO_OOS_EDGE` is the one verdict that cannot be built with honest
-synthetic series data in the current tree. Structural reason: stage 3
-(the robustness battery, which attacks the lagged long/flat rule —
-harder) is stricter than stage 4 (walk-forward, which tests the
-contemporaneous sign rule — easier), so any world that clears stage 3
-still shows contemporaneous out-of-sample power; concentrated-edge
-worlds die earlier as `ARTIFACT` or `DEAD` instead. Kill-gate thresholds
-were deliberately not touched to force the verdict.
+Cause: the remaining gap is narrower than the old wording — no honest
+synthetic world has been constructed where the WALK-FORWARD stage
+itself kills (a stage-4 `FAIL`/`OVERFIT_DEATH` while stages 1-3 pass).
+Structural reason: stage 3 (the robustness battery, which attacks the
+lagged long/flat rule — harder) is stricter than stage 4
+(walk-forward, which tests the contemporaneous sign rule — easier),
+so worlds that clear stage 3 still show walk-forward power; worlds
+that fail stage 3 never reach stage 4. The shrink gate's OVERFIT
+mapping is pinned at stage 4 via the canned-monkeypatch pattern
+(see `tests/test_ensemble_pipeline.py::test_overfit_shrinkage_kills_as_dead_at_stage_four`).
 
-Unblocks: a genuinely honest series world whose walk-forward dies while
-everything before it passes — then promote it into the demo matrix. The
+Unblocks: a genuinely honest series world whose walk-forward dies
+while everything before it passes — then pin it with a regular
+(not xfail) test and promote it into the demo matrix. The
 cross-sectional `CS_NO_EDGE` path already covers the "no OOS edge"
 family on panels.
 
