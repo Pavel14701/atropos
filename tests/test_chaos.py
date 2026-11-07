@@ -357,7 +357,9 @@ def _cost_death_extras(outcome: Any) -> None:
 
 def _walkforward_extras(outcome: Any) -> None:
     """Verdict enum for walkforward payloads."""
-    _verdict_in(("PASS", "DEGRADED", "FAIL"))(outcome)
+    # INCONCLUSIVE: the shrink-NaN branch (baseline t degenerate) —
+    # stage-2 gate; undecided is not death
+    _verdict_in(("PASS", "DEGRADED", "FAIL", "INCONCLUSIVE"))(outcome)
 
 
 # ---------------------------------------------------------------------------

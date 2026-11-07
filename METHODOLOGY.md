@@ -120,9 +120,9 @@ The scaling rule: as the number of hypotheses grows, the cost of a graveyard che
 
 | Pitfall | Symptom | Remedy |
 |---------|---------|--------|
-| Post-hoc criterion drift | The kill criterion gets "refined" after a look at the data | Commit the prereg before the data pull; the linter; law 5 |
+| Post-hoc criterion drift | The kill criterion gets "refined" after a look at the data | Commit the prereg before the data pull; the linter |
 | Resurrecting a killed hypothesis | The same hypothesis under a new name | A graveyard check by tags and structure, not by title |
-| Unpinned seed | The test is not reproducible | Seed is a mandatory preregistration field (law 3) |
+| Unpinned seed | The test is not reproducible | Seed is a mandatory preregistration field |
 | Snapshot drift | The test computes on a different snapshot than declared | Snapshot ID in both the prereg and the test code |
 | Verdict inflation | Only other people's hypotheses make it to the graveyard | CI cross-check of INDEX.csv against preregistrations/ |
 | Skipping the graveyard "from memory" | Duplicates pile up | The graveyard check is a pipeline stage, not a habit |

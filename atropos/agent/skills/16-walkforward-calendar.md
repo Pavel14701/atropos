@@ -29,10 +29,17 @@ regime label, masked momentum (flag 7).
 
 ## PROCEDURE
 
-1. **ROLLING TRAIN -> TEST (not expanding).** Fixed windows: train
-   (say 180d) -> freeze thresholds (p25/p50/p75) -> test (30d);
-   shift, repeat. The expanding window is forbidden: it mixes in the
-   future.
+1. **EXPANDING TRAIN -> TEST (not rolling).** Each fold trains on ALL
+   history before its test slice, applies thresholds frozen on that
+   train (p25/p50/p75) to the next fixed test slice (say 30d), then
+   the train EXPANDS; shift, repeat. Doctrine: FRAMEWORK.md (repo
+   root) §2 stage 6, "Why expanding, not rolling" (FRAMEWORK.md:221-233)
+   - for a falsification stage more accumulated history must mean more
+   held-out evidence and a sharper verdict; a rolling window discards
+   data exactly when confidence should grow and smuggles in a free,
+   itself-tunable window-length hyperparameter. The reference
+   implementation (`atropos.walkforward_framework`) offers no rolling
+   mode at all; the earlier expanding ban is obsolete and superseded.
 2. **THRESHOLD FROZEN ON TRAIN.** ZERO parameters are revisited after
    the data (flag 3); editing a threshold after the run = a new
    version, the old test is void.
@@ -56,9 +63,18 @@ regime label, masked momentum (flag 7).
 
 ## KILL CRITERIA
 
-- **WF t < 2** — the OOS effect not replicated.
-- **A multiple shrinkage vs discovery** (≥ ~2-5x without a CI) —
-  overfit.
+- **Shrinkage > 2× → OVERFIT-DEATH.** Code semantics
+  (`atropos.walkforward_framework.walkforward`): the shrink ratio
+  `wf_shrink_ratio = wf_t / in_sample_t` FINITE and STRICTLY above
+  `shrink_cap` (default 2.0) → verdict FAIL with `verdict_reason`
+  starting `OVERFIT_DEATH` (strict `>`: a ratio exactly at the cap
+  does not fire). A NaN ratio (degenerate baseline t) → INCONCLUSIVE,
+  never a silent pass. Source: FRAMEWORK.md (repo root) §2 stage 6
+  kill criterion — "shrinkage > 2× (the test result is worse than
+  half the train result) → OVERFIT-DEATH, stop".
+- **WF t tiers (only when the shrink gate did not fire).** `wf_t ≥ 2`
+  with direction consistency ≥ 0.5 → PASS; `wf_t ≥ 1` → DEGRADED;
+  otherwise FAIL — the OOS effect not replicated.
 - **The effect in a single subperiod** — a regime artifact (a rerun
   of battery test [3]).
 - **Calendar-dependent:** t < 2 with year dummies or the beta sign
@@ -66,9 +82,10 @@ regime label, masked momentum (flag 7).
 
 ## PASS CRITERIA
 
-WF t ≥ 2 on frozen thresholds; shrinkage bounded and the CI excludes
-0; the effect lives in several subperiods; the incremental holds with
-year dummies; replication on fresh days reproduces the pilot.
+WF t ≥ 2 on frozen thresholds with the shrink ratio not over the 2×
+cap; the CI excludes 0; the effect lives in several subperiods; the
+incremental holds with year dummies; replication on fresh days
+reproduces the pilot.
 → Red thread (FRAMEWORK.md (repo root) §5): one run, one verdict —
 graveyard or a dated prereg; whatever survives everything = a
 conditional survivor with gates, NOT a leg of a system.
@@ -87,9 +104,11 @@ spread (t −4.54) shrank ~5x in walk-forward (t −0.57) → GRAVEYARD.
 
 ## COMMON MISTAKES
 
-- An expanding window instead of rolling — the past takes part in
-  fitting the test; revisiting a threshold after the first WF block
-  ("too harsh") = mining.
+- A rolling window instead of expanding — rolling discards
+  accumulated held-out evidence and adds a tunable window-length knob
+  (FRAMEWORK.md:221-233 supersedes the old rolling mandate);
+  revisiting a threshold after the first WF block ("too harsh") =
+  mining.
 - Checking only WF and not the year dummies: the full-sample t 2.96
   exists only through pooling years (ETF flows) — WF without year FE
   will miss the calendar signal.

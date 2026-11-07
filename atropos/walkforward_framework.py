@@ -19,8 +19,18 @@ predicts the next slice, and stacks the out-of-sample PnL:
   slice are REMOVED from the train slice.  With multi-period forward
   returns the label of row ``t`` covers ``[t, t + horizon)``; without a
   purge the last training labels overlap the test period and leak
-  (Lopez de Prado's purging).  ``purge_gap = label horizon`` is the
-  correct setting; 0 keeps the historical behaviour.
+  (Lopez de Prado's purging).  Set ``purge_gap`` to the label horizon
+  for multi-period labels; 0 keeps the historical behaviour.
+  ``purge_gap`` (a leakage guard between train and test) is SEPARATE
+  from ``label_horizon`` (the non-overlap assumption the ``wf_t``
+  statistic makes about the test union); see the parameter docstring.
+* **Overfit gate** - the verdict first consults the shrink ratio
+  (``wf_t`` over the full-sample in-sample reference ``t``): a finite
+  ratio STRICTLY above ``shrink_cap`` (default 2.0) is OVERFIT-DEATH -
+  FAIL with a ``verdict_reason`` marked ``OVERFIT_DEATH`` (the
+  FRAMEWORK.md stage-6 kill criterion "shrinkage > 2x -> OVERFIT-DEATH");
+  a NaN ratio (degenerate baseline) is INCONCLUSIVE, never a silent
+  pass.  The ``wf_t`` tiers apply only when the gate did not fire.
 * **No peeking** - ``fit_fn`` receives the train slice only,
   structurally, and ``predict_fn`` receives the test frame WITHOUT the
   outcome column, so neither hook can touch realized test returns; the
@@ -48,8 +58,8 @@ predicts the next slice, and stacks the out-of-sample PnL:
   (the default OLS fit is threshold-free).
 
 Returned dict: ``{wf_t, wf_direction_consistency, wf_shrink_ratio,
-verdict, n_folds, in_sample_t, folds, warnings, mode, purge_gap,
-n_pnl_unique, overlap_factor}``.  ``in_sample_t`` is a
+verdict, verdict_reason, n_folds, in_sample_t, folds, warnings, mode,
+purge_gap, n_pnl_unique, overlap_factor}``.  ``in_sample_t`` is a
 LOOKAHEAD-DIAGNOSTIC: computed by refitting on the FULL sample -
 in-sample by construction; used only as the ``wf_shrink_ratio``
 denominator, never for verdicts.
@@ -67,6 +77,7 @@ Run ``python -m atropos.walkforward_framework`` for a synthetic demo.
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Callable
 from typing import Any
@@ -241,6 +252,8 @@ def walkforward(  # noqa: PLR0912, PLR0915  # one branch per stage
     outcome_col: str = "outcome",
     forbid_calendar: bool = True,
     purge_gap: int = 0,
+    shrink_cap: float = 2.0,
+    label_horizon: int = 1,
 ) -> dict[str, Any]:
     """Expanding-window walk-forward evaluation with anti-peeking checks.
 
@@ -276,13 +289,36 @@ def walkforward(  # noqa: PLR0912, PLR0915  # one branch per stage
     purge_gap : (keyword-only) rows removed from the END of each train
         slice so overlapping forward-return labels cannot leak into the
         test period; set it to the label horizon (e.g. 1 for one-period
-        forward returns).
+        forward returns).  A LEAKAGE GUARD only - never reused as the
+        label horizon itself.
+    shrink_cap : (keyword-only) strict upper bound for the shrink ratio
+        ``wf_t / in_sample_t``.  A finite ratio STRICTLY above it is
+        OVERFIT-DEATH: verdict FAIL with ``verdict_reason``
+        ``OVERFIT_DEATH: shrinkage N.NNx`` - the FRAMEWORK.md stage-6
+        kill criterion ("shrinkage > 2x -> OVERFIT-DEATH": the
+        walk-forward result departs from the in-sample reference by
+        more than the cap).  The boundary is STRICT (``>``): a ratio
+        exactly equal to ``shrink_cap`` does NOT fire and the ``wf_t``
+        tiers decide.  Must be finite and > 0; the gate is evaluated
+        without consulting ``wf_t`` finiteness.
+    label_horizon : (keyword-only) forward-label overlap length the
+        ``wf_t`` statistic assumes: labels are treated as
+        non-overlapping inside the test union, which is exact only for
+        ``label_horizon == 1``.  This parameter DOCUMENTS that
+        assumption; it does NOT change ``purge_gap`` semantics (the
+        purge stays the leakage guard between train and test).  Values
+        > 1 raise ``ValueError`` (overlap correction is not implemented
+        - see KNOWN-ISSUES.md section 6); values below 1 are rejected
+        as invalid.
 
     Returns:
     -------
     dict with ``wf_t`` (out-of-sample t-stat over the union of test
     rows), ``wf_direction_consistency``, ``wf_shrink_ratio`` (``wf_t``
-    divided by the in-sample t), ``verdict``, ``n_folds``,
+    divided by the in-sample t), ``verdict``, ``verdict_reason`` (None
+    for tier verdicts; the OVERFIT_DEATH or shrinkage-NaN marker
+    otherwise - downstream consumers detect a death from this field
+    without recomputing), ``n_folds``,
     ``in_sample_t`` (LOOKAHEAD-DIAGNOSTIC: computed by refitting on
     the FULL sample - in-sample by construction; used only as the
     ``wf_shrink_ratio`` denominator, never for verdicts), ``folds``
@@ -294,8 +330,15 @@ def walkforward(  # noqa: PLR0912, PLR0915  # one branch per stage
     a naive overlapping stack would count every row up to this many
     times and inflate ``wf_t`` by up to ``sqrt(overlap_factor)``).
 
-    Verdict: PASS if ``wf_t >= 2`` and direction consistency >= 0.5;
-    DEGRADED if ``wf_t >= 1``; FAIL otherwise.
+    Verdict, in order: (1) overfit gate - a finite shrink ratio
+    STRICTLY above ``shrink_cap`` -> FAIL with ``verdict_reason``
+    starting ``OVERFIT_DEATH`` (FRAMEWORK.md stage-6 kill criterion
+    "shrinkage > 2x -> OVERFIT-DEATH"); (2) a NaN shrink ratio
+    (degenerate or zero baseline t) -> INCONCLUSIVE with
+    ``verdict_reason`` "OVERFIT check undefined: shrinkage NaN
+    (baseline t degenerate)" - undecided, never a silent pass;
+    (3) only then the wf_t tiers: PASS if ``wf_t >= 2`` and direction
+    consistency >= 0.5; DEGRADED if ``wf_t >= 1``; FAIL otherwise.
 
     Example::
 
@@ -327,6 +370,21 @@ def walkforward(  # noqa: PLR0912, PLR0915  # one branch per stage
         )
     if purge_gap < 0:
         raise ValueError("purge_gap must be >= 0")
+    shrink_cap = float(shrink_cap)
+    if not math.isfinite(shrink_cap) or shrink_cap <= 0.0:
+        raise ValueError("shrink_cap must be finite and > 0")
+    label_horizon = int(label_horizon)
+    if label_horizon < 1:
+        raise ValueError("label_horizon must be an int >= 1")
+    if label_horizon > 1:
+        # overlap inflates wf_t (anti-conservative) and the Newey-West
+        # style correction does not exist yet: refuse loudly instead of
+        # reporting an uncalibrated statistic
+        raise ValueError(
+            "label_horizon>1 requires overlap correction; not "
+            "implemented - see KNOWN-ISSUES section 6; set "
+            "label_horizon=1"
+        )
     if train_window + purge_gap + test_window > n_rows:
         raise ValueError(
             f"n={n_rows} too small for train_window={train_window}"
@@ -434,7 +492,22 @@ def walkforward(  # noqa: PLR0912, PLR0915  # one branch per stage
         else float("nan")
     )
 
-    if np.isfinite(wf_t) and wf_t >= 2.0 and direction >= 0.5:
+    verdict_reason: str | None = None
+    if math.isfinite(shrink) and shrink > shrink_cap:
+        # FRAMEWORK.md stage-6 kill criterion: the walk-forward result
+        # departs from the in-sample reference by more than the cap ->
+        # OVERFIT-DEATH.  Strictly '>' (a ratio exactly at the cap does
+        # not fire) and independent of wf_t finiteness by design.
+        verdict = "FAIL"
+        verdict_reason = f"OVERFIT_DEATH: shrinkage {shrink:.2f}x"
+    elif not math.isfinite(shrink):
+        # baseline t degenerate or zero: the overfit check is undefined,
+        # so no tier is trustworthy - undecided, never a silent pass
+        verdict = "INCONCLUSIVE"
+        verdict_reason = (
+            "OVERFIT check undefined: shrinkage NaN (baseline t degenerate)"
+        )
+    elif np.isfinite(wf_t) and wf_t >= 2.0 and direction >= 0.5:
         verdict = "PASS"
     elif np.isfinite(wf_t) and wf_t >= 1.0:
         verdict = "DEGRADED"
@@ -459,6 +532,7 @@ def walkforward(  # noqa: PLR0912, PLR0915  # one branch per stage
         "wf_direction_consistency": direction,
         "wf_shrink_ratio": shrink,
         "verdict": verdict,
+        "verdict_reason": verdict_reason,
         "n_folds": int(folds_df.shape[0]),
         # LOOKAHEAD-DIAGNOSTIC: full-sample refit, in-sample by
         # construction; shrink-ratio denominator only, never a verdict.

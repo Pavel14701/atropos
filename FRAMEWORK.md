@@ -78,7 +78,11 @@ predictive evaluation (purged CV, feature-importance stability, deflated
 Sharpe) → optional cross-sectional panel tests. The premise check (stage 1)
 and the raw-signal sanity look (stage 3) stay with the researcher — a machine
 cannot check that an instrument exists or that the sign matches the
-prediction's rationale.
+prediction's rationale. Cost baselines differ by layer, by design: this law's
+20bp round trip is the doc line, the backtesting engine's taker default is
+25bp round trip (`2 * comm + gen_slip`, `atropos.backtesting.CostModel`), and
+the pipeline's stage-5 default nets 10bp one-way per unit turnover
+(`cost.cost_bps` in `atropos.ensemble_pipeline.DEFAULT_CONFIG`).
 
 ### Stage 1. PREMISE-CHECK — does the condition exist in the target market?
 

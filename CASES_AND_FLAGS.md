@@ -96,7 +96,10 @@ breaks the ladder's monotonicity.
 **Example.** Ex-Kurt on the spread — "the only marginal predictor of
 round-15": discovery spread −0.024, CI [−0.047, −0.0008] excludes 0,
 consistency 3/4 years — but the p90/p10 thresholds were taken from
-the full data (honestly disclosed). Walk-forward (rolling 180d train
+the full data (honestly disclosed). (Historical record, pre-ATR-09
+doctrine sync: the rolling walk-forward below is how it was run then;
+current doctrine is expanding-window — FRAMEWORK.md §2 stage 6, "Why
+expanding, not rolling".) Walk-forward (rolling 180d train
 → frozen p25/p50/p75 → 30d test, 27 blocks, 6440 pair-days): spread
 −0.00457 (t −0.57) — **a ~5× shrink**; the q1..q4 ladder
 −0.003/−0.008/−0.003/−0.009 — a non-monotone zigzag, strictly

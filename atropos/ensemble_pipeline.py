@@ -41,13 +41,18 @@ Decision tree (first FAIL decides):
   specs is INCONCLUSIVE - a WARN, not a pass)
 * stage 3 DEAD or FRAGILE (fewer than 5/7 battery
   tests passed: ROBUSTNESS-DEATH)                  -> ``DEAD``
-* stage 4 walk-forward FAIL                        -> ``NO_OOS_EDGE``
+* stage 4 walk-forward FAIL, shrinkage over
+  the cap (OVERFIT_DEATH)                          -> ``DEAD``
+* stage 4 walk-forward FAIL (weak OOS edge only)  -> ``NO_OOS_EDGE``
 * stage 4 walk-forward cannot run (the
   configuration exceeds the aligned data)          -> ``INCONCLUSIVE``
 * stage 5 drawdown-tail breach, or a Sharpe-floor
   breach that persists gross of costs              -> ``RISK``
 * stage 5 net-of-cost Sharpe floor breach ONLY (the
-  gross envelope passes, drawdown tail intact)     -> ``COST_DEATH``
+  gross envelope passes, drawdown tail intact), or
+  the same net breach with the stage-5 breakeven
+  gate fired (``cost_bps >= breakeven``, drawdown
+  tail intact)                                     -> ``COST_DEATH``
 * stage 6 OOS evaluation fail                      -> ``NO_OOS_EDGE``
 * stage 7 cross-sectional tests fail               -> ``CS_NO_EDGE``
 * panel-only mode: stage 7 passes, no warnings     -> ``SURVIVES_CS_ONLY``
@@ -145,9 +150,17 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "train_window": 180,
         "test_window": 30,
         "step": 30,
-        # rows purged between train and test (label horizon; the pipeline
-        # predicts one-period forward returns -> 1)
+        # purge_gap: rows removed from the END of each train slice -
+        # the leakage guard between train and test (the pipeline
+        # predicts one-period forward returns -> 1).  Distinct from
+        # label_horizon below; never conflated with it.
         "purge_gap": 1,
+        # label_horizon: forward-label overlap length the wf_t
+        # statistic assumes (non-overlapping labels inside the test
+        # union) - a DOCUMENTED assumption, not a purge setting.
+        # >1 raises (overlap correction unimplemented - see
+        # KNOWN-ISSUES.md section 6).
+        "label_horizon": 1,
     },
     "purged_cv": {"n_splits": 5, "purge_gap": 1},
     "wf_eval": {"train_window": 180, "test_window": 30, "purge_gap": 1},
@@ -222,10 +235,18 @@ _COST_DEATH_REASON = (
     "passes - the edge is eaten by transaction costs (COST-DEATH)"
 )
 
+_OVERFIT_DEATH_MARKER = "OVERFIT_DEATH"
+"""Marker inside the stage-4 result's ``verdict_reason`` (set by
+:func:`atropos.walkforward_framework.walkforward` when the shrink ratio
+is finite and strictly above ``shrink_cap``): the verdict is a DEAD,
+not a plain missing-edge NO_OOS_EDGE (FRAMEWORK.md stage-6 kill
+criterion)."""
+
 _INCONCLUSIVE_REASON = "insufficient data for walk-forward configuration"
 """Stage-4 INCONCLUSIVE cause: the configuration cannot fit even one
 fold on the aligned data (ATR-06).  "Could not test" is not evidence
-of "no edge", so this never reads NO_OOS_EDGE."""
+of "no edge", so this never reads NO_OOS_EDGE.  A shrinkage-NaN
+INCONCLUSIVE carries its own verdict_reason instead of this one."""
 
 # stage 2: minimum number of TESTABLE specs a curve must reach before a
 # SURVIVES call is trusted (max-of-few-specs is a multiple search too
@@ -538,7 +559,9 @@ def _stage_3_robustness_battery(
                 bcfg.get("window", DEFAULT_CONFIG["battery"]["window"])
             ),
             "n_boot": int(bcfg.get("n_boot", 1000)),
-            "block": int(bcfg.get("block", 20)),
+            "block": int(
+                bcfg.get("block", DEFAULT_CONFIG["battery"]["block"])
+            ),
             "seed": int(cfg["seed"]),
         },
     )
@@ -575,11 +598,20 @@ def _stage_4_walkforward(
 ) -> dict[str, Any]:
     """Expanding-window walk-forward with anti-peeking enforcement.
 
-    A :class:`ValueError` whose message marks a configuration the data
-    cannot carry (``"too small"`` / ``"train_window"``: not enough
-    rows for even one fold) is INCONCLUSIVE, not a FAIL (ATR-06) --
-    the configuration did not fit, which says nothing about the edge.
-    Any other walk-forward rejection stays a FAIL.
+    Verdict mapping: PASS -> PASS, DEGRADED -> WARN, FAIL -> FAIL and
+    INCONCLUSIVE -> INCONCLUSIVE (a shrinkage-NaN walk-forward cannot
+    hand out a tier).  The walk-forward's ``verdict_reason`` is carried
+    through verbatim (it marks OVERFIT_DEATH or the shrinkage-NaN
+    cause) so the caller can classify without recomputing; when set it
+    is also appended to the summary.
+
+    A :class:`ValueError` whose message marks a capacity the data
+    cannot carry (``"too small"``: not enough rows for even one fold)
+    is INCONCLUSIVE, not a FAIL (ATR-06) -- the configuration did not
+    fit, which says nothing about the edge.  Any other walk-forward
+    rejection is a caller/config error (bad window sizes, negative
+    purge gap, ``label_horizon > 1``) and PROPAGATES loudly instead of
+    being classified here.
     """
     wcfg = cfg["walkforward"]
     df_wf = pd.DataFrame({"signal": al["signal"], "outcome": al["returns"]})
@@ -591,32 +623,32 @@ def _stage_4_walkforward(
             step=int(wcfg.get("step", 30)),
             forbid_calendar=True,
             purge_gap=int(wcfg.get("purge_gap", 0)),
+            label_horizon=int(wcfg.get("label_horizon", 1)),
         )
     except ValueError as exc:
-        message = str(exc)
-        undersized = "too small" in message or "train_window" in message
-        if undersized:
-            return {
-                "stage": 4,
-                "name": _STAGE_NAMES[4],
-                "status": "INCONCLUSIVE",
-                "summary": (
-                    "walk-forward could not run: insufficient data for"
-                    f" the configuration ({message})"
-                ),
-                "results": {"error": message},
-            }
+        if "too small" not in str(exc):
+            # caller/config error (e.g. train_window below the
+            # framework floor): re-raise, never classify it as the
+            # data-capacity INCONCLUSIVE (a typo'd config would
+            # otherwise read as "could not test")
+            raise
         return {
             "stage": 4,
             "name": _STAGE_NAMES[4],
-            "status": "FAIL",
-            "summary": f"walk-forward rejected the setup: {message}",
-            "results": {"error": message},
+            "status": "INCONCLUSIVE",
+            "summary": (
+                "walk-forward could not run: insufficient data for"
+                f" the configuration ({exc})"
+            ),
+            "results": {"error": str(exc)},
         }
     no_peek = check_no_peeking(wf)
-    status = {"PASS": "PASS", "DEGRADED": "WARN", "FAIL": "FAIL"}[
-        wf["verdict"]
-    ]
+    status = {
+        "PASS": "PASS",
+        "DEGRADED": "WARN",
+        "FAIL": "FAIL",
+        "INCONCLUSIVE": "INCONCLUSIVE",
+    }[wf["verdict"]]
     if not no_peek:
         status = "FAIL"
     summary = (
@@ -626,6 +658,9 @@ def _stage_4_walkforward(
         f"no_peeking={no_peek}, mode={wf['mode']}, "
         f"purge={int(wf.get('purge_gap', 0))})"
     )
+    reason = wf.get("verdict_reason")
+    if reason:
+        summary = f"{summary} [{reason}]"
     return {
         "stage": 4,
         "name": _STAGE_NAMES[4],
@@ -669,9 +704,25 @@ def _stage_5_monte_carlo(
       -> ``RISK``
     * net Sharpe floor breached while the gross envelope clears it
       -> ``COST_DEATH`` (``cost_breach=True``)
+    * net Sharpe floor breached, drawdown tail intact, and the
+      breakeven gate fires (``cost_bps >= breakeven_cost_bps`` with a
+      finite positive breakeven) -> ``COST_DEATH`` too: costs at or
+      above the edge-eating level attribute the death to costs even
+      when the gross bootstrap envelope is too noisy to vouch for the
+      edge (the breakeven number itself proves a positive gross mean).
+      The boundary is inclusive on the cost side - a cost exactly
+      equal to the breakeven kills, because the net edge is then
+      exactly eaten.  A non-positive breakeven (no gross edge in the
+      mean), NaN (neither edge nor trading) and inf (never trades) can
+      never fire the gate.
 
     So a drawdown breach always dominates: ``COST_DEATH`` requires the
-    drawdown tail to be intact and the gross envelope to pass.
+    drawdown tail to be intact, and either the gross envelope to pass
+    or the breakeven gate to fire.  The breakeven comparison is a kill
+    ATTRIBUTION, not a reported number: when it fires, the verdict is
+    the existing ``COST_DEATH`` path (no new token), and
+    ``results["cost"]["breakeven_breach"]`` records that the gate (not
+    the gross-envelope comparison) drove the attribution.
 
     Entry-day exclusion: ``strat[0] = 0`` by construction (no position
     is held on the entry day) and it carries no turnover charge, so
@@ -737,9 +788,21 @@ def _stage_5_monte_carlo(
         and np.isfinite(gross_sr_p5)
         and gross_sr_p5 > sr_floor
     )
-    # verdict matrix (see docstring): a drawdown breach always yields RISK,
-    # COST_DEATH needs net fail + gross pass + intact drawdown tail
-    cost_breach = sr_fail and not mdd_fail and gross_pass
+    # breakeven gate: a finite positive breakeven proves the gross MEAN
+    # is positive, so costs at or above it attribute a net-envelope
+    # death to costs even when the gross bootstrap p5 is too noisy to
+    # clear the floor.  NaN (no edge, no trading), inf (never trades)
+    # and a non-positive breakeven (no gross edge in the mean) can
+    # never fire: the comparison then cannot attribute a death to
+    # costs because there is no edge to eat.  The verdict matrix (see
+    # docstring): a drawdown breach always yields RISK, COST_DEATH
+    # needs net fail + intact drawdown tail + (gross pass or this gate)
+    breakeven_breach = bool(
+        np.isfinite(breakeven) and breakeven > 0.0 and cost_bps >= breakeven
+    )
+    cost_breach = (
+        sr_fail and not mdd_fail and (gross_pass or breakeven_breach)
+    )
     reasons: list[str] = []
     if sr_fail:
         if cost_breach:
@@ -786,6 +849,10 @@ def _stage_5_monte_carlo(
             "cost": {
                 "cost_bps": cost_bps,
                 "breakeven_cost_bps": breakeven,
+                # True when the breakeven gate (cost_bps >= breakeven,
+                # finite positive breakeven) drove the cost_breach
+                # attribution - see the verdict matrix in the docstring
+                "breakeven_breach": breakeven_breach,
                 "annual_turnover": turn["annual_turnover"],
                 "n_changes": turn["n_changes"],
                 "cost_drag_mean": cost_drag,
@@ -1058,41 +1125,55 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0915
 ) -> dict[str, Any]:
     """Chain the adversarial stages; kill on the first FAIL.
 
-    Parameters
-    ----------
-    data : dict with ``returns`` (per-period forward returns), ``signal``
-        (same index), optional ``features`` (known control factors), optional
-        ``mom7`` / ``mom30`` (observed momentum factors; trailing-return sums
-        are used when absent), optional ``hypothesis`` (description).
-        Panel mode: ``panel_signal`` / ``panel_returns`` DataFrames (rows =
-        dates, columns = assets) enable stage 7; given alone, stages 1-6 are
-        SKIPPED (panel-only mode).
-    hypothesis_config : optional overrides over :data:`DEFAULT_CONFIG`
-        (nested dicts are merged key-wise).  Notable keys: ``cost.cost_bps``
-        (one-way cost in bps, netted out in stage 5), ``model``
-        (``"ols"`` | ``"knn"`` | ``"kernel"`` | callable factory, stage 6).
-    prereg_hash : keyword-only hash of the frozen preregistration this run
-        is bound to (e.g. :func:`atropos.prereg_generator.spec_hash` of the
-        frozen params).  Purely an anchor: when given, the report echoes it
-        as ``report["prereg_hash"]`` so a verdict can never drift away from
-        the spec it was preregistered under; ``None`` (the default) leaves
-        the key ``None`` and the run unanchored.
+    Args:
+        data: dict with ``returns`` (per-period forward returns),
+            ``signal`` (same index), optional ``features`` (known
+            control factors), optional ``mom7`` / ``mom30`` (observed
+            momentum factors; trailing-return sums are used when
+            absent), optional ``hypothesis`` (description).  Panel
+            mode: ``panel_signal`` / ``panel_returns`` DataFrames
+            (rows = dates, columns = assets) enable stage 7; given
+            alone, stages 1-6 are SKIPPED (panel-only mode).
+        hypothesis_config: optional overrides over
+            :data:`DEFAULT_CONFIG` (nested dicts are merged
+            key-wise).  Notable keys: ``cost.cost_bps`` (one-way cost
+            in bps, netted out in stage 5), ``model`` (``"ols"`` |
+            ``"knn"`` | ``"kernel"`` | callable factory, stage 6).
+        prereg_hash: keyword-only hash of the frozen preregistration
+            this run is bound to (e.g.
+            :func:`atropos.prereg_generator.spec_hash` of the frozen
+            params).  Purely an anchor: when given, the report echoes
+            it as ``report["prereg_hash"]`` so a verdict can never
+            drift away from the spec it was preregistered under;
+            ``None`` (the default) leaves the key ``None`` and the
+            run unanchored.
 
-    Returns one dict: ``{hypothesis, n_obs, date_range, overall_verdict,
-    killed_by_stage, kill_reason, stages (list of per-stage dicts),
-    config, runtime_seconds, prereg_hash}``.  Verdicts: ``REPACKAGING`` /
-    ``ARTIFACT`` / ``DEAD`` / ``NO_OOS_EDGE`` / ``RISK`` / ``COST_DEATH`` /
-    ``CS_NO_EDGE`` (kills), ``INCONCLUSIVE`` (a walk-forward configuration
-    the data cannot carry -- undecided, not a kill), ``SURVIVES`` /
-    ``SURVIVES_WITH_WARNINGS`` (every executed series attack missed) and
-    the panel-only ``SURVIVES_CS_ONLY`` / ``SURVIVES_CS_ONLY_WITH_WARNINGS``
-    (only the cross-sectional attack ran -- never a plain ``SURVIVES``).
-    Stages after the killer are
-    ``SKIPPED`` (with a kill-context summary); in a series-only survival
-    stage 7 is ``SKIPPED`` as an optional stage (no panel data).  The
-    returned ``config`` is a JSON-serializable copy: a callable ``model``
-    shows up as ``"<callable>"`` while the pipeline itself runs the real
-    factory.
+    Returns:
+        One dict: ``{hypothesis, n_obs, date_range, overall_verdict,
+        killed_by_stage, kill_reason, stages (list of per-stage
+        dicts), config, runtime_seconds, prereg_hash}``.  Verdicts:
+        ``REPACKAGING`` / ``ARTIFACT`` / ``DEAD`` / ``NO_OOS_EDGE`` /
+        ``RISK`` / ``COST_DEATH`` / ``CS_NO_EDGE`` (kills; ``DEAD``
+        also covers a stage-4 OVERFIT_DEATH - walk-forward shrinkage
+        strictly above the cap - with the gate's reason as
+        ``kill_reason``),
+        ``INCONCLUSIVE`` (a walk-forward configuration the data
+        cannot carry, or a NaN shrinkage -- undecided, not a kill; the
+        reason names the blocker), ``SURVIVES`` /
+        ``SURVIVES_WITH_WARNINGS`` (every executed series attack
+        missed) and the panel-only ``SURVIVES_CS_ONLY`` /
+        ``SURVIVES_CS_ONLY_WITH_WARNINGS`` (only the cross-sectional
+        attack ran -- never a plain ``SURVIVES``).  Stages after the
+        killer are ``SKIPPED`` (with a kill-context summary); in a
+        series-only survival stage 7 is ``SKIPPED`` as an optional
+        stage (no panel data).  The returned ``config`` is a
+        JSON-serializable copy: a callable ``model`` shows up as
+        ``"<callable>"`` while the pipeline itself runs the real
+        factory.
+
+    Raises:
+        ValueError: if ``data`` lacks a usable ``returns`` stream or
+            the panel inputs violate the aligner's label contract.
     """
     t0 = time.time()
     cfg = _merge_config(hypothesis_config)
@@ -1108,7 +1189,16 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0915
         *,
         panel_only: bool = False,
         inconclusive_reason: str | None = None,
+        kill_verdict: str | None = None,
+        kill_reason_override: str | None = None,
     ) -> dict[str, Any]:
+        """Assemble the report; kill on ``killed_stage`` is final.
+
+        ``kill_verdict`` / ``kill_reason_override`` refine the default
+        kill label for one case: the stage-4 OVERFIT_DEATH gate reads
+        DEAD (not NO_OOS_EDGE) with the gate's own reason - the
+        killed_by_stage and kill_chain handling of DEAD are unchanged.
+        """
         if killed_stage is None and inconclusive_reason is not None:
             # "could not test" is not a kill and not a pass: undecided,
             # with the blocker named (ATR-06)
@@ -1131,8 +1221,16 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0915
                 verdict = "COST_DEATH"
                 reason = _COST_DEATH_REASON
             else:
-                verdict = _KILL_VERDICTS[killed_stage]
-                reason = _KILL_REASONS[killed_stage]
+                verdict = (
+                    kill_verdict
+                    if kill_verdict is not None
+                    else _KILL_VERDICTS[killed_stage]
+                )
+                reason = (
+                    kill_reason_override
+                    if kill_reason_override is not None
+                    else _KILL_REASONS[killed_stage]
+                )
         elif panel_only:
             # only the cross-sectional attack ran: a plain SURVIVES
             # ("every attack missed") is unreachable -- the CS-only
@@ -1231,8 +1329,25 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0915
     s4 = _stage_4_walkforward(al, cfg)
     stages.append(s4)
     if s4["status"] == "INCONCLUSIVE":
-        return _finish(None, inconclusive_reason=_INCONCLUSIVE_REASON)
+        # a shrinkage-NaN INCONCLUSIVE names its own cause (visible,
+        # not swallowed by the generic "insufficient data" reason)
+        s4_reason = str(s4.get("results", {}).get("verdict_reason") or "")
+        return _finish(
+            None,
+            inconclusive_reason=s4_reason or _INCONCLUSIVE_REASON,
+        )
     if s4["status"] == "FAIL":
+        s4_reason = str(s4.get("results", {}).get("verdict_reason") or "")
+        if _OVERFIT_DEATH_MARKER in s4_reason:
+            # FRAMEWORK.md stage-6 kill criterion: the shrink gate
+            # fired - an overfit signature is a DEAD, not a plain
+            # missing-edge NO_OOS_EDGE; kill_chain handles DEAD
+            # already and killed_by_stage stays 4
+            return _finish(
+                4,
+                kill_verdict="DEAD",
+                kill_reason_override=s4_reason,
+            )
         return _finish(4)
 
     # stage 5 (threshold dependency: the battery's stage-3 threshold) ------

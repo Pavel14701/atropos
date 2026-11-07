@@ -9,6 +9,9 @@ rows - each row exactly once - so refit frequency cannot inflate wf_t.
 
 from __future__ import annotations
 
+import math
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -428,3 +431,222 @@ def test_default_predict_constant_predictions_raise() -> None:
     )
     with pytest.raises(ValueError, match="constant predictions"):
         walkforward(data, train_window=150, test_window=50, step=50)
+
+
+# ----------------------------------------------------------------------------
+# shrink gate (FRAMEWORK.md stage-6 kill criterion) + label_horizon
+# ----------------------------------------------------------------------------
+def _predict_zero(
+    _model: dict[str, float], test_df: pd.DataFrame
+) -> np.ndarray:
+    """All-zero forecasts: sign 0 -> fully degenerate PnL statistics."""
+    return np.zeros(len(test_df))
+
+
+def _shrink_world(
+    seed: int,
+    clean_coef: float,
+    clean_noise: float,
+    n_obs: int = 420,
+    split: int = 300,
+) -> pd.DataFrame:
+    """Edge-free early sample, strong late edge with clean noise.
+
+    The full-sample in-sample reference t is diluted by the first 300
+    rows (weak loading, wide noise) while the walk-forward union
+    (rows 300..420 under train_window=300) sees only the late clean
+    edge, so ``wf_shrink_ratio = wf_t / in_sample_t`` lands far above
+    the 2.0x default cap.
+    """
+    gen = np.random.default_rng(seed)
+    driver = gen.standard_normal(n_obs)
+    outcome = np.empty(n_obs)
+    outcome[:split] = 0.4 * driver[:split] + (
+        2.0 * gen.standard_normal(split)
+    )
+    outcome[split:] = clean_coef * driver[split:] + (
+        clean_noise * gen.standard_normal(n_obs - split)
+    )
+    return pd.DataFrame({"signal": driver, "outcome": outcome})
+
+
+def _shrink_run(data: pd.DataFrame, **kwargs: Any) -> dict[str, Any]:
+    """Deterministic sign-rule walk-forward used by the shrink tests."""
+    params: dict[str, Any] = {
+        "train_window": 300,
+        "test_window": 40,
+        "step": 40,
+        "fit_fn": _fit_const,
+        "predict_fn": _predict_identity,
+    }
+    params.update(kwargs)
+    return walkforward(data, **params)
+
+
+def test_shrinkage_over_cap_is_overfit_death() -> None:
+    """Ratio far above the cap: FAIL with an OVERFIT_DEATH marker.
+
+    Old behaviour (pre-gate): the shrink ratio was computed but never
+    consulted, so this world walked forward to PASS (wf_t ~ 15,
+    direction ~ 0.99) no matter how far it departed from the in-sample
+    reference.  The FRAMEWORK.md stage-6 kill criterion
+    ("shrinkage > 2x -> OVERFIT-DEATH") now flips it to a FAIL whose
+    verdict_reason carries the OVERFIT_DEATH marker.
+    """
+    result = _shrink_run(
+        _shrink_world(seed=42, clean_coef=1.5, clean_noise=0.05)
+    )
+    shrink = float(result["wf_shrink_ratio"])
+    assert np.isfinite(shrink) and shrink > 2.0
+    assert result["verdict"] == "FAIL"
+    reason = result["verdict_reason"]
+    assert reason is not None
+    assert "OVERFIT_DEATH" in reason
+    assert "shrinkage" in reason
+
+
+def test_shrinkage_gate_boundary_is_strict() -> None:
+    """A ratio exactly AT the cap must not fire; a hair below does.
+
+    The cap is adaptive: the probe run reports the world's ratio s,
+    the second run sets ``shrink_cap=s`` (exact float equality - the
+    strict ``>`` keeps the gate silent and the wf_t tier decides,
+    PASS here), the third sets the adjacent-below double so
+    ``s > cap`` fires.  Mutation target: loosening ``>`` to ``>=``
+    turns the equality run into an OVERFIT_DEATH FAIL.
+    """
+    data = _shrink_world(seed=42, clean_coef=1.5, clean_noise=0.05)
+    probe = _shrink_run(data)
+    ratio = float(probe["wf_shrink_ratio"])
+    assert np.isfinite(ratio) and ratio > 0.0
+    assert probe["wf_t"] >= 2.0
+    assert probe["wf_direction_consistency"] >= 0.5
+    at_cap = _shrink_run(data, shrink_cap=ratio)
+    assert at_cap["verdict"] == "PASS"
+    assert at_cap["verdict_reason"] is None
+    just_below = _shrink_run(
+        data, shrink_cap=math.nextafter(ratio, -math.inf)
+    )
+    assert just_below["verdict"] == "FAIL"
+    assert just_below["verdict_reason"] is not None
+    assert "OVERFIT_DEATH" in str(just_below["verdict_reason"])
+
+
+def test_shrinkage_at_cap_weak_wf_t_takes_the_tier() -> None:
+    """At cap == ratio a weak wf_t takes its DEGRADED tier untouched.
+
+    The gate applies ONLY above the strict cap; the tier semantics
+    (wf_t >= 2 PASS / >= 1 DEGRADED / else FAIL) survive unchanged
+    underneath it.
+    """
+    data = _shrink_world(seed=42, clean_coef=0.02, clean_noise=0.1)
+    probe = _shrink_run(data)
+    ratio = float(probe["wf_shrink_ratio"])
+    assert np.isfinite(ratio) and ratio > 0.0
+    assert 1.0 <= probe["wf_t"] < 2.0
+    at_cap = _shrink_run(data, shrink_cap=ratio)
+    assert at_cap["verdict"] == "DEGRADED"
+    assert at_cap["verdict_reason"] is None
+
+
+def test_shrinkage_nan_is_inconclusive_not_silent_pass() -> None:
+    """Zero forecasts -> degenerate t's -> NaN ratio: INCONCLUSIVE.
+
+    Old behaviour: a NaN wf_t slid into the bottom tier and read FAIL
+    while the undefined shrinkage was silently ignored.  "The overfit
+    check could not run" is distinct from "no edge": the verdict is
+    INCONCLUSIVE with the explicit cause in verdict_reason.
+    """
+    result = walkforward(
+        _edge_frame(360, 85, 0.5),
+        train_window=150,
+        test_window=50,
+        step=50,
+        fit_fn=_fit_const,
+        predict_fn=_predict_zero,
+    )
+    assert np.isnan(result["wf_shrink_ratio"])
+    assert result["verdict"] == "INCONCLUSIVE"
+    assert result["verdict_reason"] == (
+        "OVERFIT check undefined: shrinkage NaN (baseline t degenerate)"
+    )
+
+
+def test_shrink_cap_must_be_finite_and_positive() -> None:
+    """The cap is a validated parameter (finite, strictly positive)."""
+    data = _edge_frame(360, 85, 0.5)
+    for bad_cap in (0.0, -1.0, float("nan"), float("inf")):
+        with pytest.raises(ValueError, match="shrink_cap"):
+            walkforward(
+                data,
+                train_window=150,
+                test_window=50,
+                step=50,
+                shrink_cap=bad_cap,
+            )
+
+
+def test_label_horizon_one_keeps_purge_gap_bit_for_bit() -> None:
+    """purge_gap=5 + label_horizon=1 is bit-for-bit purge_gap=5.
+
+    Pins the no-conflation contract: label_horizon is never folded
+    into the purge.  The absolute fold geometry (n_train/train_end
+    with purge_gap=5) is the conflation-immune oracle - an equality
+    check between two runs of the same code would pass even if the
+    internals conflated the two parameters; the absolute counts
+    (train_window=150 -> n_train 150/200/250/300, train_end exactly
+    5 rows before test_start) fail under either conflation direction
+    (purge := label_horizon, or purge := purge_gap + label_horizon).
+    """
+    data = _edge_frame(360, 85, 0.5)
+    explicit = walkforward(
+        data,
+        train_window=150,
+        test_window=50,
+        step=50,
+        purge_gap=5,
+        label_horizon=1,
+    )
+    baseline = walkforward(
+        data,
+        train_window=150,
+        test_window=50,
+        step=50,
+        purge_gap=5,
+    )
+    assert explicit["wf_t"] == baseline["wf_t"]
+    assert explicit["verdict"] == baseline["verdict"]
+    assert explicit["verdict_reason"] == baseline["verdict_reason"]
+    assert explicit["folds"].equals(baseline["folds"])
+    folds = explicit["folds"]
+    assert list(folds["n_train"]) == [150, 200, 250, 300]
+    assert list(folds["train_end"]) == [150, 200, 250, 300]
+    assert ((folds["train_end"] + 5) == folds["test_start"]).all()
+
+
+def test_label_horizon_above_one_is_rejected() -> None:
+    """label_horizon > 1 needs an overlap correction that is unbuilt.
+
+    Old behaviour: the parameter did not exist (an unexpected keyword
+    raised TypeError, the guard nothing at all).  Overlapping labels
+    inflate wf_t anti-conservatively, so the case must be a loud
+    config ValueError, not a silently uncalibrated statistic; 0 /
+    negative are invalid outright.
+    """
+    data = _edge_frame(360, 85, 0.5)
+    with pytest.raises(ValueError, match="overlap correction"):
+        walkforward(
+            data,
+            train_window=150,
+            test_window=50,
+            step=50,
+            label_horizon=5,
+        )
+    with pytest.raises(ValueError, match="label_horizon"):
+        walkforward(
+            data,
+            train_window=150,
+            test_window=50,
+            step=50,
+            label_horizon=0,
+        )

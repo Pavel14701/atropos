@@ -205,5 +205,84 @@ documented where the hazard lives.
   groups into both arms. The docstring warns explicitly (enforcement
   belongs to the fold scheduler that produced the values;
   `compare_rankers_on_intersection` inherits the same rule for its
-  arms). Watch: a possible future `assert`/`RuntimeWarning` when arms
-  carry mismatched or unset embargo windows.
+  arms). Opt-in enforcement now exists: `paired_bootstrap_diff(...,
+  enforce_embargo=True)` drops embargo-violating pairs when
+  `current_fold`, `group_ids` and `embargo_until_by_group` are
+  supplied (default off, so the caller-owned contract above is
+  unchanged). Watch: a possible future `assert`/`RuntimeWarning` when
+  arms carry mismatched or unset embargo windows.
+
+## 6. Walk-forward label overlap is an accepted (uncalibrated) risk
+
+Status: accepted risk behind a hard guard; pinned by tests
+(`tests/test_walkforward_framework.py::
+test_label_horizon_above_one_is_rejected`,
+`tests/test_ensemble_pipeline.py::test_label_horizon_config_error_propagates`).
+
+Cause: the `wf_t` statistic of `atropos.walkforward_framework`
+assumes NON-overlapping forward-return labels inside the test union
+(`label_horizon=1`). When the true label horizon is > 1, adjacent
+labels share return rows, the effective sample size is smaller than
+`n_pnl_unique`, and `wf_t` (and the shrink ratio with it) is
+anti-conservative — the bias is uncalibrated. The fold-overlap
+deduplication (union counting: one prediction per row) does NOT
+address this — it dedups rows across overlapping folds, not label
+overlap within a row's forward window. There is NO compensation
+anywhere else in the chain: the block-bootstrap checks of stages 5
+and 7 are independent additional attack surfaces, not a replacement
+for overlap correction. The hard guard: `walkforward(label_horizon > 1)`
+raises `ValueError` (a config error that propagates through the
+pipeline — never classified INCONCLUSIVE). Separately, a NaN shrink
+ratio (degenerate baseline t) reads INCONCLUSIVE with an explicit
+reason, never a silent pass; if it occurs on valid data more often
+than expected — investigate as a bug, not an accepted risk.
+
+Unblocks: a P2 wave implementing the Newey-West correction
+(lags = horizon − 1) of `wf_t`, calibrated on the null at horizon in
+{1, 5, 20}, with horizon=1 bit-for-bit identical to the current
+statistic.
+
+## 7. `cost_death_test` is a standalone API, not a pipeline stage
+
+Status: deliberate design; not wired into
+`atropos.ensemble_pipeline.run_full_pipeline` (pinned by tests in
+`tests/test_cost_model.py`, exported from `atropos.cost_model`, demoed
+via `run_all_examples`).
+
+Cause: `cost_death_test` is a self-contained contract test (block
+bootstrap of net P&L against a cost hurdle) for callers who want the
+cost-death question answered standalone. The pipeline does NOT call
+it: stage 5 carries its own net/gross bootstrap attribution with the
+breakeven gate (`cost_bps >= breakeven_cost_bps` attributes a
+net-envelope death to costs as COST_DEATH), and the ML chain has its
+own cost gate (`_gate_cost_line` in `atropos.ml_training`). Three
+cost-death surfaces, three implementations — none is a wrapper of
+another; only the constants differ (docs law 3: 20bp round trip,
+engine taker default: 25bp round trip, stage-5 default: 10bp one-way).
+
+Unblocks: nothing — the duplication is intentional (standalone API vs
+pipeline attribution vs ML gate). If the three ever need to share a
+hurdle constant, centralize it in `atropos.cost_model` and re-export;
+do not wire `cost_death_test` into the pipeline as a stage.
+
+## 8. Three 7-stage protocols exist (docs vs code drift)
+
+Status: documented drift; the CODE is canonical; a full docs sync is
+a future P2 wave.
+
+Cause: three seven-stage protocols are in circulation: (a) the
+researcher protocol in FRAMEWORK.md §2; (b) the shipped code stages
+of `atropos.ensemble_pipeline.run_full_pipeline`; (c) the agent
+skills 11-16. Their stage numbering does not line up (e.g.
+walk-forward is code stage 4, FRAMEWORK.md researcher stage 6, and
+skills 16 describes it as "stages 6-7 of 7"). The CODE is canonical;
+the map between the researcher protocol and the code is
+FRAMEWORK.md:69-81 ("Implementation map"). FRAMEWORK.md:63
+("skipping any stage = protocol violation") is binding for the
+researcher protocol; the obsolete expanding-window ban inside the
+skills is historical — current doctrine is the code plus
+FRAMEWORK.md:221-233 ("Why expanding, not rolling").
+
+Unblocks: a P2 wave that syncs skill and FRAMEWORK.md stage
+numbering/wording to the code (or annotates each document with its
+deviation), plus a contract test pinning the FRAMEWORK.md:69-81 map.
