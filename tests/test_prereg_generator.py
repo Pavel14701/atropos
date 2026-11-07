@@ -336,7 +336,17 @@ def test_criteria_rows_raises_on_operator_free_string() -> None:
 
 
 def test_generate_prereg_rejects_non_iso_date() -> None:
-    for bad_date in ("garbage", "2026-13-45", "15.01.2026"):
+    for bad_date in (
+        "garbage",
+        "2026-13-45",
+        "15.01.2026",
+        # extended ISO forms that date.fromisoformat() accepts on
+        # Python >= 3.11: basic format and a week date.  Regression:
+        # these used to pass silently and freeze "20260115" as the
+        # stamp on 3.12+.
+        "20260115",
+        "2026-W03-1",
+    ):
         with pytest.raises(ValueError, match="ISO date"):
             generate_prereg(make_valid_params(), date=bad_date)
 

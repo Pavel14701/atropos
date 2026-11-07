@@ -475,6 +475,13 @@ def generate_prereg(params: dict[str, Any], date: str | None = None) -> str:
     if date is None:
         stamp = _dt.date.today().isoformat()
     else:
+        # fromisoformat() on Python >= 3.11 also accepts extended ISO
+        # forms ("20260115", week dates); the frozen stamp must be
+        # unambiguously YYYY-MM-DD, so gate on the exact shape first.
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
+            raise ValueError(
+                f"date must be an ISO date (YYYY-MM-DD), got {date!r}"
+            )
         try:
             stamp = _dt.date.fromisoformat(date).isoformat()
         except ValueError as exc:

@@ -834,6 +834,28 @@ def test_demo_help_documents_mode_and_budget(
     assert "--seed" in out
 
 
+def test_demo_failure_exits_nonzero(
+    workdir: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A not-completed pipeline summary maps to exit code 1.
+
+    Regression: only the success exit path was pinned before, so a
+    refactor that made ``atropos demo`` always return 0 (reporting
+    success for a failed pipeline) would have shipped unnoticed.
+    """
+    pytest.importorskip("atropos.demo_pipeline")
+    import atropos.demo_pipeline as demo_module  # noqa: PLC0415
+
+    _, user_dir = workdir
+    monkeypatch.setattr(
+        demo_module,
+        "run_demo_pipeline",
+        lambda **_kwargs: {"pipeline_completed": False},
+    )
+    code = main(["demo", "--mode", "quick"], user_dir=user_dir)
+    assert code == 1
+
+
 # ---------------------------------------------------------------------------
 # non-ASCII output on legacy consoles (cp1251)
 # ---------------------------------------------------------------------------

@@ -40,9 +40,13 @@ _TYPED_DICT_ALLOWED_FIELDS = frozenset({"n", "B"})
 
 
 def _iter_python_files() -> Iterator[Path]:
-    """Yield every tracked .py file of the package and the test suite."""
+    """Yield every tracked .py file of the package and the test suite.
+
+    Recursive: subpackages such as ``atropos/agent/`` are inside the
+    ban, not a blind spot (the old non-recursive ``glob`` missed them).
+    """
     for scan_dir in _SCAN_DIRS:
-        yield from sorted(scan_dir.glob("*.py"))
+        yield from sorted(scan_dir.rglob("*.py"))
 
 
 def _argument_names(args: ast.arguments) -> Iterator[str]:

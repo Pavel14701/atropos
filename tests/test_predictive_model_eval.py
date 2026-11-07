@@ -19,6 +19,7 @@ from atropos.predictive_model_eval import (
     sign_consistency,
     walkforward_model_eval,
 )
+from scipy import stats
 
 
 def make_linear_problem(
@@ -107,6 +108,45 @@ def test_purged_kfold_skips_folds_with_too_few_train_rows() -> None:
     oof_predictions = result["oof_predictions"]
     assert oof_predictions is not None
     assert bool(np.isnan(oof_predictions).all())
+
+
+def test_purged_kfold_p_value_dof_uses_scored_folds() -> None:
+    """Mixed skip/scored runs must not inflate the t-test dof.
+
+    Regression: ``ic_p_value`` used ``n_splits - 1`` degrees of freedom
+    even when folds were skipped, while ``ic_t`` was computed from the
+    scored folds only -- skipped folds silently made the p-value too
+    small (anti-conservative).  With 4 scored folds of 5 splits the
+    correct dof is 3, not 4, and the honest p-value is larger.
+    """
+    generator = np.random.default_rng(46)
+    features = generator.standard_normal((21, 15))
+    target = 0.9 * features[:, 0] + generator.standard_normal(21)
+    result = purged_kfold_cv(
+        features, target, n_splits=5, purge_gap=0, model_fn=ols_model_fn
+    )
+    folds = result["folds"]
+    # exactly one skipped fold, four scored -> dof = 4 - 1 = 3
+    assert int(folds["skipped_reason"].notna().sum()) == 1
+    scored = int(np.isfinite(folds["fold_ic"]).sum())
+    assert scored == 4
+    assert bool(np.isfinite(result["ic_t"]))
+    expected = float(2.0 * stats.t.sf(abs(result["ic_t"]), scored - 1))
+    assert result["ic_p_value"] == pytest.approx(expected)
+    # the old dof (n_splits - 1 = 4) understated this p-value
+    stale = float(2.0 * stats.t.sf(abs(result["ic_t"]), 5 - 1))
+    assert result["ic_p_value"] > stale
+
+
+def test_purged_kfold_p_value_unchanged_when_nothing_skipped() -> None:
+    """No-skip runs keep the historical dof (n_splits - 1)."""
+    features, target = make_linear_problem(300, 0.5, 11)
+    result = purged_kfold_cv(
+        features, target, n_splits=5, purge_gap=2, model_fn=ols_model_fn
+    )
+    assert int(np.isfinite(result["folds"]["fold_ic"]).sum()) == 5
+    expected = float(2.0 * stats.t.sf(abs(result["ic_t"]), 4))
+    assert result["ic_p_value"] == pytest.approx(expected)
 
 
 def test_purged_kfold_rejects_bad_arguments() -> None:
@@ -328,9 +368,7 @@ def test_sign_consistency_perfect_predictor_is_exact() -> None:
     assert result["stable"] is True
     assert result["n"] == 300
     regimes = result["sign_stability_by_regime"]
-    assert {"time_third_1", "vol_tercile_low", "vol_tercile_high"} <= set(
-        regimes
-    )
+    assert {"regime_1", "vol_tercile_low", "vol_tercile_high"} <= set(regimes)
     assert all(value == 1.0 for value in regimes.values())
 
 
@@ -342,6 +380,34 @@ def test_sign_consistency_noise_fails_near_one_half() -> None:
     assert 0.35 < result["directional_accuracy"] < 0.65
     assert result["verdict"] == "FAIL"
     assert result["stable"] is False
+
+
+def test_sign_consistency_validates_n_regimes() -> None:
+    """``n_regimes`` is validated, not silently coerced.
+
+    Regression: ``max(2, int(n_regimes))`` treated ``n_regimes=1`` as 2
+    regimes and ``n_regimes=2.5`` as 2 without a word -- unlike every
+    other integer parameter of this module, which raises ValueError.
+    """
+    predictions = np.random.default_rng(33).standard_normal(300)
+    with pytest.raises(ValueError, match="n_regimes must be >= 2"):
+        sign_consistency(predictions, predictions, n_regimes=1)
+    with pytest.raises(ValueError, match="n_regimes must be an integer"):
+        sign_consistency(predictions, predictions, n_regimes=2.5)
+
+
+def test_sign_consistency_regime_keys_follow_n_regimes() -> None:
+    """Time-block keys are neutral ``regime_{i}`` for any ``n_regimes``.
+
+    Regression: the keys were hardcoded ``time_third_{i}`` -- wrong for
+    ``n_regimes != 3`` (a 5-regime run reported five "thirds") and
+    ambiguous about which split produced them.
+    """
+    predictions = np.random.default_rng(34).standard_normal(600)
+    result = sign_consistency(predictions, predictions, n_regimes=5)
+    regimes = result["sign_stability_by_regime"]
+    assert {"regime_1", "regime_5"} <= set(regimes)
+    assert not any(key.startswith("time_third_") for key in regimes)
 
 
 def test_sign_consistency_edges() -> None:

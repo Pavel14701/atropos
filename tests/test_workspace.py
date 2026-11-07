@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from atropos import workspace as atropos_workspace
 from atropos.workspace import (
     DEFAULT_WORKSPACE_FILES,
     init_workspace,
@@ -68,6 +69,51 @@ def test_init_never_overwrites_user_edits(tmp_path: Path) -> None:
     assert result["created"] == []
     assert graveyard.read_text(encoding="utf-8") == "# my own graveyard\n"
     assert index.read_text(encoding="utf-8") == "id,name\n"
+
+
+def test_init_race_reports_skip_not_overwrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file created between the existence check and the write wins.
+
+    Regression: init used check-then-write (``target.exists()`` ->
+    ``write_text``), so a file materializing in that window was
+    silently overwritten with the skeleton content.  The atomic
+    create-or-fail ``open(target, "x")`` turns the same race into a
+    skip.  The patched opener emulates the racing creator: when init
+    asks to create ``GRAVEYARD.md``, a user file is planted first and
+    ``FileExistsError`` is raised.  The old check-then-write never
+    called this opener, wrote the skeleton anyway and reported the
+    file as created.
+    """
+    real_open = open
+
+    def racing_open(
+        path: object, mode: str = "r", *args: object, **kwargs: object
+    ) -> object:
+        if mode == "x" and Path(str(path)).name == "GRAVEYARD.md":
+            with real_open(path, "w", encoding="utf-8") as handle:  # type: ignore[arg-type]
+                handle.write("user edit won the race\n")
+            raise FileExistsError
+        return real_open(path, mode, *args, **kwargs)  # type: ignore[arg-type]
+
+    # raising=False: the module only carries "open" while the atomic
+    # create-or-fail implementation is in place; the old check-then-
+    # write never bound (nor called) it, which is what fails this test
+    # there.
+    monkeypatch.setattr(atropos_workspace, "open", racing_open, raising=False)
+    result = init_workspace(tmp_path / "ws")
+    graveyard = tmp_path / "ws" / "GRAVEYARD.md"
+    assert "GRAVEYARD.md" in result["skipped"]
+    assert "GRAVEYARD.md" not in result["created"]
+    assert graveyard.read_text(encoding="utf-8") == (
+        "user edit won the race\n"
+    )
+    # the files that did not lose a race are still created normally
+    assert result["created"] == [
+        "hypotheses/INDEX.csv",
+        "hypotheses/README.md",
+    ]
 
 
 def test_init_over_an_existing_file_root_reports_os_error(

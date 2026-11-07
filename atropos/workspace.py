@@ -126,11 +126,16 @@ def init_workspace(root: Path = Path(".")) -> dict[str, Any]:
     skipped: list[str] = []
     for rel_path, content in DEFAULT_WORKSPACE_FILES.items():
         target = root / rel_path
-        if target.exists():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            # "x" is atomic create-or-fail: the old exists()-then-write
+            # check could overwrite a file created between the check and
+            # the write (never-overwrite is the init contract).
+            with open(target, "x", encoding="utf-8") as handle:
+                handle.write(content)
+        except FileExistsError:
             skipped.append(rel_path.as_posix())
             continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
         created.append(rel_path.as_posix())
     return {"created": created, "skipped": skipped, "root": str(root)}
 

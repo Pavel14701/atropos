@@ -164,18 +164,25 @@ def resolve_context_file(
     """
     stem = file_name[: -len(".md")]
     base_part: SourcePart | None = None
+    base_text = ""
     replaced = False
     append_parts: list[SourcePart] = []
+    append_texts: list[str] = []
     disabled = False
     for index, layer in enumerate(layers):
         directory = layer.directory
         base_path = directory / file_name
         if base_path.is_file():
+            # Read once: line count and content must come from the SAME
+            # read.  The old second read was a TOCTOU race that resolved
+            # a just-now permission-blocked file as empty content while
+            # --show-sources still reported its line count.
             text = _read_text(base_path)
             kind = "base" if index == 0 else "replace"
             base_part = SourcePart(
                 layer.label, base_path, kind, _line_count(text)
             )
+            base_text = text
             replaced = index > 0
         append_path = directory / (stem + _APPEND_SUFFIX)
         if append_path.is_file():
@@ -185,12 +192,13 @@ def resolve_context_file(
                     layer.label, append_path, "append", _line_count(text)
                 )
             )
+            append_texts.append(text)
         if (directory / (stem + ".disabled")).is_file():
             disabled = True
     blocks: list[str] = []
     if not disabled and base_part is not None:
-        blocks.append(_read_text(base_part.path))
-    blocks.extend(_read_text(part.path) for part in append_parts)
+        blocks.append(base_text)
+    blocks.extend(append_texts)
     parts = ((base_part,) if base_part is not None else ()) + tuple(
         append_parts
     )
@@ -231,8 +239,10 @@ def resolve_skills(layers: Sequence[Layer]) -> list[ResolvedSkill]:
     ``--show-sources`` can report them.
     """
     base_parts: dict[str, SourcePart] = {}
+    base_texts: dict[str, str] = {}
     default_names: set[str] = set()
     append_parts: dict[str, list[SourcePart]] = {}
+    append_texts: dict[str, list[str]] = {}
     disabled_names: set[str] = set()
     disabled_all = False
     for index, layer in enumerate(layers):
@@ -244,6 +254,8 @@ def resolve_skills(layers: Sequence[Layer]) -> list[ResolvedSkill]:
             disabled_all = True
         for skill_path in sorted(skills_dir.glob("*.md")):
             stem = skill_path.stem
+            # Read once: line count and content come from the same
+            # read (the old re-read raced it, see resolve_context_file).
             text = _read_text(skill_path)
             if stem.endswith(".append"):
                 append_name = stem[: -len(".append")]
@@ -255,17 +267,20 @@ def resolve_skills(layers: Sequence[Layer]) -> list[ResolvedSkill]:
                         _line_count(text),
                     )
                 )
+                append_texts.setdefault(append_name, []).append(text)
                 continue
             kind = "base" if index == 0 else "replace"
             base_parts[stem] = SourcePart(
                 layer.label, skill_path, kind, _line_count(text)
             )
+            base_texts[stem] = text
             if index == 0:
                 default_names.add(stem)
     resolved: list[ResolvedSkill] = []
     for name in sorted(base_parts):
         base_part = base_parts[name]
         appends = append_parts.pop(name, [])
+        appends_text = append_texts.pop(name, [])
         is_default = name in default_names
         if is_default:
             status = "default" if base_part.kind == "base" else "replaced"
@@ -274,8 +289,8 @@ def resolve_skills(layers: Sequence[Layer]) -> list[ResolvedSkill]:
         disabled = name in disabled_names or (disabled_all and is_default)
         blocks: list[str] = []
         if not disabled:
-            blocks.append(_read_text(base_part.path))
-        blocks.extend(_read_text(part.path) for part in appends)
+            blocks.append(base_texts[name])
+        blocks.extend(appends_text)
         parts = (base_part, *appends)
         resolved.append(
             ResolvedSkill(
@@ -291,7 +306,7 @@ def resolve_skills(layers: Sequence[Layer]) -> list[ResolvedSkill]:
     # append-only resolution so orphan appends are visible, not dropped
     for name in sorted(append_parts):
         appends = append_parts[name]
-        blocks = [_read_text(part.path) for part in appends]
+        blocks = append_texts[name]
         resolved.append(
             ResolvedSkill(
                 name=name,

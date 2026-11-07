@@ -119,6 +119,43 @@ def test_file_default_is_package_base(
     assert not resolved.replaced
 
 
+def test_resolution_reads_each_file_once(
+    mini_package: Layer,
+    user_layer: Layer,
+    project_layer: Layer,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Line count and content come from the same read (no re-read race).
+
+    Regression: the resolver used to read every base file twice -- once
+    for the ``SourcePart`` line count and once for the content -- so a
+    file that became unreadable between the two reads (permission race,
+    the documented OSError -> "" fallback) resolved as empty content
+    while ``--show-sources`` still reported its line count.  The
+    wrapped reader emulates exactly that: the first call per path
+    succeeds, any later call hits the fallback and returns "".
+    """
+    real_read = _read_text
+    seen: dict[Path, int] = {}
+
+    def flaky_reader(path: Path) -> str:
+        reads = seen.get(path, 0) + 1
+        seen[path] = reads
+        if reads > 1:
+            return ""  # OSError -> "" fallback of the re-read
+        return real_read(path)
+
+    monkeypatch.setattr("atropos.agent._resolution._read_text", flaky_reader)
+    stack = _stack(mini_package, user_layer, project_layer)
+    resolved = resolve_context_file("AGENTS.md", stack)
+    assert resolved.content == "# PACKAGE AGENTS\n\nbase rules."
+    assert resolved.parts[0].lines == 3
+    skills = resolve_skills(stack)
+    alpha = _find_skill(skills, "alpha-skill")
+    assert alpha.content == "# ALPHA\npackaged"
+    assert alpha.parts[0].lines == 2
+
+
 def test_file_replace_in_user_layer(
     mini_package: Layer, user_layer: Layer, project_layer: Layer
 ) -> None:

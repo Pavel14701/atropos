@@ -288,7 +288,9 @@ def purged_kfold_cv(
     mean_ic, ic_t, ic_p_value, oos_hit_rate, oof_predictions,
     model_used}``.  ``ic_t`` is a t-stat of the per-fold ICs;
     ``ic_p_value`` is its two-sided p-value, ``2 * t.sf(|ic_t|,
-    n_splits - 1)``; ``oof_predictions`` is full-length with NaN outside
+    scored - 1)`` where ``scored`` is the number of folds actually
+    scored (skipped folds must not inflate the degrees of freedom);
+    ``oof_predictions`` is full-length with NaN outside
     test folds.
 
     Example::
@@ -381,7 +383,7 @@ def purged_kfold_cv(
         "mean_ic": mean_ic,
         "ic_t": ic_t,
         "ic_p_value": (
-            float(2.0 * stats.t.sf(abs(ic_t), ns - 1))
+            float(2.0 * stats.t.sf(abs(ic_t), ics_valid.size - 1))
             if np.isfinite(ic_t)
             else float("nan")
         ),
@@ -752,8 +754,10 @@ def sign_consistency(
 
     ``directional_accuracy`` is the overall share of rows where
     ``sign(prediction) == sign(outcome)``.  ``sign_stability_by_regime``
-    reports the same statistic within (a) ``n_regimes`` contiguous time
-    thirds and (b) terciles of ``|outcome|`` (calm / normal / violent rows).
+    reports the same statistic within (a) ``n_regimes`` contiguous
+    time blocks (keys ``regime_1`` ... ``regime_{n_regimes}``) and (b)
+    terciles of ``|outcome|`` (calm / normal / violent rows, keys
+    ``vol_tercile_low`` / ``vol_tercile_mid`` / ``vol_tercile_high``).
     A model that only works in one regime is a regime bet, not an edge.
 
     IMPORTANT — positional alignment: ``predictions`` and ``outcomes``
@@ -783,6 +787,11 @@ def sign_consistency(
     Returns ``{directional_accuracy, sign_stability_by_regime (dict),
     stable, verdict, n, n_usable}`` (plus ``reason`` in the degenerate
     cases and ``note`` when fewer than 10 finite rows remain).
+
+    Raises:
+        ValueError: if ``n_regimes`` is not an integer >= 2 (no silent
+            coercion; every other integer parameter is validated the
+            same way).
 
     Example::
 
@@ -843,12 +852,12 @@ def sign_consistency(
     acc = float(np.mean(correct[usable])) if n_usable else float("nan")
 
     regime_acc: dict[str, float] = {}
-    nr = max(2, int(n_regimes))
+    nr = validate_int("n_regimes", n_regimes, minimum=2)
     for regime_idx, chunk in enumerate(
         np.array_split(np.arange(n_rows), nr), start=1
     ):
         chunk_usable = usable[chunk]
-        regime_acc[f"time_third_{regime_idx}"] = (
+        regime_acc[f"regime_{regime_idx}"] = (
             float(np.mean(correct[chunk][chunk_usable]))
             if chunk_usable.any()
             else float("nan")

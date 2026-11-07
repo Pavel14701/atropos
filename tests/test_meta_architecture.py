@@ -11,7 +11,9 @@ from pathlib import Path
 import pytest
 
 PACKAGE_DIR = Path(__file__).resolve().parents[1] / "atropos"
-MODULE_PATHS = sorted(PACKAGE_DIR.glob("*.py"))
+# Recursive: subpackages such as ``atropos/agent/`` are inside the
+# scans, not a blind spot (the old non-recursive ``glob`` missed them).
+MODULE_PATHS = sorted(PACKAGE_DIR.rglob("*.py"))
 
 # Modules whose run_all_examples already assert their outcomes. After
 # the layer-0 wave every module verifies its demo; a new module must be

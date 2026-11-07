@@ -4,9 +4,10 @@ The distribution must be machine-independent: no personal user names,
 no absolute Windows user directories, and no references to the private
 donor repository the case-study numbers were taken from.  This module
 scans every text artifact the repository ships (``*.py``, ``*.md``,
-``*.toml``, ``*.ipynb``) for a fixed pattern list and fails on any
-occurrence that is not whitelisted.  The whitelist is exact: any *new*
-occurrence anywhere in the tree fails the suite.
+``*.toml``, ``*.ipynb``, plus config/data formats ``*.yml``, ``*.yaml``,
+``*.json``, ``*.cfg``, ``*.txt``) for a fixed pattern list and fails on
+any occurrence that is not whitelisted.  The whitelist is exact: any
+*new* occurrence anywhere in the tree fails the suite.
 
 The only whitelisted occurrences are synthetic path-semantics fixtures
 that exercise Windows ``APPDATA`` resolution against the fictional
@@ -25,7 +26,19 @@ from pathlib import Path
 
 ROOT: Path = Path(__file__).resolve().parents[1]
 
-_SCAN_SUFFIXES: frozenset[str] = frozenset({".py", ".md", ".toml", ".ipynb"})
+_SCAN_SUFFIXES: frozenset[str] = frozenset(
+    {
+        ".py",
+        ".md",
+        ".toml",
+        ".ipynb",
+        ".yml",
+        ".yaml",
+        ".json",
+        ".cfg",
+        ".txt",
+    }
+)
 
 _SKIP_DIRS: frozenset[str] = frozenset(
     {
@@ -81,10 +94,10 @@ _ALLOWED_LINES: frozenset[tuple[str, str]] = frozenset(
 )
 
 
-def _scan_files() -> list[Path]:
-    """Collect scannable repository files, skipping caches and venvs."""
+def _scan_files(root: Path = ROOT) -> list[Path]:
+    """Collect scannable files under ``root``, skipping caches/venvs."""
     found: list[Path] = []
-    for dirpath, dirnames, filenames in os.walk(ROOT):
+    for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(
             name for name in dirnames if name not in _SKIP_DIRS
         )
@@ -92,7 +105,7 @@ def _scan_files() -> list[Path]:
             path = Path(dirpath, name)
             if path.suffix not in _SCAN_SUFFIXES:
                 continue
-            if path.relative_to(ROOT).as_posix() == _SELF:
+            if path.relative_to(root).as_posix() == _SELF:
                 continue
             found.append(path)
     return found
@@ -107,11 +120,11 @@ def _line_at(text: str, start: int, end: int) -> str:
     return text[line_start:line_end].strip().casefold()
 
 
-def _violations() -> list[str]:
+def _violations(root: Path = ROOT) -> list[str]:
     """Report non-whitelisted hits as ``"file: pattern -> line"``."""
     reports: list[str] = []
-    for path in _scan_files():
-        rel = path.relative_to(ROOT).as_posix()
+    for path in _scan_files(root):
+        rel = path.relative_to(root).as_posix()
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
@@ -127,13 +140,34 @@ def _violations() -> list[str]:
 def test_shipped_files_have_no_owner_machine_traces() -> None:
     """No personal names, user paths, or donor-repo names anywhere.
 
-    Scans every ``*.py``/``*.md``/``*.toml``/``*.ipynb`` artifact in
-    the repository (``.venv``, caches, ``dist`` excluded) against the
-    pattern list; only the exact whitelisted synthetic ``example-user``
-    fixture lines may match.  A new occurrence of any pattern fails.
+    Scans every ``*.py``/``*.md``/``*.toml``/``*.ipynb`` artifact AND
+    every ``*.yml``/``*.yaml``/``*.json``/``*.cfg``/``*.txt`` config or
+    data file in the repository (``.venv``, caches, ``dist`` excluded)
+    against the pattern list; only the exact whitelisted synthetic
+    ``example-user`` fixture lines may match.  A new occurrence of any
+    pattern fails.
     """
     reports = _violations()
     assert not reports, "owner-machine traces found:\n" + "\n".join(reports)
+
+
+def test_widened_suffixes_are_scanned(tmp_path: Path) -> None:
+    """Config/doc artifacts (.yml/.yaml/.json/.cfg/.txt) are scanned.
+
+    Regression: the ratchet only scanned ``*.py``/``*.md``/``*.toml``/
+    ``*.ipynb``, so a leaked owner path in a CI workflow (``.yml``), a
+    JSON export, a config file, or a plain-text note shipped silently —
+    the scan skipped those suffixes entirely.
+    """
+    for suffix in (".yml", ".yaml", ".json", ".cfg", ".txt"):
+        probe = tmp_path / f"probe{suffix}"
+        probe.write_text("run: toothcake\n", encoding="utf-8")
+        reports = _violations(tmp_path)
+        assert any(f"probe{suffix}" in report for report in reports), (
+            f"{suffix} files are not scanned by the portability ratchet"
+        )
+        probe.unlink()
+    assert _violations(tmp_path) == []
 
 
 def test_portability_whitelist_stays_exact() -> None:

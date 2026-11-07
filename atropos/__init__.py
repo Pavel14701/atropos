@@ -21,10 +21,16 @@ Importing ``atropos.ml_ensemble`` has a documented side effect: it
 registers the composite ``"ensemble"`` model in ``MODEL_REGISTRY``
 and seeds its ``DEFAULT_TRAINING_CONFIG["model_params"]`` entry.
 
-Every module is also importable directly, e.g.::
+Import cost: the re-exports above pull in ``atropos.ml_ensemble``
+transitively, so ``import atropos`` — and any ``atropos.*``
+submodule import, which executes the package ``__init__`` first —
+also loads the scikit-learn stack (~1.7 s on a cold interpreter)
+and performs that registration.  There is currently no lighter
+import path for the public front doors.
 
-Run ``python -m atropos.<module>`` for the synthetic demo bundled with each
-module (for example ``python -m atropos.ensemble_pipeline``).
+Every module is also importable directly.  Run ``python -m
+atropos.<module>`` for the synthetic demo bundled with each module
+(for example ``python -m atropos.ensemble_pipeline``).
 """
 
 __version__ = "1.1.0"
