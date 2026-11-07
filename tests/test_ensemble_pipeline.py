@@ -801,6 +801,56 @@ def test_unreachable_threshold_kills_genuine_edge_as_dead() -> None:
     )
 
 
+def test_battery_overall_dead_with_active_days_is_robustness_death(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Battery OVERALL DEAD + positive baseline: ROBUSTNESS failure.
+
+    Not proven no-edge.  The real feed that exposed the glue (A:agg):
+    71 active days, baseline mean +0.0083R/day, 6 attacks failed - the
+    old classifier read `DEAD / proven no-edge / nothing left to
+    attack`, contradicting the facts.  The split keys on the baseline
+    row: FAIL + (no active days OR mean <= 0) is the proven-absence
+    DEAD; FAIL + positive mean is a robustness failure.
+    """
+    table = _battery_table_with_baseline(
+        "FAIL", 0.0083, ("threshold_sensitivity", "window_sensitivity")
+    )
+    result = _run_with_canned_battery(
+        monkeypatch, table, battery_overall_token="DEAD"
+    )
+    assert result["overall_verdict"] == "ROBUSTNESS_DEATH"
+    assert result["verdict_class"] == "NEEDS_ANALYSIS"
+    assert result["informative"] is True
+    assert "NOT proven no-edge" in result["interpretation"]
+    assert "+0.0083" in result["interpretation"]
+    assert result["active_days"] > 0
+
+
+def test_battery_baseline_negative_mean_is_proven_no_edge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Baseline FAIL + mean at/below zero + active days: proven no-edge.
+
+    The C''-shape case (mean -0.0058R/day over 266 active days).
+
+    Splitting arm of the v8 fix: without it every battery OVERALL
+    DEAD would glue a real robustness failure and a proven absence
+    into one token.
+    """
+    table = _battery_table_with_baseline(
+        "FAIL", -0.0058, ("threshold_sensitivity", "subperiod_thirds")
+    )
+    result = _run_with_canned_battery(
+        monkeypatch, table, battery_overall_token="DEAD"
+    )
+    assert result["overall_verdict"] == "DEAD"
+    assert result["verdict_class"] == "DEAD"
+    assert result["informative"] is True
+    assert "-0.0058" in result["interpretation"]
+    assert result["active_days"] > 0
+
+
 def test_fragile_battery_kills_at_stage_three() -> None:
     """FRAGILE (< 5/7) kills as ROBUSTNESS_DEATH at stage 3, not WARN.
 
@@ -1337,7 +1387,9 @@ def _battery_table(*failed: str) -> pd.DataFrame:
 
 
 def _run_with_canned_battery(
-    monkeypatch: pytest.MonkeyPatch, table: pd.DataFrame
+    monkeypatch: pytest.MonkeyPatch,
+    table: pd.DataFrame,
+    battery_overall_token: str = "FRAGILE",
 ) -> dict[str, Any]:
     """Run the genuine-edge pipeline with the stage-3 battery canned.
 
@@ -1351,12 +1403,36 @@ def _run_with_canned_battery(
         lambda *_args, **_kwargs: table,
     )
     monkeypatch.setattr(
-        ensemble_pipeline, "battery_overall", lambda *_a, **_k: "FRAGILE"
+        ensemble_pipeline,
+        "battery_overall",
+        lambda *_a, **_k: battery_overall_token,
     )
     return run_full_pipeline(
         _make_synthetic("genuine_edge", n_obs=SERIES_N_OBS, seed=4),
         REDUCED_CONFIG,
     )
+
+
+def _battery_table_with_baseline(
+    baseline_verdict: str, baseline_stat: float, failed: tuple[str, ...]
+) -> pd.DataFrame:
+    """Canned table WITH a baseline row.
+
+    The OVERALL-DEAD classifier reads the baseline verdict/stat to
+    split proven-absence DEAD from a robustness failure.
+    """
+    base = {
+        "test": "baseline",
+        "stat": baseline_stat,
+        "t_stat": 1.4,
+        "ci_low": baseline_stat - 0.01,
+        "ci_high": baseline_stat + 0.01,
+        "verdict": baseline_verdict,
+        "catastrophic": False,
+        "note": "canned baseline row for the OVERALL-DEAD classifier pin",
+    }
+    rest = _battery_table(*failed).to_dict("records")
+    return pd.DataFrame([base, *rest])
 
 
 def test_placebo_failure_maps_to_placebo_violation(

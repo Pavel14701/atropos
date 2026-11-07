@@ -27,6 +27,12 @@
   `OVERFIT_DEATH` (KNOWN-ISSUES §9).
 - Test suite: 2781 → 2794 passed, 18 skipped, 2 xfailed — every new
   verdict mapping is pinned (mutation-verified by the orchestrator).
+- Battery OVERALL "DEAD" split by the baseline row (post-2794 fix):
+  baseline FAIL with no active days or mean ≤ 0 → proven-absence
+  `DEAD`; a positive-but-insignificant baseline taken down by the
+  attacks → `ROBUSTNESS_DEATH` / NEEDS_ANALYSIS with the baseline
+  stat in the interpretation (the glue read "proven no-edge" for a
+  book with 71-266 active days).
 
 ## 1.2.0 — independent-audit fix waves (review + defect registry)
 

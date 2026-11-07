@@ -285,13 +285,19 @@ _COST_DEATH_REASON = (
     "passes - the edge is eaten by transaction costs (COST-DEATH)"
 )
 
-# stage-3 refinement reasons (taxonomy wave): the generic DEAD is
-# reserved for a catastrophic battery; a merely FRAGILE book with a
-# failing placebo row is a causality red flag, not a shape problem.
+# stage-3 refinement reasons (taxonomy wave): the battery OVERALL
+# "DEAD" has TWO distinct causes and the classifier must not glue
+# them - a baseline that never traded, or one whose mean is at/below
+# zero with active days, IS the proven-absence DEAD; a positive-but-
+# insignificant baseline taken down by the attacks is a robustness
+# failure (NEEDS_ANALYSIS), not "no edge".
 _DEAD_BATTERY_REASON = (
-    "robustness battery OVERALL DEAD (ROBUSTNESS-DEATH: the baseline "
-    "rule is catastrophic or never trades - no active days - so no "
-    "edge survived to attack)"
+    "robustness battery OVERALL DEAD (baseline catastrophically "
+    "unprofitable - proven no-edge on this feed)"
+)
+_DEAD_NEVER_TRADED_REASON = (
+    "robustness battery OVERALL DEAD (baseline never traded on this "
+    "feed - no active days - proven no-edge on this feed)"
 )
 _PLACEBO_VIOLATION_REASON = (
     "robustness battery FRAGILE with the placebo_lag row FAILING: the "
@@ -588,6 +594,42 @@ _VERDICT_META: dict[str, tuple[str, bool, str, str, str]] = {
         _SURVIVES_WWC,
     ),
 }
+
+# stage-3 case-specific report templates (v8 fix): the battery OVERALL
+# "DEAD" arm splits by the baseline row's shape, and each sub-case
+# carries its own filled-with-facts interpretation.  {baseline_stat},
+# {n_obs}, {active_days} and {failed_tests} come from the run.
+_DEAD_NEVER_TRADED_INTERP = (
+    "battery baseline never traded on this feed (no active days on "
+    "the baseline rule, baseline mean not computable): proven "
+    "no-edge for this signal/feed - nothing left to attack"
+)
+_DEAD_CATASTROPHIC_BASELINE_INTERP = (
+    "battery baseline is catastrophically unprofitable (mean "
+    "{baseline_stat}R/day over {active_days} active days): "
+    "proven no-edge on this feed"
+)
+_DEAD_BASELINE_NEXT_STEP = (
+    "stop: rebuild the rule or fix the feed before re-testing"
+)
+_DEAD_BASELINE_TRADED_WWC = "a rule whose baseline trades on this feed"
+_DEAD_BASELINE_POSITIVE_WWC = (
+    "a rule whose baseline books a positive mean on this feed"
+)
+_ROBUSTNESS_POSITIVE_BASELINE_INTERP = (
+    "battery OVERALL DEAD while the baseline mean is positive "
+    "({baseline_stat}R/day over {active_days} active days) but "
+    "not significant: {failed_tests} - the baseline does not survive "
+    "the attacks; NOT proven no-edge"
+)
+_ROBUSTNESS_MECHANISM_NEXT_STEP = (
+    "mechanism analysis: name the failed attacks (strategy-class "
+    "property vs data property) - do not scale until explained"
+)
+_ROBUSTNESS_MECHANISM_WWC = (
+    "a structurally appropriate test representation - a different "
+    "test, not a softened one"
+)
 
 
 def _merge_config(overrides: dict[str, Any] | None) -> dict[str, Any]:
@@ -1516,6 +1558,32 @@ def _battery_failed_rows(table: Any) -> list[tuple[str, float]]:
     ]
 
 
+def _battery_baseline_row(table: Any) -> pd.Series | None:
+    """The battery's ``baseline`` row, or None when unavailable.
+
+    The baseline row is the DEAD-vs-robustness discriminator (v8 fix):
+    its ``verdict`` and ``stat`` (the baseline mean per active day)
+    separate a proven-absence DEAD (never traded, or mean at/below
+    zero) from a positive-but-insignificant baseline the attacks took
+    down.  Non-DataFrame input or a missing row yields None - never a
+    KeyError.
+    """
+    return _battery_row(table, "baseline")
+
+
+def _battery_overall_row(table: Any) -> pd.Series | None:
+    """The battery's ``OVERALL`` row, or None when unavailable."""
+    return _battery_row(table, "OVERALL")
+
+
+def _battery_row(table: Any, test_name: str) -> pd.Series | None:
+    """A single battery row by ``test`` name; None when unavailable."""
+    if not isinstance(table, pd.DataFrame) or table.empty:
+        return None
+    rows = table.loc[table["test"] == test_name]
+    return rows.iloc[0] if len(rows) else None
+
+
 def _battery_pass_count(table: Any) -> int:
     """Number of battery attack rows that PASS (the ``x`` in ``x/7``).
 
@@ -1772,6 +1840,13 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
         ``next_step`` / ``what_would_change`` as the meta templates
         filled with this run's facts - never the bare templates.
         """
+        # stage-3 case-specific report overrides + the baseline row
+        # facts; only the stage-3 arm fills them (initialized here so
+        # every outcome path can reference them - B10 discipline)
+        interpretation_tpl_override: str | None = None
+        next_step_tpl_override: str | None = None
+        wwc_tpl_override: str | None = None
+        baseline_stat = float("nan")
         if killed_stage is None and inconclusive_reason is not None:
             # "could not test" is not a kill and not a pass: undecided,
             # with the blocker named (ATR-06)
@@ -1794,18 +1869,80 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
                 verdict = "COST_DEATH"
                 reason = _COST_DEATH_REASON
             elif killed_stage == 3:
-                # taxonomy refinement from the battery table itself
+                # taxonomy refinement from the battery table itself.
+                # v8 fix: battery OVERALL "DEAD" has TWO distinct causes
+                # and they must not be glued (the glue produced
+                # "proven no-edge" reports for books with hundreds of
+                # active days).  The battery's own baseline row is the
+                # discriminator: never traded, or mean at/below zero
+                # with active days -> proven-absence DEAD; a positive-
+                # but-insignificant baseline taken down by the attacks
+                # -> a robustness failure (NEEDS_ANALYSIS).
                 battery_results = _stage_by_id(stages, 3)["results"]
                 battery_overall_token = str(
                     battery_results.get("overall", "")
                 )
-                if battery_overall_token == "DEAD":
-                    # baseline catastrophic / no active days: the one
-                    # proven no-edge in the pipeline
-                    verdict = "DEAD"
-                    reason = _DEAD_BATTERY_REASON
+                battery_table_ = battery_results.get("battery_table")
+                baseline_row = _battery_baseline_row(battery_table_)
+                baseline_verdict = (
+                    str(baseline_row["verdict"])
+                    if baseline_row is not None
+                    else ""
+                )
+                baseline_stat = (
+                    float(baseline_row["stat"])
+                    if (
+                        baseline_row is not None
+                        and np.isfinite(baseline_row["stat"])
+                    )
+                    else float("nan")
+                )
+                baseline_dead = baseline_verdict == "FAIL" and (
+                    active_days == 0
+                    or not np.isfinite(baseline_stat)
+                    or baseline_stat <= 0.0
+                )
+                if battery_overall_token == "DEAD" and baseline_dead:
+                    # proven no-edge: distinguish the two causes via the
+                    # battery's own OVERALL note (which words them
+                    # correctly) so the reason never claims "no active
+                    # days" for a book that traded 266 of them
+                    overall_row = _battery_overall_row(battery_table_)
+                    never_traded = overall_row is not None and (
+                        "no active days" in str(overall_row["note"])
+                    )
+                    if never_traded:
+                        verdict = "DEAD"
+                        reason = _DEAD_NEVER_TRADED_REASON
+                        interpretation_tpl_override = (
+                            _DEAD_NEVER_TRADED_INTERP
+                        )
+                    else:
+                        verdict = "DEAD"
+                        reason = _DEAD_BATTERY_REASON
+                        interpretation_tpl_override = (
+                            _DEAD_CATASTROPHIC_BASELINE_INTERP
+                        )
+                    next_step_tpl_override = _DEAD_BASELINE_NEXT_STEP
+                    wwc_tpl_override = _DEAD_BASELINE_TRADED_WWC
+                elif battery_overall_token == "DEAD":
+                    # a positive-but-insignificant baseline taken down
+                    # by the attacks (or a catastrophic attack on a
+                    # passing baseline): a robustness failure, NOT
+                    # proven absence of edge
+                    verdict = "ROBUSTNESS_DEATH"
+                    reason = (
+                        kill_reason_override
+                        if kill_reason_override is not None
+                        else _KILL_REASONS[3]
+                    )
+                    interpretation_tpl_override = (
+                        _ROBUSTNESS_POSITIVE_BASELINE_INTERP
+                    )
+                    next_step_tpl_override = _ROBUSTNESS_MECHANISM_NEXT_STEP
+                    wwc_tpl_override = _ROBUSTNESS_MECHANISM_WWC
                 elif battery_overall_token == "FRAGILE" and _placebo_driven(
-                    battery_results.get("battery_table")
+                    battery_table_
                 ):
                     # the FRAGILE book is DRIVEN BY the causality
                     # violation: placebo_lag is the only failing attack
@@ -1860,6 +1997,15 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
         ) = _VERDICT_META[verdict]
         if verdict == "CS_NO_EDGE" and target == "xs":
             verdict_class = "DEAD"
+        # stage-3 case-specific overrides (v8 fix): the battery OVERALL
+        # DEAD arm splits by the baseline row's shape, and each sub-case
+        # carries its own interpretation (with the baseline stat inline)
+        if interpretation_tpl_override is not None:
+            interpretation_tpl = interpretation_tpl_override
+        if next_step_tpl_override is not None:
+            next_step_tpl = next_step_tpl_override
+        if wwc_tpl_override is not None:
+            wwc_tpl = wwc_tpl_override
         fill_values: dict[str, Any] = {
             "n_obs": n_obs,
             "active_days": active_days,
@@ -1869,6 +2015,11 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
             "stage": killed_stage if killed_stage is not None else "N/A",
             "which_array": (
                 degenerate_which if degenerate_which is not None else "N/A"
+            ),
+            "baseline_stat": (
+                f"{baseline_stat:+.4f}"
+                if np.isfinite(baseline_stat)
+                else "N/A"
             ),
             "reason": reason if reason is not None else "N/A",
             "target_note": (

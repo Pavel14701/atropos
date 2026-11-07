@@ -186,15 +186,17 @@ def test_pure_noise_is_killed_on_every_sweep_seed() -> None:
     for seed in SWEEP_SEEDS:
         result = run_full_pipeline(_make_noise_world(seed), REDUCED_CONFIG)
         if seed == 7:
-            # battery OVERALL DEAD on this seed: the ONE case where
-            # the generic DEAD verdict survives, so it is pinned here
-            # instead of being a KILL_VERDICTS member
-            assert result["overall_verdict"] == "DEAD", (
-                f"seed={seed}: the pinned OVERALL-DEAD death changed: "
+            # battery OVERALL DEAD on this seed with a positive-but-
+            # insignificant baseline mean: the taxonomy fix splits the
+            # old glued case - this is a ROBUSTNESS_DEATH / NEEDS_
+            # ANALYSIS now (baseline positive but not significant, 5
+            # attacks failed), NOT a proven-absence DEAD
+            assert result["overall_verdict"] == "ROBUSTNESS_DEATH", (
+                f"seed={seed}: the pinned robustness death changed: "
                 f"verdict={result['overall_verdict']} "
                 f"killed_by_stage={result['killed_by_stage']}"
             )
-            assert result["verdict_class"] == "DEAD"
+            assert result["verdict_class"] == "NEEDS_ANALYSIS"
             assert result["killed_by_stage"] == 3
             continue
         assert result["overall_verdict"] in KILL_VERDICTS, (
