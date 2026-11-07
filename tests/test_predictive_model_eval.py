@@ -393,7 +393,8 @@ def test_sign_consistency_validates_n_regimes() -> None:
     with pytest.raises(ValueError, match="n_regimes must be >= 2"):
         sign_consistency(predictions, predictions, n_regimes=1)
     with pytest.raises(ValueError, match="n_regimes must be an integer"):
-        sign_consistency(predictions, predictions, n_regimes=2.5)
+        # the float is intentional: it exercises the loud int validation
+        sign_consistency(predictions, predictions, n_regimes=cast(Any, 2.5))
 
 
 def test_sign_consistency_regime_keys_follow_n_regimes() -> None:

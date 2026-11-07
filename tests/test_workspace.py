@@ -11,6 +11,7 @@ tests/test_cli.py.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 from atropos import workspace as atropos_workspace
@@ -89,13 +90,13 @@ def test_init_race_reports_skip_not_overwrite(
     real_open = open
 
     def racing_open(
-        path: object, mode: str = "r", *args: object, **kwargs: object
-    ) -> object:
+        path: Any, mode: str = "r", *args: Any, **kwargs: Any
+    ) -> Any:
         if mode == "x" and Path(str(path)).name == "GRAVEYARD.md":
-            with real_open(path, "w", encoding="utf-8") as handle:  # type: ignore[arg-type]
+            with real_open(path, "w", encoding="utf-8") as handle:
                 handle.write("user edit won the race\n")
             raise FileExistsError
-        return real_open(path, mode, *args, **kwargs)  # type: ignore[arg-type]
+        return real_open(path, mode, *args, **kwargs)
 
     # raising=False: the module only carries "open" while the atomic
     # create-or-fail implementation is in place; the old check-then-
