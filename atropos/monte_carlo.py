@@ -481,9 +481,11 @@ def _demo_detectable_effect() -> None:
         print(f"N={n_obs:5d}  min detectable partial R2 = {mde:.5f}")
     assert all(0.0 < value < 1.0 for value in effects)
     assert effects[0] > effects[1] > effects[2]  # more N, smaller effect
-    # pinned N=2000 / k=10 value: the bisection is deterministic and
-    # seed-free, so any drift beyond 1e-4 is a real regression
-    assert abs(effects[1] - 0.0039129) <= 1e-4
+    # pinned N=2000 / k=10 value (residual-df noncentrality convention,
+    # 2026-11: was 0.0039129 under the rejected lambda = f2 * N form):
+    # the bisection is deterministic and seed-free, so any drift beyond
+    # 1e-4 is a real regression
+    assert abs(effects[1] - 0.0039344) <= 1e-4
     # round-trip consistency with power_calculator: the effect that is
     # just detectable at N=2000 must require ~N=2000 observations again
     n_back = power_for_effect(

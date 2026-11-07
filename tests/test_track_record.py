@@ -113,6 +113,27 @@ def test_drawdown_floor_boundary_and_breach() -> None:
     assert empty["n_obs"] == 0
 
 
+def test_drawdown_mid_path_negative_equity_reads_total_loss() -> None:
+    # regression: only the TERMINAL equity used to trigger the -1.0
+    # sentinel, so a levered path that went negative mid-way and then
+    # recovered reported mdd ~ -1.33 -- a "drawdown" deeper than
+    # -100%, inexpressible as a fraction of the peak and inconsistent
+    # with monte_carlo.max_drawdown_distribution, which drops paths
+    # whose equity goes non-positive at ANY step.  Any non-positive
+    # equity step now collapses to the documented -1.0 sentinel.
+    recovering = [0.5, -4.0 / 3.0, -1.8]  # equity [1.0, 1.5, -0.5, 0.4]
+    check = drawdown_floor_check(recovering, dd_floor=-0.25)
+    assert check["mdd"] == -1.0  # old code: -1.3333...
+    assert check["breached"] is True
+    assert check["n_obs"] == 3
+    verdict = live_verdict(
+        recovering, 1.5, n_backtest=2000, min_observations=8
+    )
+    assert verdict["verdict"] == "LIVE_KILLED"
+    assert verdict["reason"] == "drawdown_floor_breached"
+    assert verdict["mdd"] == -1.0
+
+
 def test_drawdown_floor_validates() -> None:
     with pytest.raises(ValueError):
         drawdown_floor_check([0.01, 0.02], dd_floor=0.0)

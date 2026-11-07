@@ -63,6 +63,12 @@ __all__ = [
 
 _ALPHA = 0.05
 
+# known_features_control: a feature column is unusable as a control when
+# its variance is below this fraction of the STRONGEST feature's
+# variance (relative floor) -- or exactly constant.  The former absolute
+# cut (``var > 1e-12``) failed open on small-scale feature sets.
+_VAR_FLOOR = 1e-12
+
 
 # ----------------------------------------------------------------------------
 # helpers
@@ -341,12 +347,16 @@ def known_features_control(
     """|t| of the new signal after controlling for ALL known features.
 
     Regresses ``fwd_ret ~ const + new_signal + known_features``.
-    Zero-variance feature columns are dropped.  PASS requires the new
-    signal to remain significant (p < 0.05, strict); if it dies, it was
-    a repackaging of what was already on disk.  If the signal is EXACTLY
-    collinear with the known features the design is rank-deficient and
-    no t-stat is meaningful: the verdict is INCONCLUSIVE with ``reason
-    = "collinear with controls"`` instead of a fabricated t-stat.
+    Feature columns whose variance is negligible relative to the
+    strongest feature (below ``1e-12`` of it) or that are exactly
+    constant are dropped -- a relative floor, so genuinely informative
+    small-scale features (decimal returns, sd ~1e-7) are kept.  PASS
+    requires the new signal to remain significant (p < 0.05, strict);
+    if it dies, it was a repackaging of what was already on disk.  If
+    the signal is EXACTLY collinear with the known features the design
+    is rank-deficient and no t-stat is meaningful: the verdict is
+    INCONCLUSIVE with ``reason = "collinear with controls"`` instead of
+    a fabricated t-stat.
 
     Returns ``{stat, p_value, verdict, n_features, n, r2}``.
 
@@ -369,7 +379,19 @@ def known_features_control(
     out, sig, feats = align_inputs(fwd_ret, new_signal, known_features_df)
     if feats.ndim == 1:
         feats = feats.reshape(-1, 1)
-    keep = feats.var(axis=0) > 1e-12
+    variances = feats.var(axis=0)
+    var_max = float(variances.max()) if variances.size else 0.0
+    if var_max > 0.0:
+        # relative floor anchored at the strongest feature: an absolute
+        # 1e-12 cut failed OPEN on small-scale feature sets (a panel of
+        # decimal returns carries variances ~1e-8, so every genuine
+        # control was dropped and the check silently degenerated into
+        # the very univariate regression it was meant to gate)
+        keep = variances > _VAR_FLOOR * var_max
+    else:
+        # every column is constant at any scale: the scale-free ptp
+        # check makes that explicit (nothing varies -> no controls)
+        keep = np.ptp(feats, axis=0) > 0.0
     feats = feats[:, keep]
     n_feat = int(feats.shape[1])
     if n_feat > 0:

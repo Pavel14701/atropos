@@ -24,10 +24,14 @@ from scipy import stats
 
 
 def analytic_power(partial_r2: float, n_obs: int, n_predictors: int) -> float:
-    """Closed-form two-sided t-test power at alpha = 0.05."""
+    """Closed-form two-sided t-test power at alpha = 0.05.
+
+    Mirrors the module's residual-df noncentrality convention:
+    ``ncp = sqrt(f2 * (n - k - 1))``.
+    """
     df = n_obs - n_predictors - 1
     f2 = partial_r2 / (1.0 - partial_r2)
-    ncp = float(np.sqrt(f2 * n_obs))
+    ncp = float(np.sqrt(f2 * df))
     t_crit = float(stats.t.ppf(0.975, df))
     return float(
         stats.nct.sf(t_crit, df, ncp) + stats.nct.cdf(-t_crit, df, ncp)
@@ -70,6 +74,23 @@ def test_detectable_effect_monotone_in_n_obs() -> None:
 def test_detectable_effect_result_matches_target_power() -> None:
     r2_min = detectable_effect(2000, n_predictors=25)
     assert analytic_power(r2_min, 2000, 25) == pytest.approx(0.80, abs=0.01)
+
+
+def test_detectable_effect_pinned_under_residual_df_convention() -> None:
+    """Pinned MDE: ncp^2 = f2 * (n - k - 1), the exact convention.
+
+    Regression: the noncentrality used the Cohen (1988) ``lambda =
+    f2 * N`` approximation (``ncp = sqrt(f2 * n_obs)``), which charges
+    no degrees of freedom for the fitted parameters and understated
+    the minimum detectable effect by ~1.3% at k = 25 (the old pin was
+    0.003912881489144718).  The residual-df value is LARGER, so
+    preregistration thresholds derived from it stay never-optimistic.
+    """
+    effect = detectable_effect(n_obs=2000, n_predictors=25)
+    assert effect == pytest.approx(0.0039642146298056, rel=1e-12)
+    # strictly above the rejected lambda = f2 * N value: the convention
+    # fix moved the threshold UP (the conservative direction)
+    assert effect > 0.003912881489144718
 
 
 def test_simulate_power_agrees_with_analytic_and_monotone() -> None:

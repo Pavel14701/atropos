@@ -189,6 +189,32 @@ def test_stationary_bootstrap_ci_seed_and_mean_block_effects() -> None:
     assert longer_blocks["ci_low"] != first["ci_low"]
 
 
+def test_stationary_bootstrap_ci_validates_mean_block() -> None:
+    # regression: mean_block used to reach the resampling loop raw --
+    # NaN surfaced as an opaque numpy error from rng.geometric ("p <=
+    # 0, p > 1 or p contains NaNs") and values < 1 were silently
+    # clamped to the iid bootstrap by max(mean_block, 1.0), contrary
+    # to the documented Raises contract.  Both now fail loudly with a
+    # ValueError naming the parameter; 1.0 (every block length 1)
+    # stays legal.
+    data = np.arange(50.0)
+    with pytest.raises(
+        ValueError, match="mean_block must be a finite number"
+    ):
+        stationary_bootstrap_ci(data, n_boot=10, mean_block=float("nan"))
+    with pytest.raises(ValueError, match="mean_block must be >= 1"):
+        stationary_bootstrap_ci(data, n_boot=10, mean_block=0.5)
+    # validated BEFORE the data is touched: even the tiny-data guard
+    # must not mask a bad parameter
+    with pytest.raises(ValueError, match="mean_block must be >= 1"):
+        stationary_bootstrap_ci([1.0, 2.0], n_boot=50, mean_block=0.5)
+    ok = stationary_bootstrap_ci(data, n_boot=10, mean_block=1.0, seed=0)
+    assert ok["method"] == "stationary"
+    assert ok["mean_block"] == 1.0
+    assert ok["n"] == 50
+    assert ok["B"] == 10
+
+
 def test_stationary_bootstrap_ci_median_stat() -> None:
     data = np.random.default_rng(8).standard_normal(150)
     out = stationary_bootstrap_ci(

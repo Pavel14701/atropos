@@ -48,7 +48,7 @@ untestable placebo is never a silent PASS.
 
 Usage::
 
-    from robustness_battery import run_battery, battery_overall
+    from atropos.robustness_battery import run_battery, battery_overall
 
     table = run_battery(signal_series, outcome_series,
                         {"threshold": 0.5, "window": 20})

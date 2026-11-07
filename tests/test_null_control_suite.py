@@ -174,6 +174,51 @@ def test_known_features_control_inconclusive_on_exact_clone() -> None:
     assert result["n_features"] == 2
 
 
+def test_known_features_control_keeps_small_scale_feature() -> None:
+    """A sd~1e-7 informative feature stays in the control set.
+
+    Regression: the ABSOLUTE variance floor (``var > 1e-12``) dropped
+    a genuinely informative sd ~1e-7 feature (var ~1e-14) -- fail-open,
+    because with every small-scale feature dropped the control
+    silently degenerated into the very univariate regression it was
+    meant to gate.  The relative floor (``1e-12`` x the strongest
+    feature's variance) keeps small-scale controls in the design, so
+    ``n_features`` counts them and the incremental t-stat is measured
+    against the controls that exist.
+    """
+    gen = np.random.default_rng(31)
+    n_obs = 400
+    small = gen.standard_normal(n_obs) * 1e-7  # var ~1e-14 < 1e-12
+    features = pd.DataFrame(
+        {"small": small, "other": gen.standard_normal(n_obs) * 1e-7}
+    )
+    driver = gen.standard_normal(n_obs)
+    fwd_ret = 0.4 * driver + 0.5 * small + gen.standard_normal(n_obs)
+    result = known_features_control(fwd_ret, driver, features)
+    assert result["n_features"] == 2  # old code: 0 (both features dropped)
+    assert result["verdict"] == "PASS"
+    assert abs(result["stat"]) >= 2.0
+
+
+def test_known_features_control_all_constant_features_dropped() -> None:
+    """A feature set constant at any scale leaves an empty control set.
+
+    The ``var_max == 0`` guard of the relative floor: features frozen
+    at a tiny scale (values ~1e-9, variance exactly 0) are all
+    constant, the scale-free ptp check keeps none of them, and the
+    univariate design still evaluates (no divide-by-zero anchoring the
+    floor at zero variance).
+    """
+    gen = np.random.default_rng(32)
+    features = pd.DataFrame({"const": np.full(300, 1e-9)})
+    fwd_ret = gen.standard_normal(300)
+    signal = gen.standard_normal(300)
+    result = known_features_control(fwd_ret, signal, features)
+    assert result["n_features"] == 0
+    assert np.isfinite(result["stat"])
+    assert result["verdict"] == "FAIL"  # noise signal cannot pass
+
+
 def test_shuffled_permutation_strict_alpha_boundary() -> None:
     # unified strict thresholds: p_value == alpha (0.05 exactly) is a
     # FAIL, not a PASS.  n_draws=19 with ge=0 gives p = (1+0)/20 = 0.05.

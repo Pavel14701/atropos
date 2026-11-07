@@ -102,25 +102,31 @@ def _max_drawdown(values: np.ndarray) -> float:
 
     Returns:
         The deepest drawdown as a negative fraction (e.g. ``-0.30``);
-        0.0 for an empty or never-drawing series.  Terminal equity
-        ``<= 0`` yields the ``-1.0`` sentinel WITHOUT distinguishing
-        "total loss" (equity exactly zero, a single return of
-        ``-1.0``) from a NEGATIVE balance (any return below ``-1.0``,
-        e.g. from leverage): a drawdown below -100% is not
-        expressible as a fraction of the peak, so both cases collapse
-        to the same value - a diagnostic limitation (behavior kept;
-        callers needing the distinction must inspect the raw path).
-        NaN when the compounded equity path overflows to infinity
-        (gigantic growth): callers must classify that as "not
-        computable", never as "no drawdown".
+        0.0 for an empty or never-drawing series.  Equity ``<= 0`` at
+        ANY step -- terminal, or mid-path and later recovered (a
+        levered return below ``-1.0``) -- yields the ``-1.0`` sentinel,
+        WITHOUT distinguishing "total loss" (equity exactly zero, a
+        single return of ``-1.0``) from a NEGATIVE balance (any return
+        below ``-1.0``, e.g. from leverage): a drawdown below -100% is
+        not expressible as a fraction of the peak, so all such paths
+        collapse to the same value - a diagnostic limitation (behavior
+        kept; callers needing the distinction must inspect the raw
+        path).  Mirrors the path-drop rule of
+        ``monte_carlo.max_drawdown_distribution``, which discards paths
+        whose equity goes non-positive at any step.  NaN when the
+        compounded equity path overflows to infinity (gigantic
+        growth): callers must classify that as "not computable", never
+        as "no drawdown".
     """
     if values.size == 0:
         return 0.0
     # Overflow to inf is for the caller to classify, not a warning to
-    # spam: inf/inf yields NaN drawdown entries here on purpose.
+    # spam: inf/inf yields NaN drawdown entries here on purpose.  A
+    # NaN entry compares False against 0, so it never trips the
+    # sentinel and stays on the not-computable path.
     with np.errstate(over="ignore", invalid="ignore"):
         equity = np.cumprod(np.concatenate(([1.0], 1.0 + values)))
-        if equity[-1] <= 0.0:
+        if bool(np.any(equity <= 0.0)):
             return -1.0
         peak = np.maximum.accumulate(equity)
         drawdown = equity / peak - 1.0

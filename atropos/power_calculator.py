@@ -7,8 +7,17 @@ Answers the two questions every hypothesis must face BEFORE evaluation:
 
 Model: testing ONE new coefficient in a linear regression with
 ``n_predictors`` other regressors.  Power is computed from the noncentral
-t distribution with noncentrality ``ncp = sqrt(f2 * n_obs)``,
+t distribution with noncentrality ``ncp = sqrt(f2 * df)`` where
+``df = n_obs - n_predictors - 1`` is the residual degrees of freedom and
 ``f2 = R2 / (1 - R2)`` (Cohen, 1988).
+
+Convention note (2026-11): the earlier ``ncp = sqrt(f2 * n_obs)`` form
+-- the ``lambda = f2 * N`` approximation of Cohen (1988), which charges
+no degrees of freedom for the fitted parameters -- understated the
+minimum detectable effect by ~1.3% at k = 25 (0.0039129 vs the exact
+0.0039642 at N = 2000) and was in tension with the conservative claim
+below; the residual-df form is the exact convention for a single
+tested coefficient and is used everywhere here.
 
 Conservative assumption (worst case): this noncentrality is exact only
 when the other regressors explain none of the outcome variance
@@ -26,8 +35,8 @@ Usage::
 
     from atropos.power_calculator import detectable_effect, power_for_effect
 
-    n_needed = power_for_effect(partial_r2=0.003, n_predictors=25)  # ~2600
-    min_r2 = detectable_effect(n_obs=2000, n_predictors=25)         # ~0.0039
+    n_needed = power_for_effect(partial_r2=0.003, n_predictors=25)  # ~2640
+    min_r2 = detectable_effect(n_obs=2000, n_predictors=25)         # ~0.0040
 
 Run ``python -m atropos.power_calculator`` for a synthetic demo.
 """
@@ -57,6 +66,12 @@ def _power_at(
 ) -> float:
     """Two-sided power of the t-test at sample size ``n_obs``.
 
+    The noncentrality uses the RESIDUAL degrees of freedom,
+    ``ncp = sqrt(f2 * df)`` with ``df = n - k - 1``: the exact
+    convention for one tested coefficient (the rejected
+    ``lambda = f2 * N`` approximation of Cohen, 1988 charged no df and
+    read ~1.3% optimistic at k = 25).
+
     ``scipy.stats.nct`` returns NaN on part of the (df, ncp) plane
     (mid-range noncentrality, roughly ncp in 9..15 at small/medium df).
     Treating that NaN as "power below target" silently inflated
@@ -69,7 +84,7 @@ def _power_at(
     if df < 1:
         return 0.0
     f2 = partial_r2 / (1.0 - partial_r2)
-    ncp = float(np.sqrt(f2 * n_obs))
+    ncp = float(np.sqrt(f2 * df))
     t_crit = float(_st.t.ppf(1.0 - alpha / 2.0, df))
     power = float(_st.nct.sf(t_crit, df, ncp) + _st.nct.cdf(-t_crit, df, ncp))
     if np.isnan(power):
@@ -351,7 +366,7 @@ def run_all_examples() -> None:
         f"detectable_effect(N=2000, k=25, power=0.80)   "
         f"-> min partial R2 = {min_r2:.5f}"
     )
-    assert abs(min_r2 - 0.0039) < 0.0005  # seeded-free bisection: 0.00391
+    assert abs(min_r2 - 0.0039) < 0.0005  # seeded-free bisection: 0.00396
     # round-trip consistency: the effect detectable at N=2000 must
     # require roughly N=2000 observations again
     assert 1900 <= power_for_effect(min_r2, n_predictors=25) <= 2100

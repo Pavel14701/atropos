@@ -104,9 +104,15 @@ def test_golden_sharpe_distribution() -> None:
 
 
 def test_golden_detectable_effect() -> None:
-    """The docstring number: detectable_effect(2000, 25) ~ 0.0039."""
+    """The docstring number: detectable_effect(2000, 25) ~ 0.00396.
+
+    Regression: the ncp convention moved from ``sqrt(f2 * n_obs)`` to
+    the exact residual-df form ``sqrt(f2 * (n_obs - n_predictors -
+    1))`` (convention note 2026-11 in atropos.power_calculator), so
+    the golden value moved 0.00391288 -> 0.00396421 (+1.3%).
+    """
     effect = detectable_effect(n_obs=2000, n_predictors=25)
-    assert effect == pytest.approx(0.003912881489144718, rel=1e-12)
+    assert effect == pytest.approx(0.00396421462980562, rel=1e-12)
 
 
 def test_golden_incremental_test() -> None:

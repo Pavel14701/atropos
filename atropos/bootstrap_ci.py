@@ -303,11 +303,20 @@ def stationary_bootstrap_ci(
 
     Raises:
         ValueError: if ``ci_level`` is outside (0, 1) or not a finite
-            number, or ``n_boot`` is not an integer >= 1; raised before
-            the data is touched.
+            number, ``n_boot`` is not an integer >= 1, or ``mean_block``
+            is not a finite number >= 1 (a sub-unity mean block length
+            degenerates to the iid bootstrap and NaN reached
+            ``rng.geometric`` as a raw numpy error); raised before the
+            data is touched.
     """
     _validate_ci_level(ci_level)
     n_boot = validate_int("n_boot", n_boot)
+    mean_block_val = validate_number("mean_block", mean_block)
+    if mean_block_val < 1.0:
+        raise ValueError(
+            "mean_block must be >= 1 (a sub-unity mean block length "
+            f"degenerates to the iid bootstrap), got {mean_block}"
+        )
     data = clean_1d(series)
     n_obs = int(data.size)
     if n_obs < 8:
@@ -315,7 +324,7 @@ def stationary_bootstrap_ci(
     rng = np.random.default_rng(seed)
     idx_matrix = np.vstack(
         [
-            _stationary_indices(n_obs, float(mean_block), rng)
+            _stationary_indices(n_obs, mean_block_val, rng)
             for _ in range(int(n_boot))
         ]
     )
@@ -329,7 +338,7 @@ def stationary_bootstrap_ci(
         "se": se,
         "n": n_obs,
         "B": int(n_boot),
-        "mean_block": float(mean_block),
+        "mean_block": mean_block_val,
         "method": "stationary",
     }
 
