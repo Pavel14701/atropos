@@ -78,8 +78,10 @@ jobs:
       - name: Ranking suite (lightgbm lambdarank oracle included)
         run: uv run python -m pytest tests/test_ranking.py --tb=no -q
 
-      # clean-interpreter demo smoke: the module must import and run
-      # with the extra installed (and its AST guard keeps lightgbm out
-      # of the module's top level either way)
-      - name: Ranking module demo smoke (python -m)
-        run: uv run python -m atropos.ranking
+      # rot-proof demo smoke: tests/test_ci_smoke.py discovers EVERY
+      # atropos module with a __main__ guard and runs each as
+      # `python -m atropos.<module>` (exit 0 asserted), so the demo
+      # set cannot silently shrink or grow unseen.  Also runs with the
+      # extra installed -- the ranking demo itself needs no lightgbm.
+      - name: Module-demo smoke (discover + run every __main__ module)
+        run: uv run python -m pytest tests/test_ci_smoke.py --tb=short -q

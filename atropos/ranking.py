@@ -1699,3 +1699,81 @@ def paired_bootstrap_diff(
         "p_le0": float((draws <= 0).mean()),
         "n": size,
     }
+
+
+def run_all_examples() -> None:
+    """Demo the ranking layer on synthetic groups (asserts everywhere).
+
+    Self-checking smoke in the house demo style -- no lightgbm, no
+    network, no files: rank normalization keeps the group's order and
+    lands on the exact quantile grid; a seeded paired bootstrap of two
+    synthetic rankers reports the planted sign with the whole CI above
+    zero, a decisive pseudo-p-value, and replays bit-identically.
+    """
+    print("=" * 72)
+    print("ranking demo 1: within-group rank normalization")
+    print("=" * 72)
+    demo_rng = np.random.default_rng(7)
+    raw_scores = np.round(demo_rng.uniform(0.0, 1.0, size=8), 3)
+    normalized = rank_normalize(raw_scores)
+    rounded = [round(value, 4) for value in normalized.tolist()]
+    print(f"raw scores       : {raw_scores.tolist()}")
+    print(f"normalized ranks : {rounded}")
+    # exact contracts on the crafted tie vector: best maps to 1.0,
+    # worst to 0.0, ties share the AVERAGE of their rank positions
+    assert rank_normalize(np.array([0.8, 0.9, 0.7])).tolist() == [
+        0.5,
+        1.0,
+        0.0,
+    ]
+    assert rank_normalize(np.array([0.9, 0.9, 0.1])).tolist() == [
+        0.75,
+        0.75,
+        0.0,
+    ]
+    # order preservation: normalization must never reshuffle the group
+    assert np.argsort(raw_scores).tolist() == np.argsort(normalized).tolist()
+    # exact quantile boundaries: 8 distinct raw scores land on the
+    # 8-point grid {0/7, 1/7, ..., 7/7}, worst 0.0, best 1.0
+    quantile_steps = int(normalized.size) - 1
+    expected_grid = {
+        step / quantile_steps for step in range(int(normalized.size))
+    }
+    assert set(normalized.tolist()) == expected_grid
+    assert float(normalized.min()) == 0.0 and float(normalized.max()) == 1.0
+
+    print()
+    print("=" * 72)
+    print("ranking demo 2: paired bootstrap, ranker A vs ranker B")
+    print("=" * 72)
+    n_groups = 60
+    arm_b = np.round(demo_rng.normal(0.55, 0.08, size=n_groups), 3)
+    arm_a = np.round(arm_b + demo_rng.normal(0.05, 0.03, size=n_groups), 3)
+    verdict = paired_bootstrap_diff(arm_a, arm_b, n_boot=2000, seed=7)
+    print(
+        f"diff={verdict['diff']:+.4f} CI=[{verdict['lo']:+.4f}, "
+        f"{verdict['hi']:+.4f}] p_le0={verdict['p_le0']:.3f} "
+        f"n={verdict['n']}"
+    )
+    # the planted +0.05 per-group edge must come out with the right
+    # sign, a fully positive CI and a decisive pseudo-p-value; these
+    # are property asserts at a fixed seed, and the exact payload is
+    # pinned by the determinism check below
+    assert verdict["n"] == n_groups  # no pair dropped
+    assert verdict["diff"] > 0.0
+    assert 0.0 < verdict["lo"] <= verdict["diff"] <= verdict["hi"] < 0.10
+    assert verdict["p_le0"] <= 0.05
+    # determinism: the same seed replays the identical payload
+    replay = paired_bootstrap_diff(arm_a, arm_b, n_boot=2000, seed=7)
+    assert replay == verdict
+    print(
+        "ranking demo: order kept on the seeded 8-candidate group "
+        "(8-point quantile grid); A beats B by "
+        f"{verdict['diff']:.4f} metric points on {n_groups} groups "
+        f"(95% CI [{verdict['lo']:.4f}, {verdict['hi']:.4f}], "
+        f"p_le0={verdict['p_le0']:.3f})"
+    )
+
+
+if __name__ == "__main__":
+    run_all_examples()

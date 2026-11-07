@@ -1,5 +1,80 @@
 # Changelog
 
+## Unreleased — independent-audit fix waves (review + defect registry)
+
+Every fix below is pinned by a test that fails on the pre-fix code
+(mutation-verified); repro outputs are recorded in the respective
+commit messages.
+
+- Kill-chain semantics (ATR-18): a rule-chain `INCONCLUSIVE` no longer
+  unifies as `KILLED` — all four rule-INCONCLUSIVE × ML cells now read
+  `INCONCLUSIVE [rule]` per the decision matrix (the ATR-06 branch was
+  dead code); undecided is not death.
+- Portfolio policy credit (ATR-19): an unresolved displaced trade
+  credits `_NO_CREDIT` under both policies (the `replace_high` branch
+  no longer poisons the equity stream with NaN); the power floor
+  counts only realized credits; correlation admission validates the
+  candidate before the empty-streams early return; non-string
+  instrument labels are rejected loudly.
+- Prereg → gates bridge (ATR-07): `gates_kwargs_from_prereg` +
+  `run_portfolio(prereg=..., prereg_hash=...)` — thresholds derive
+  ONLY from the frozen prereg, the hash is verified loudly and embedded
+  in the summary and gate reports; engine boundaries aligned to the
+  prereg `comparison` semantics at equality (concentration `>=`,
+  DSR `<=`); prereg validation gains threshold domains, strict
+  `YYYY-MM-DD` dates, 64-char hash anchoring and merged problem lists.
+- Walk-forward (ATR-09, partial — see KNOWN-ISSUES §6): the FRAMEWORK
+  stage-6 kill criterion is now enforced — `shrink_ratio > shrink_cap`
+  (config `walkforward.shrink_cap`, default 2.0) → `FAIL` with
+  `verdict_reason="OVERFIT_DEATH: shrinkage Nx"`, which stage 4 maps
+  to `DEAD`; a NaN shrink (degenerate baseline t) reads INCONCLUSIVE,
+  never a silent pass; `label_horizon > 1` raises (no overlap
+  correction exists — KNOWN-ISSUES §6 accepted risk; the parameter is
+  separate from `purge_gap`); skill 16 synced to the expanding doctrine
+  (FRAMEWORK.md §221-233); three-protocol note recorded (§8, code
+  canonical).
+- Cost line (ATR-11): stage 5 now gates the breakeven —
+  `cost_bps >= breakeven` (finite, positive) attributes `COST_DEATH`
+  (boundary inclusive, pinned; mdd dominance unchanged); the three
+  cost baselines (docs 20bp law, engine 25bp taker, stage-5 10bp
+  one-way) are stated in FRAMEWORK.md; METHODOLOGY.md law references
+  de-conflated.
+- Demo integrity (ATR-05): demo signals carry the decision-bar ATR
+  (no more one-bar lookahead in sl/tp/ranker feature; transcript
+  refreshed — ndcg@k 0.819, mrr 0.778); the stage-5 maker leg sits at
+  the banner 0.25 ATR (the double-offset regression is pinned by a
+  separation-asserted test); ranking failures are no longer masked as
+  honest single-class skips (only the marker matches); caller-config
+  errors fail loudly instead of reading as INCONCLUSIVE; demo stage 1
+  ↔ stage 5 alignment is pinned (same signal, exactly one lag).
+- Statistics core: power noncentrality uses residual df (MDE
+  0.0039129 → 0.0039642, golden pinned, docstring documents the
+  rejected Cohen f²N convention); track-record max drawdown sends any
+  non-positive equity path to the −1.0 sentinel; `mean_block` is
+  validated loudly; the known-features control keeps small-scale
+  informative features (relative variance floor).
+- Backtester: `maker_entry_sim` docs declare the fill-bar contract
+  (semantics unchanged); the cost_model overflow handler no longer
+  crashes on opposite-sign extreme positions; `_align_panels` rejects
+  scrambled plain indices loudly; `sharpe_ratio` no longer warns below
+  two observations; the spy_tsmom docstring states the real ~1-2 bar
+  event overlap.
+- Infrastructure: the portability ratchet scans `.yml/.yaml/.json/
+  .cfg/.txt`; the conventions and meta-architecture scans walk
+  subpackages recursively; `atropos init` writes atomically;
+  `generate_prereg` accepts only strict `YYYY-MM-DD`; the purged-K-fold
+  p-value uses scored-fold dof; regime keys are neutral
+  (`regime_i`); the root docstring documents the sklearn import cost.
+- CI/docs: the module-demo smoke is a rot-proof meta-test (discovers
+  and runs every `__main__` module; `ranking` gains a self-checking
+  demo); docs claims synced (12 skills, 16 `__all__` entries, honest
+  "Most modules" demo claim); KNOWN-ISSUES §6/§7/§8 added; test
+  counters match reality.
+- Test suite: 2675 → 2779 passed, 18 skipped, 2 xfailed — every
+  registry defect fixed above is pinned; ATR-09 and ATR-13 are
+  explicitly "partially closed + accepted risk" (KNOWN-ISSUES §6/§8),
+  not silently claimed done.
+
 ## 1.1.0 — ML engine, backtest pipeline and portfolio waves
 
 - Walk-forward ML training engine (`atropos.ml_training`):
@@ -95,7 +170,7 @@
   `walkforward` docstrings state the same reason explicitly.
 - Documentation translated to English: FRAMEWORK.md, the methodology
   trio, the contributor context, the how-to guides, notebooks and the
-  agent context (AGENTS.md workflow + all ten skills) are fully
+  agent context (AGENTS.md workflow + all twelve skills) are fully
   translated with zero Cyrillic; API names, verdict tokens and
   §-anchors unchanged.
 - Positioning (POSITIONING.md): the honest one-paragraph pitch —
@@ -118,7 +193,7 @@
   machine-specific traces — personal user names, absolute Windows
   user paths, references to the private donor corpus the case-study
   numbers were taken from; any new occurrence fails the suite.
-- Test suite: 2668 passed / 16 skipped / 3 xfailed — golden,
+- Test suite: 2734 passed / 18 skipped / 2 xfailed — golden,
   adversarial, chaos, ML-contract, determinism, meta-AST and
   own-doctrine layers (see KNOWN-ISSUES.md for every skip and xfail).
 

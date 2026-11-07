@@ -3,8 +3,8 @@
 Honest inventory of everything the test suite does not prove, and why.
 None of these are silent: each is pinned in the suite (skips are documented
 in code, xfails are `strict=True`, so an unexpected change breaks the build)
-and each names what would resolve it. Last verified: 2672 passed /
-18 skipped / 3 xfailed.
+and each names what would resolve it. Last verified: 2779 passed /
+18 skipped / 2 xfailed.
 
 ## 1. Eighteen skipped tests — four documented groups
 
