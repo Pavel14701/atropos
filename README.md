@@ -135,7 +135,7 @@ Most modules ship runnable demos: `uv run python -m atropos.<module>`.
 The backtest layer's golden path — one script wiring the full reference
 pipeline: `docs/examples/backtest_pipeline.py`
 (`uv run python docs/examples/backtest_pipeline.py`): 161 candidate
-signals → 63 slots → 56 ranked groups, mrr 0.759 vs 0.556 (gbm vs
+signals → 63 slots → 56 ranked groups, mrr 0.778 vs 0.556 (gbm vs
 random, deterministic seed).
 
 ## Read next

@@ -614,16 +614,22 @@ def oof_score_matrix(
     n_folds: int = 3,
     seed: int = 42,
     member_params: dict[str, dict[str, Any]] | None = None,
+    horizon: int = 0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Past-only out-of-fold member scores, ``(matrix, row_ix)``.
 
     Port of the source protocol's time-tiling OOF builder, adapted to
     the engine's row axis: rows are cut into ``n_folds`` equal tiles BY
     POSITION and every tile is scored by fresh copies of every member
-    fitted strictly on the rows BEFORE the tile starts.  ``feats`` MUST
-    be chronological -- the walk-forward engine guarantees it (its
-    folds hand over train blocks in time order), which makes position
-    tiles honest time tiles.
+    fitted strictly on the rows BEFORE the tile start, minus a
+    ``horizon`` purge gap (the outer engine purges ``horizon_h +
+    purge_h``; this inner level must purge at least the label horizon
+    too, or the tile-1 fit window sees labels that overlap the scored
+    rows).  ``feats`` MUST be chronological -- the walk-forward engine
+    guarantees it (its folds hand over train blocks in time order),
+    which makes position tiles honest time tiles.  A tile whose
+    purged window is empty (``horizon >= tile start``) is SKIPPED,
+    exactly like the earliest tile (no honest past training window).
 
     WARNING (source TZ item 8 -- no stacking without nesting): these
     scores are the ONLY honest input for a stacking meta-learner.  A
@@ -641,15 +647,21 @@ def oof_score_matrix(
             ``seed + i`` (identical across tiles, so tiles differ only
             through their training windows).
         member_params: per-member factory kwargs.
+        horizon: label horizon in ROWS to purge off the end of every
+            tile's fit window (>= 0, default 0 = fit right up to the
+            tile start, the historical behaviour).  Must be 0 or a
+            row count matching the label horizon of the features.
 
     Returns:
         ``(matrix, row_ix)``: the ``(n_scored, n_members)`` OOF score
         matrix and the strictly increasing row indices scored --
         everything after the first tile boundary (the earliest tile
-        has no honest past training window).
+        has no honest past training window; a tile whose purged fit
+        window is empty is skipped the same way).
 
     Raises:
-        ValueError: on invalid members / ``n_folds`` / ``seed``, a
+        ValueError: on invalid members / ``n_folds`` / ``seed`` /
+            ``horizon``, a
             shape-contract violation, fewer than ``2 * n_folds`` rows
             (which would leave a tile or training window empty), or a
             per-tile training window under ``_MIN_TRAIN_FOR_TILES``
@@ -670,6 +682,7 @@ def oof_score_matrix(
     member_tuple = _validate_members(members)
     n_folds = validate_int("n_folds", n_folds, minimum=2)
     seed = validate_int("seed", seed, minimum=0)
+    horizon = validate_int("horizon", horizon, minimum=0)
     params = _validate_member_params(member_params)
     matrix_x = _as_score_matrix("feats", feats)
     targets = _as_binary_labels("labels", labels)
@@ -696,10 +709,15 @@ def oof_score_matrix(
     for tile in range(1, n_folds):
         low = int(bounds[tile])
         high = int(bounds[tile + 1])
+        fit_low = low - horizon  # purge the label horizon off the fit
+        if fit_low <= 0:
+            # purged window empty: the tile has no honest past window
+            # to fit on -- skipped, exactly like the earliest tile
+            continue
         row_blocks.append(np.arange(low, high, dtype=np.int64))
         for slot, name in enumerate(member_tuple):
             model = _build_member(name, params, seed + slot)
-            model.fit(matrix_x[:low], targets[:low])
+            model.fit(matrix_x[:fit_low], targets[:fit_low])
             positive = np.asarray(
                 model.predict_proba(matrix_x[low:high]), dtype=np.float64
             )[:, 1]

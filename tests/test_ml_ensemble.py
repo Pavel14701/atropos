@@ -500,6 +500,73 @@ def test_oof_matrix_shape_and_row_indices() -> None:
     assert ((matrix >= 0.0) & (matrix <= 1.0)).all()
 
 
+class _RecordingMember:
+    """Registry-member stand-in recording fit/score slice sizes."""
+
+    def __init__(self, fit_sizes: list[int], score_sizes: list[int]) -> None:
+        self._fit_sizes = fit_sizes
+        self._score_sizes = score_sizes
+
+    def fit(self, features: Any, _y: Any) -> _RecordingMember:
+        self._fit_sizes.append(int(features.shape[0]))
+        return self
+
+    def predict_proba(self, features: Any) -> np.ndarray:
+        self._score_sizes.append(int(features.shape[0]))
+        return np.full((features.shape[0], 2), 0.5)
+
+
+def test_oof_matrix_purges_label_horizon_from_fit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fit slice ends at ``low - horizon``; horizon=0 keeps old shape.
+
+    Regression: tile fits used ``matrix_x[:low]`` with NO horizon
+    purge, so tile 1's fit window carried labels overlapping the
+    scored rows' label horizon -- leakage the outer engine's purge
+    cannot remove (it purges around walk-forward folds, not inside
+    this matrix's tiles).  Old behaviour: with horizon=5 the fit
+    slices below were 40 and 80 rows instead of 35 and 75.
+    """
+    fit_sizes: list[int] = []
+    score_sizes: list[int] = []
+    monkeypatch.setattr(
+        ml_ensemble_module,
+        "_build_member",
+        lambda _name, _params, _seed: _RecordingMember(
+            fit_sizes, score_sizes
+        ),
+    )
+    feats, labels = _oof_world(120)
+    # bounds: linspace(0, 120, 4) -> [0, 40, 80, 120]
+    oof_score_matrix(feats, labels, ("logit",), n_folds=3, horizon=5, seed=0)
+    assert fit_sizes == [35, 75]
+    assert score_sizes == [40, 40]
+    # horizon=0 (the historical default) keeps the old fit slices
+    fit_sizes.clear()
+    score_sizes.clear()
+    oof_score_matrix(feats, labels, ("logit",), n_folds=3, horizon=0, seed=0)
+    assert fit_sizes == [40, 80]
+    assert score_sizes == [40, 40]
+
+
+def test_oof_matrix_skips_tile_with_empty_purged_window() -> None:
+    """``horizon`` >= tile start skips the tile like the earliest one.
+
+    n_rows=120, n_folds=3, horizon=40: tile 1's purged window is
+    [:0] -- empty -- so the tile has no honest past window to fit on
+    and is skipped; only tile 2 (fit [40], rows [80, 120)) is scored.
+    Old behaviour: tile 1 was fitted on the UN-purged [40] window and
+    scored, leaking its label horizon into the OOF scores.
+    """
+    feats, labels = _oof_world(120)
+    matrix, row_ix = oof_score_matrix(
+        feats, labels, ("logit",), n_folds=3, horizon=40, seed=0
+    )
+    assert matrix.shape == (40, 1)
+    assert row_ix.tolist() == list(range(80, 120))
+
+
 def test_oof_honest_nesting_future_mutation_is_invisible() -> None:
     """CRITICAL port invariant: past-only nesting is honest.
 

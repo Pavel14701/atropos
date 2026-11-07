@@ -38,8 +38,10 @@ from atropos.ml_training import (
     DEFAULT_TRAINING_CONFIG,
     MODEL_REGISTRY,
     _gate_deflated_sharpe,
+    _gate_robustness,
     _incremental_bootstrap_diff,
     _merge_config,
+    _model_verdict,
     _validate_config,
     _verify_vrp_panic_demo,
     _vrp_panic_world,
@@ -1934,3 +1936,112 @@ def test_taken_exec_stream_recomputes_report_ev() -> None:
         if n_taken_rows:
             assert entry["ev"] is not None
             assert float(stream.mean()) == pytest.approx(entry["ev"])
+
+
+# ---------------------------------------------------------------------------
+# F11 pin: the robustness gate KILL path (EV sign flip) is deterministic
+# ---------------------------------------------------------------------------
+def _flip_oos() -> dict[str, Any]:
+    """Crafted OOS book: positive base EV, negative shifted-book EV.
+
+    16 rows in two folds (fold thresholds 0.5).  Base book: the twelve
+    proba-0.9 rows, exec +1.0 each -> EV +1.0.  Shift -20% (thr 0.4)
+    additionally takes the two proba-0.45 rows with exec -12.0 ->
+    EV (12 - 24) / 14 = -12/14 < 0.  Shift +20% (thr 0.6) is the base
+    book again.  All books clear the 10-trade floor, so the gate is
+    decided, not inconclusive.
+    """
+    proba = [0.9] * 6 + [0.45, 0.1] + [0.9] * 6 + [0.45, 0.1]
+    exec_vals = [1.0] * 6 + [-12.0, 0.0] + [1.0] * 6 + [-12.0, 0.0]
+    return {
+        "proba": {"m": np.asarray(proba, dtype=np.float64)},
+        "fold_sizes": [8, 8],
+        "thresholds": {"m": [0.5, 0.5]},
+        "exec": np.asarray(exec_vals, dtype=np.float64),
+    }
+
+
+def test_gate_robustness_triggers_on_deterministic_ev_flip() -> None:
+    """A crafted EV sign flip MUST set triggered=True (kill path).
+
+    Regression pin for the robustness gate's kill semantics: the only
+    in-repo trigger test asserted ``isinstance(triggered, bool)``
+    because the noise-world flip depends on the model's OOS
+    probabilities, which drift across BLAS builds.  That left the
+    kill path UNPINNED: inverting the flip comparison (or reporting
+    triggered=False on a flip) passed every owned test.  Old
+    behaviour: with the flip inverted, this exact crafted book read
+    triggered=False / no reason instead of the kill record below.
+    """
+    oos = _flip_oos()
+    cfg: dict[str, Any] = {"checks": {"robustness_shift": 0.2}}
+    gate, detail = _gate_robustness(oos, "m", cfg)
+    assert gate["check"] == "robustness"
+    assert gate["enabled"] is True
+    assert gate["triggered"] is True
+    assert gate["inconclusive"] is False
+    assert gate["reason"] is not None
+    assert "flips sign" in gate["reason"]
+    # the flip is on the LOW book; measured EVs are exact by design
+    assert detail["n_taken_base"] == 12
+    assert detail["ev_base"] == pytest.approx(1.0)
+    assert detail["n_taken_low"] == 14
+    assert detail["ev_low"] == pytest.approx(-12.0 / 14)
+    assert detail["n_taken_high"] == 12
+    assert detail["ev_high"] == pytest.approx(1.0)
+    # the triggered gate names the engine verdict DEAD(robustness)
+    assert _model_verdict([gate], powered=True) == "DEAD(robustness)"
+    # and the same book WITHOUT the flip stays a pass: exec of the
+    # poison rows +12 instead of -12 keeps every book positive
+    oos_pass = _flip_oos()
+    oos_pass["exec"] = np.where(
+        oos_pass["exec"] == -12.0, 12.0, oos_pass["exec"]
+    )
+    gate_pass, _ = _gate_robustness(oos_pass, "m", cfg)
+    assert gate_pass["triggered"] is False
+    assert gate_pass["reason"] is None
+
+
+# ---------------------------------------------------------------------------
+# F16 pin: recalibrated gate headline -- zero FPR on a seeded noise null
+# ---------------------------------------------------------------------------
+_NOISE_NULL_SEEDS = tuple(range(1, 21))
+"""Fixed seeds of the CI-scale noise null battery (logged on purpose).
+
+The committed calibration headline is FPR 0/100 at full scale; this
+pin re-measures the same claim at demo scale (20 worlds) so a gate
+recalibration that lets noise through cannot slip in unnoticed.
+"""
+
+
+def test_noise_null_battery_zero_survives_and_incremental_fires() -> None:
+    """~20 seeded noise worlds: no SURVIVES, incremental gate fires.
+
+    Regression pin for the recalibrated gate headline (docs/
+    calibration.md: "HELD (0/100 certified)" -- every noise book dies,
+    FPR 0.000): the full-scale battery ran once by hand and nothing
+    guarded the recalibrated thresholds against regressions at CI
+    scale.  On pure noise the model must fail to beat the linear
+    battery in EVERY world (incremental gate triggered) and no world
+    may SURVIVE.  Old behaviour: any recalibration that lets a
+    pure-noise world survive (or lets the incremental gate declare a
+    noise edge) fails here.
+    """
+    cfg: dict[str, Any] = {
+        "model": "logit",  # deterministic across BLAS builds
+        "k_blocks": 3,
+        "bootstrap_b": 100,
+        "n_min_events": 5,
+        "checks": {"deflated_sharpe": False},
+        "model_params": {"logit": {"max_iter": 500}},
+    }
+    for seed in _NOISE_NULL_SEEDS:
+        dataset = _noise_dataset(n_rows=600, seed=seed)
+        report = _run(dataset, config=cfg)
+        verdict = report["verdict"]
+        assert not verdict.startswith("SURVIVES"), (seed, verdict)
+        for entry in report["models"].values():
+            incremental = entry["kills"][0]
+            assert incremental["check"] == "incremental"
+            assert incremental["triggered"] is True, seed
+            assert incremental["inconclusive"] is False, seed

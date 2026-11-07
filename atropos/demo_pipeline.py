@@ -82,6 +82,36 @@ _HOLD_BARS = 48
 _GATE_FLOOR = -0.05
 """Ranking-gate floor: gbm may trail random by at most this much."""
 
+_SINGLE_CLASS_MARKER = "single-class"
+"""Marker of the honest single-class skip in ``atropos.ranking``.
+
+``rank_within_groups`` raises ``ValueError`` for two unrelated reason
+classes: caller/config contract errors (unknown model, non-numeric
+features, interleaved groups, too-few-groups embargo, invalid
+model_params) and the honest skip ``"no group could be scored: every
+past-only training window was single-class ..."``.  Only the latter
+may be swallowed by the demo -- every other message is a structural
+failure and must propagate."""
+
+_REPLAY_COLUMNS: tuple[str, ...] = (
+    "ts_us",
+    "entry_pos",
+    "side",
+    "priority",
+    "atr",
+    "sl",
+    "tp",
+    "noise",
+    "r_opt",
+    "r_pess",
+    "exit_idx",
+)
+"""Column schema of :func:`replay_signals`' output frame.
+
+Declared up front so a fully-dropped input yields a typed EMPTY frame
+with the same columns as a normal result, instead of the column-less
+``pd.DataFrame([])`` that downstream column reads would trip on."""
+
 
 def build_ohlc_world(n_bars: int = _N_BARS, seed: int = 41) -> pd.DataFrame:
     """Trend + panic OHLC world (deterministic, seed=41 default).
@@ -150,7 +180,10 @@ def make_signals(world: pd.DataFrame, seed: int = 41) -> pd.DataFrame:
     The momentum z is computed causally (``rolling_z``); a signal fires
     when the z crosses the +/-1.5 band, with a side matching the sign.
     Priority encodes |z| so the ranking layer has something real to
-    order by.
+    order by.  The ``atr`` column (and the sl/tp derived from it) is
+    the DECISION-bar ATR (``entry_pos - 1``): the 20-bar ATR including
+    the fill bar's completed high-low is unknowable at the fill (the
+    fill bar's open), so the last known ATR is the one at the decision.
 
     Args:
         world: OHLC frame from :func:`build_ohlc_world` (needs the
@@ -184,6 +217,9 @@ def make_signals(world: pd.DataFrame, seed: int = 41) -> pd.DataFrame:
         last_band = momentum_z[pos]
         if not crossed or not np.isfinite(momentum_z[pos]):
             continue
+        # last knowable ATR at the fill (next bar OPEN): the decision
+        # bar's ATR -- the fill bar's high-low is not yet observable
+        entry_atr = float(world["atr"].iloc[pos])
         signal_rows.append(
             {
                 "ts_us": int(world["ts_us"].iloc[pos]),
@@ -191,18 +227,14 @@ def make_signals(world: pd.DataFrame, seed: int = 41) -> pd.DataFrame:
                 + 1,  # fill at next bar open (generator rule)
                 "side": "long" if momentum_z[pos] > 0 else "short",
                 "priority": round(float(abs(momentum_z[pos])) * 10),
-                "atr": float(world["atr"].iloc[pos + 1]),
+                "atr": entry_atr,
                 "sl": float(
                     world["close"].iloc[pos]
-                    - np.sign(momentum_z[pos])
-                    * 1.2
-                    * world["atr"].iloc[pos + 1]
+                    - np.sign(momentum_z[pos]) * 1.2 * entry_atr
                 ),
                 "tp": float(
                     world["close"].iloc[pos]
-                    + np.sign(momentum_z[pos])
-                    * 2.0
-                    * world["atr"].iloc[pos + 1]
+                    + np.sign(momentum_z[pos]) * 2.0 * entry_atr
                 ),
                 "noise": rng.standard_normal(),
             }
@@ -226,7 +258,10 @@ def replay_signals(
         open).  Candidates whose ``entry_pos`` falls past the world
         are dropped (nothing to replay); the numeric outcome columns
         are coerced back to numeric because ``row.to_dict()`` mixes
-        the signal dtypes.
+        the signal dtypes.  The column schema is declared up front, so
+        a fully-dropped input still returns a typed empty frame (not
+        the column-less ``pd.DataFrame([])`` that downstream filters
+        would trip on).
 
     Example::
 
@@ -235,8 +270,16 @@ def replay_signals(
         >>> replayed = replay_signals(world, signals)
         >>> {"r_opt", "r_pess", "exit_idx"} <= set(replayed.columns)
         True
+        >>> past_world = signals.assign(
+        ...     entry_pos=len(world) + signals["entry_pos"]
+        ... )
+        >>> empty = replay_signals(world, past_world)
+        >>> len(empty)
+        0
+        >>> {"r_opt", "r_pess", "exit_idx"} <= set(empty.columns)
+        True
     """
-    records = []
+    records: list[dict[str, Any]] = []
     for _, row in signals.iterrows():
         entry = int(row["entry_pos"])
         if entry >= len(world):
@@ -254,15 +297,18 @@ def replay_signals(
             atr_value=float(row["atr"]),
             cost=CostModel(),
         )
+        # row.to_dict() types keys as Hashable; the replay schema is
+        # str-keyed (_REPLAY_COLUMNS), so coerce for the typed record
+        row_dict = {str(key): value for key, value in row.to_dict().items()}
         records.append(
             {
-                **row.to_dict(),
+                **row_dict,
                 "r_opt": sim["r_opt"],
                 "r_pess": sim["r_pess"],
                 "exit_idx": sim["exit_idx"],
             }
         )
-    frame = pd.DataFrame(records)
+    frame = pd.DataFrame(records, columns=_REPLAY_COLUMNS)
     # row.to_dict() mixes the signal dtypes; restore the numeric columns
     # the downstream filters rely on
     for numeric_column in ("r_opt", "r_pess", "exit_idx", "priority", "atr"):
@@ -289,9 +335,12 @@ def run_demo_pipeline(  # noqa: PLR0912, PLR0915  (one block per stage)
     labels are near-degenerate, so on seeds whose world produces no
     winning candidate the ranking stage is skipped honestly (gate
     ``"skipped"``, pipeline completes) and on seeds where gbm loses
-    the gate fails (``pipeline_completed=False``).  Structural
+    the gate fails (``pipeline_completed=False``).  The skip also
+    covers the degenerate corner where every scored group carries
+    fewer than two candidates (no ordering to score).  Structural
     failures - a world without signals, a machine that trades
-    nothing - still raise AssertionError.
+    nothing, a ranking CONFIG error (unknown model, bad params,
+    embargo larger than the day count) - still raise.
 
     Args:
         seed: RNG seed of the synthetic world and its signals; the
@@ -407,7 +456,14 @@ def run_demo_pipeline(  # noqa: PLR0912, PLR0915  (one block per stage)
             config=rank_config,
             seed=42,
         )
-    except ValueError:
+    except ValueError as exc:
+        if _SINGLE_CLASS_MARKER not in str(exc):
+            # config/contract errors (unknown model, non-numeric
+            # features, interleaved groups, embargo too large for the
+            # day count, bad model_params) are structural failures:
+            # they must surface, never masquerade as the honest
+            # single-class skip below
+            raise
         # honest skip, never a silent one: this seed's world produced
         # no winning candidate, so every past-only training window was
         # single-class and the ranker has nothing to learn; the verdict
@@ -433,46 +489,58 @@ def run_demo_pipeline(  # noqa: PLR0912, PLR0915  (one block per stage)
         say("  skipped: the ranking stage scored no groups")
         ranking_gate = "skipped"
     else:
-        rng = np.random.default_rng(7)
-        for metric_name, metric in RANKING_METRICS.items():
-            gbm_values: list[float] = []
-            random_values: list[float] = []
-            for group in report["groups"]:
-                # candidate-id strings are the metric contract (see
-                # _ordering_contract in atropos.ranking)
-                ideal = [
-                    candidate
-                    for candidate, _ in sorted(
-                        zip(group.candidates, group.labels, strict=True),
-                        key=lambda pair: -pair[1],
-                    )
-                ]
-                if len(ideal) < 2:
-                    continue
-                scored_gbm = [
-                    candidate
-                    for candidate, _ in sorted(
-                        zip(group.candidates, group.scores, strict=True),
-                        key=lambda pair: -pair[1],
-                    )
-                ]
-                scored_random = rng.permutation(ideal).tolist()
-                gbm_values.append(metric(ideal, scored_gbm, 2))
-                random_values.append(metric(ideal, scored_random, 2))
-            values = (
-                float(np.mean(gbm_values)),
-                float(np.mean(random_values)),
-            )
-            metric_values[metric_name] = values
-            say(
-                f"  {metric_name:<12} gbm {values[0]:.3f}  "
-                f"random {values[1]:.3f}"
-            )
-            diff = values[0] - values[1]
-            worst_diff = (
-                diff if np.isnan(worst_diff) else min(worst_diff, diff)
-            )
-        ranking_gate = "pass" if worst_diff >= _GATE_FLOOR else "fail"
+        # RANKING_METRICS compare a candidate ORDERING against the
+        # label-perfect one: a scored group with fewer than two
+        # candidates has no ordering to score.  If every scored group
+        # is that thin, np.mean([]) would be NaN and NaN >= floor
+        # would silently read as a gate FAIL -- report the honest
+        # skip instead (pipeline completes, same convention as the
+        # single-class skip above).
+        rankable = [
+            group for group in report["groups"] if len(group.candidates) >= 2
+        ]
+        if not rankable:
+            say("  skipped: every scored group has < 2 candidates")
+            ranking_gate = "skipped"
+        else:
+            rng = np.random.default_rng(7)
+            for metric_name, metric in RANKING_METRICS.items():
+                gbm_values: list[float] = []
+                random_values: list[float] = []
+                for group in rankable:
+                    # candidate-id strings are the metric contract (see
+                    # _ordering_contract in atropos.ranking)
+                    ideal = [
+                        candidate
+                        for candidate, _ in sorted(
+                            zip(group.candidates, group.labels, strict=True),
+                            key=lambda pair: -pair[1],
+                        )
+                    ]
+                    scored_gbm = [
+                        candidate
+                        for candidate, _ in sorted(
+                            zip(group.candidates, group.scores, strict=True),
+                            key=lambda pair: -pair[1],
+                        )
+                    ]
+                    scored_random = rng.permutation(ideal).tolist()
+                    gbm_values.append(metric(ideal, scored_gbm, 2))
+                    random_values.append(metric(ideal, scored_random, 2))
+                values = (
+                    float(np.mean(gbm_values)),
+                    float(np.mean(random_values)),
+                )
+                metric_values[metric_name] = values
+                say(
+                    f"  {metric_name:<12} gbm {values[0]:.3f}  "
+                    f"random {values[1]:.3f}"
+                )
+                diff = values[0] - values[1]
+                worst_diff = (
+                    diff if np.isnan(worst_diff) else min(worst_diff, diff)
+                )
+            ranking_gate = "pass" if worst_diff >= _GATE_FLOOR else "fail"
 
     say("")
     say("=" * 78)
@@ -487,8 +555,6 @@ def run_demo_pipeline(  # noqa: PLR0912, PLR0915  (one block per stage)
         first = signals.iloc[0]
         entry = int(first["entry_pos"])
         fill_price = float(world["open"].iloc[entry])
-        sign = 1.0 if first["side"] == "long" else -1.0
-        limit_price = fill_price - sign * 0.25 * float(first["atr"])
         maker_r_pess = float(
             maker_entry_sim(
                 world["open"].to_numpy(),
@@ -499,8 +565,13 @@ def run_demo_pipeline(  # noqa: PLR0912, PLR0915  (one block per stage)
                 str(first["side"]),
                 float(first["sl"]),
                 float(first["tp"]),
-                fill_price=limit_price,
+                # fill_price is the market-fill REFERENCE; the limit is
+                # derived inside as reference - delta_atr * atr (passing
+                # a pre-offset limit here would double the offset to
+                # 0.5 ATR against the banner's 0.25)
+                fill_price=fill_price,
                 atr_value=float(first["atr"]),
+                delta_atr=0.25,
             )
         )
         market_r_pess = float(
@@ -542,12 +613,12 @@ def run_demo_pipeline(  # noqa: PLR0912, PLR0915  (one block per stage)
     if ranking_gate == "skipped":
         say(
             f"pipeline completed: mode={'quick' if quick else 'full'},"
-            f" seed={seed}, ranking gate SKIPPED (single-class"
-            " windows)"
+            f" seed={seed}, ranking gate SKIPPED (no rankable"
+            " groups)"
         )
         say(
-            "  gbm-vs-random mrr: n/a (the synthetic world produced no"
-            " winning candidate for this seed)"
+            "  gbm-vs-random mrr: n/a (single-class windows or every"
+            " scored group has < 2 candidates for this seed)"
         )
     elif ranking_gate == "fail":
         say(

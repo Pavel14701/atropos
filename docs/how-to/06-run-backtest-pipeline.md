@@ -52,15 +52,15 @@ groups scored: 56  selections: 98
 ==============================================================================
 STAGE 4: RANKING_METRICS — gbm vs random on the same groups
 ==============================================================================
-  ndcg@k       gbm 0.800  random 0.805
-  precision@k  gbm 0.852  random 0.815
-  mrr          gbm 0.759  random 0.556
-  spearman     gbm 0.185  random 0.185
+  ndcg@k       gbm 0.819  random 0.805
+  precision@k  gbm 0.870  random 0.815
+  mrr          gbm 0.778  random 0.556
+  spearman     gbm 0.259  random 0.185
 
 ==============================================================================
 STAGE 5: maker-entry vs market entry (limit at fill - 0.25 ATR, wait 4 bars)
 ==============================================================================
-maker r_pess=+0.000R  market r_pess=-1.779R  (maker fills are path-deterministic; unfilled zone -> NaN)
+maker r_pess=-1.872R  market r_pess=-1.780R  (maker fills are path-deterministic; unfilled zone -> NaN)
 
 backtest pipeline: all stage checks passed
 ```
