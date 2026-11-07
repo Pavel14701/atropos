@@ -6,7 +6,8 @@ in code, xfails are `strict=True`, so an unexpected change breaks the build)
 and each names what would resolve it.
 
 Structure: **behavioral facts** (§4) + **by design, not closeable**
-(§1a-d, §2, §7) + **backlog with triggers** (§3, §5a, §5b, §6, §8).
+(§1a-d, §2, §7) + **backlog with triggers** (§3, §5a, §5b, §6, §8,
+§10) + **migration note, permanent** (§9).
 Known issues in the strict sense — an open code bug — none; everything
 here is a documented property, a deliberate choice, or a tracked gap
 with its release condition. Last verified: 2781 passed /
@@ -336,3 +337,44 @@ FRAMEWORK.md:221-233 ("Why expanding, not rolling").
 Trigger to close: a P2 wave that syncs skill and FRAMEWORK.md stage
 numbering/wording to the code, plus a contract test pinning the
 FRAMEWORK.md:69-81 map.
+
+## 9. Verdict semantics changed (2026-11-07) — reading pre-taxonomy tombstones
+
+Status: documented migration note, permanent — not closeable (old
+tombstones are append-only and are never rewritten).
+
+Cause: runs before 21a1ccb used the generic `DEAD` verdict for two
+different deaths — stage-3 robustness-battery kills and stage-4
+walk-forward OVERFIT deaths. The verdict taxonomy (CHANGELOG 1.2.1)
+replaced the generic `DEAD` with specific tokens: `ROBUSTNESS_DEATH` /
+`PLACEBO_VIOLATION` at stage 3, `OVERFIT_DEATH` at stage 4; `DEAD` now
+means only proven absence of edge. Disambiguate old tombstones by
+`killed_by_stage`: 3 = robustness battery (today `ROBUSTNESS_DEATH` or
+`PLACEBO_VIOLATION`), 4 + an OVERFIT marker in the kill reason =
+`OVERFIT_DEATH`. The graveyard cod-tag "DEAD" stays as the umbrella
+term — the workspace template is unchanged; only the pipeline's token
+set is new. Additionally, `CS_NO_EDGE` maps to the DEAD verdict class
+only when the config target is `"xs"`; the default target `"ts"`
+treats the XS stage as a sanity check and reports NEEDS_ANALYSIS —
+backward-incompatible for callers reading `verdict_class`, documented
+in CHANGELOG 1.2.1.
+
+Unblocks: nothing — this section is the standing reading guide for
+pre-taxonomy tombstones, not a defect.
+
+## 10. Thirds-window instability — unresolved
+
+Status: unresolved, not investigated.
+
+Cause: the external A:agg feed showed a thirds sign-flip between a
+532-row window and a 2407-row window of the same strategy: the
+subperiod-thirds battery test (sign + CI alive in all three thirds)
+flipped its conclusion depending only on the window chosen for the
+same underlying strategy. Potential fourth Atropos defect: the thirds
+test is sensitive to window choice, so a single-window thirds verdict
+may not be stable.
+
+Trigger to close: an independent thirds-test study across window
+sizes (does the sign-flip rate collapse to the null under window
+resampling?); on results, either pin a window-selection rule or
+document the sensitivity as an accepted property.

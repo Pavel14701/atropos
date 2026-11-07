@@ -46,11 +46,154 @@ if a new venue cuts costs below 2 bps" for a COST_DEATH tombstone.
 ## Verdicts
 
 **SURVIVED / KILLED / INCONCLUSIVE** — the three abstract outcomes. The
-pipeline emits concrete names: `SURVIVES`, `SURVIVES_WITH_WARNINGS`
-(the survived family), seven kill verdicts (`REPACKAGING`, `ARTIFACT`,
-`DEAD`, `NO_OOS_EDGE` x2 stages, `COST_DEATH`, `RISK`, `CS_NO_EDGE`),
-and `INCONCLUSIVE` when the data cannot decide. Example: SURVIVES means
-"earned the right to a live track record", not "is true".
+pipeline emits concrete tokens: `SURVIVES`, `SURVIVES_WITH_WARNINGS`
+(the survived family), twelve kill tokens (`DEAD`, `ROBUSTNESS_DEATH`,
+`PLACEBO_VIOLATION`, `OVERFIT_DEATH`, `NO_OOS_EDGE`, `COST_DEATH`,
+`DEGENERATE_FEED`, `CONSTANT_PREDICTIONS`, `CS_NO_EDGE`, `RISK`,
+`ARTIFACT`, `REPACKAGING`), and `INCONCLUSIVE` when the data cannot
+decide. The generic `DEAD` is retired as a catch-all: it survives only
+as the proven-absence token (battery baseline catastrophically dead, or
+`CS_NO_EDGE` with config target `"xs"`). Every report also carries
+`verdict_class` (DEAD / NEEDS_ANALYSIS / INCONCLUSIVE / SURVIVES),
+`informative`, `interpretation`, `next_step`, `what_would_change`,
+`failed_test`, `active_days`. Example: SURVIVES means "earned the right
+to a live track record", not "is true".
+
+### The kill tokens, one by one
+
+Each kill token, exactly four fields — Means / Why fired / Next step /
+What would change:
+
+**DEAD** (code token; doctrine name: n/a — this is the proven-absence
+class)
+- **Means:** absence of edge proven on this feed.
+- **Why fired:** battery baseline catastrophically dead (mean ≤ 0 with
+  power / no active days), or CS tests found no XS structure at
+  required power.
+- **Next step:** stop pursuing this signal on this feed; if you believe
+  the edge exists, the feed is the problem — new feed, new run, new
+  verdict.
+- **What would change:** nothing on this feed. DEAD is not transferable
+  across feeds.
+
+**ROBUSTNESS_DEATH** (doctrine: ROBUSTNESS-DEATH, FRAMEWORK.md:404)
+- **Means:** the signal survived some robustness tests but failed a
+  specific structural one — about the signal's shape, not its P&L.
+- **Why fired:** a specific battery test returned FAIL while the
+  baseline remained positive — check the battery table for WHICH test
+  (smoothing inversion is characteristic of mean-reverting books;
+  thirds sign-flip means regime-bound; LOO non-persistence means no
+  single day holds it).
+- **Next step:** name the failed test and the mechanism it implies; if
+  the mechanism is a strategy-class property, the class is the issue;
+  if a data property, the OOS period is.
+- **What would change:** a different signal representation where the
+  failed test is not structurally hostile — a different test, NOT a
+  softened test.
+
+**PLACEBO_VIOLATION**
+- **Means:** the apparent edge survives when the signal is lagged into
+  the future — causality violation.
+- **Why fired:** placebo test with lag-k produced non-zero edge — the
+  most serious informative kill: the strategy as measured is not a
+  strategy.
+- **Next step:** audit the feed for lookahead (alignment, point-in-time
+  semantics, indicator warmup); do not trade until explained.
+- **What would change:** a strictly point-in-time feed: edge
+  disappears → it was a leak; survives → the verdict changes.
+
+**OVERFIT_DEATH** (doctrine: OVERFIT-DEATH, FRAMEWORK.md:407)
+- **Means:** in-sample edge exists, OOS is worse by more than the
+  shrink cap — does not generalize as measured.
+- **Why fired:** shrink = OOS/IS > 2.
+- **Next step:** check whether the IS period overlaps a regime the OOS
+  does not.
+- **What would change:** an OOS period overlapping the IS regime
+  distribution.
+
+**NO_OOS_EDGE**
+- **Means:** robustness passed, but forward-looking predictive power is
+  not significant in purged evaluation — the tested features do not
+  capture the mechanism.
+- **Why fired:** OOS predictive metric below threshold while battery
+  passed.
+- **Next step:** a FEATURE question: test execution quality,
+  microstructure, regime timing, carry — do not force the same
+  features through a stricter threshold.
+- **What would change:** a feature set capturing the actual mechanism.
+
+**COST_DEATH**
+- **Means:** gross edge exists, net of modelled costs it does not.
+- **Why fired:** breakeven cost ≥ modelled cost at required
+  significance.
+- **Next step:** reduce turnover, improve execution, or accept lower
+  scale — execution problem.
+- **What would change:** cheaper execution or a lower-turnover variant.
+
+**DEGENERATE_FEED**
+- **Means:** the feed cannot be tested (constant signal, constant
+  returns, zero variance, all-NaN).
+- **Why fired:** `np.ptp == 0` or all-NaN on signal or returns
+  (pre-flight).
+- **Next step:** fix the feed — common causes: paused leg not excluded,
+  key-mapping error, degenerate threshold.
+- **What would change:** a valid feed — any prior verdict on this feed
+  is voided in the journal.
+
+**CONSTANT_PREDICTIONS**
+- **Means:** the walk-forward model produced constant predictions — the
+  model degenerated and the signal was not tested.
+- **Why fired:** `preds_std` degenerate inside the walk-forward.
+- **Next step:** check the model spec (too simple, window too short,
+  single-class fold) — model problem, not signal problem.
+- **What would change:** a model spec producing non-constant
+  predictions.
+
+**CS_NO_EDGE** (DEAD class only with config target `"xs"`; the default
+`"ts"` target reads NEEDS_ANALYSIS)
+- **Means:** cross-sectional structure absent at required power.
+- **Why fired:** XS tests non-significant at power.
+- **Next step:** XS by design → this is DEAD; time-series strategy →
+  ignore this verdict for this signal.
+- **What would change:** nothing on this feed if XS was the target; a
+  different target is a different test.
+
+**RISK**
+- **Means:** passes statistical gates, fails risk gates (concentration,
+  drawdown, exposure).
+- **Why fired:** risk threshold breached.
+- **Next step:** reduce exposure, diversify, accept lower scale — the
+  edge is real, the sizing is wrong.
+- **What would change:** sizing within risk limits.
+
+**ARTIFACT**
+- **Means:** the effect is indistinguishable from
+  alignment/placebo/concentration/calendar nulls.
+- **Why fired:** the null families reject the candidate.
+- **Next step:** check the feed for lookahead/alignment/calendar
+  artifacts; if clean, the signal is not distinguishable from noise on
+  this feed.
+- **What would change:** a different signal or feed where at least one
+  null is rejected with power.
+
+**REPACKAGING**
+- **Means:** the signal's edge is a known factor in disguise — already
+  known.
+- **Why fired:** stage 1/2 known-features controls absorb the signal —
+  it adds nothing beyond the known factor.
+- **Next step:** identify the parent factor; intentional repackaging is
+  a valid exposure, claimed novelty is a misrepresentation.
+- **What would change:** evidence of information orthogonal to the
+  parent factor.
+
+**The five-facts rule.** Every kill reports (1) which gate fired, (2)
+on what feed (anchor, n_obs, active_days), (3) which specific test
+failed, (4) whether the failure is informative, (5) what would change
+the verdict. A verdict without all five facts is not a verdict.
+
+Naming: code tokens use the underscore form (`ROBUSTNESS_DEATH`); the
+FRAMEWORK doctrine uses the hyphen form (ROBUSTNESS-DEATH,
+FRAMEWORK.md §4).
 
 **Null control** — a test that destroys the hypothesis if the effect
 survives only in the un-manipulated world: permutation, placebo,

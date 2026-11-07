@@ -10,7 +10,11 @@ one verdict. The goal is not to confirm your idea but to kill it
 cheaply: thresholds are frozen in a preregistration before the data is
 touched, and every verdict is written down. Verdicts: `SURVIVES`,
 `SURVIVES_WITH_WARNINGS`, `REPACKAGING`, `ARTIFACT`, `DEAD`,
-`NO_OOS_EDGE`, `COST_DEATH`, `RISK`, `CS_NO_EDGE`; stages report
+`ROBUSTNESS_DEATH`, `PLACEBO_VIOLATION`, `OVERFIT_DEATH`,
+`NO_OOS_EDGE`, `COST_DEATH`, `DEGENERATE_FEED`, `CONSTANT_PREDICTIONS`,
+`RISK`, `CS_NO_EDGE`; every report also carries `verdict_class`
+(DEAD / NEEDS_ANALYSIS / INCONCLUSIVE / SURVIVES), `informative`,
+`interpretation`, `next_step`; stages report
 `PASS`/`WARN`/`FAIL`/`SKIPPED`/`INCONCLUSIVE`. Survival is not the end:
 `atropos.track_record.live_verdict` judges live PnL against the prereg.
 

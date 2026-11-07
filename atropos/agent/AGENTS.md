@@ -44,8 +44,11 @@ from atropos.ensemble_pipeline import run_full_pipeline
 # panel_signal/panel_returns; config: on top of DEFAULT_CONFIG.
 report = run_full_pipeline(data, config)
 report["overall_verdict"]  # SURVIVES | SURVIVES_WITH_WARNINGS |
-# REPACKAGING | ARTIFACT | DEAD | NO_OOS_EDGE | COST_DEATH | RISK |
-# CS_NO_EDGE (+ INCONCLUSIVE stages); killed_by_stage, kill_reason.
+# REPACKAGING | ARTIFACT | DEAD | ROBUSTNESS_DEATH | PLACEBO_VIOLATION |
+# OVERFIT_DEATH | NO_OOS_EDGE | COST_DEATH | DEGENERATE_FEED |
+# CONSTANT_PREDICTIONS | RISK | CS_NO_EDGE (+ INCONCLUSIVE stages);
+# killed_by_stage, kill_reason, verdict_class (DEAD | NEEDS_ANALYSIS |
+# INCONCLUSIVE | SURVIVES), informative, interpretation, next_step.
 
 from atropos.track_record import live_verdict
 # production stage for a deployed SURVIVES; LIVE_OK ≠ confirmation.
@@ -53,7 +56,7 @@ from atropos.track_record import live_verdict
 
 ## Skills (12)
 
-Core: `01-preregister`, `02-run-pipeline` (the 9-verdict table),
+Core: `01-preregister`, `02-run-pipeline` (the 14-verdict table),
 `03-read-graveyard`, `04-run-ml-kill-protocol` (the ML chain:
 features→target, walk-forward, gates). Stage 1-7 protocols:
 `11-premise-check`, `12-null-control`, `13-signal-test`,

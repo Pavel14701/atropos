@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.2.1 — verdict taxonomy
+
+- Generic `DEAD` removed from the pipeline verdicts: the former
+  catch-all is split into specific tokens — `ROBUSTNESS_DEATH` (a
+  specific battery test failed while the baseline held; was `DEAD` at
+  stage 3), `PLACEBO_VIOLATION` (battery placebo lag-k produced
+  non-zero edge — causality red flag), `OVERFIT_DEATH` (walk-forward
+  shrink gate at stage 4; was `DEAD` via the shrink mapping),
+  `DEGENERATE_FEED` (zero-variance / all-NaN signal or returns,
+  caught pre-flight) and `CONSTANT_PREDICTIONS` (walk-forward
+  `preds_std` degenerate). `DEAD` remains only as the proven-absence
+  token: battery baseline catastrophically dead, or `CS_NO_EDGE` with
+  config target `"xs"`.
+- Every report now carries `verdict_class` (DEAD / NEEDS_ANALYSIS /
+  INCONCLUSIVE / SURVIVES), `informative`, `interpretation`,
+  `next_step`, `what_would_change`, `failed_test` and `active_days`;
+  the five-facts rule (gate / feed / failed test / informativeness /
+  what would change) is documented in FRAMEWORK.md §4 and GLOSSARY.md.
+- SEMANTIC CHANGE; BACKWARD-INCOMPATIBLE: `CS_NO_EDGE` maps to the
+  DEAD class only when the config target is `"xs"`; the default target
+  `"ts"` treats the XS stage as a sanity check → `NEEDS_ANALYSIS`.
+  Runs before 21a1ccb used the generic `DEAD` — disambiguate old
+  tombstones by `killed_by_stage`: 3 = robustness battery (now
+  `ROBUSTNESS_DEATH` / `PLACEBO_VIOLATION`), 4 + an OVERFIT marker =
+  `OVERFIT_DEATH` (KNOWN-ISSUES §9).
+- Test suite: 2781 → 2794 passed, 18 skipped, 2 xfailed — every new
+  verdict mapping is pinned (mutation-verified by the orchestrator).
+
 ## 1.2.0 — independent-audit fix waves (review + defect registry)
 
 Every fix below is pinned by a test that fails on the pre-fix code

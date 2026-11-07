@@ -1,6 +1,6 @@
 ---
 name: 02-run-pipeline
-description: Run the hypothesis through atropos.ensemble_pipeline.run_full_pipeline and read one of the 9 verdicts correctly.
+description: Run the hypothesis through atropos.ensemble_pipeline.run_full_pipeline and read one of the 14 verdicts correctly.
 when_to_use: When the prereg is frozen and the data is pulled; for any decisive run on the frozen spec.
 version: 0.1.0
 ---
@@ -29,7 +29,10 @@ version: 0.1.0
 3. **One run.** No parameter tuning after the result; the seed is
    pinned inside the configs.
 4. **Read the report.** `overall_verdict`, `killed_by_stage`,
-   `kill_reason`, `stages` (per-stage dicts), `runtime_seconds`.
+   `kill_reason`, `stages` (per-stage dicts), `runtime_seconds`; plus
+   the verdict metadata: `verdict_class` (DEAD / NEEDS_ANALYSIS /
+   INCONCLUSIVE / SURVIVES), `informative`, `interpretation`,
+   `next_step`, `what_would_change`, `failed_test`, `active_days`.
 
 ## EXAMPLE
 
@@ -44,7 +47,7 @@ report = run_full_pipeline(
 print(report["overall_verdict"], report.get("kill_reason"))
 ```
 
-## VERDICT TABLE (9) — WHAT TO DO FOR EACH
+## VERDICT TABLE (14) — WHAT TO DO FOR EACH
 
 | Verdict | Meaning | Agent action |
 |---|---|---|
@@ -52,11 +55,15 @@ print(report["overall_verdict"], report.get("kill_reason"))
 | `SURVIVES_WITH_WARNINGS` | passed, but with warnings | tombstone `SURVIVED` with the warning list from `stages` |
 | `REPACKAGING` | the signal is a proxy of a known feature (stages 1-2) | tombstone `KILLED`: the effect is real but borrowed; the family closes, successors start with prior <= 20% and a single run |
 | `ARTIFACT` | artifact: subperiod concentration / placebo / calendar (stage 1) | tombstone `KILLED`, record the artifact mechanics |
-| `DEAD` | robustness battery (stage 3) | tombstone `KILLED`, list the broken tests |
-| `NO_OOS_EDGE` | no out-of-sample edge: walk-forward / model-eval (stages 4, 6) | tombstone `KILLED`; put the shrinkage vs discovery into the tombstone |
+| `DEAD` | absence of edge PROVEN on this feed: battery baseline catastrophically dead (mean <= 0 with power / no active days), or `CS_NO_EDGE` at config target `xs` | tombstone `KILLED`; stop pursuing on this feed — DEAD is not transferable across feeds |
+| `ROBUSTNESS_DEATH` | robustness battery (stage 3): a specific structural test FAILED while the baseline held | tombstone `KILLED`; name the failed test and the mechanism it implies (smoothing inversion / thirds sign-flip / LOO non-persistence) |
+| `PLACEBO_VIOLATION` | battery placebo lag-k produced non-zero edge (stage 3) — causality red flag | tombstone `KILLED`; audit the feed for lookahead (alignment, point-in-time semantics, warmup); do not trade until explained |
+| `OVERFIT_DEATH` | walk-forward shrink gate (stage 4): OOS/IS shrink beyond the cap | tombstone `KILLED`; record the shrink ratio and whether the IS regime overlaps the OOS |
+| `NO_OOS_EDGE` | no out-of-sample predictive edge: model-eval (stage 6) | tombstone `KILLED`; a FEATURE question — execution, microstructure, regime timing, carry |
 | `COST_DEATH` | gross alive, net-of-cost dies (stage 5) | tombstone `KILLED`; record the `cost_bps` at which it dies |
 | `RISK` | drawdown-tail or gross-Sharpe-floor breach (stage 5) | tombstone `KILLED` with the risk numbers |
-| `CS_NO_EDGE` | cross-sectional IC / quantile spread empty (stage 7) | tombstone `KILLED` |
+| `CS_NO_EDGE` | cross-sectional IC / quantile spread empty (stage 7); DEAD class only at config target `xs`, default `ts` -> NEEDS_ANALYSIS | tombstone `KILLED` if XS was the target |
+| `DEGENERATE_FEED` / `CONSTANT_PREDICTIONS` | UNINFORMATIVE: the test could not run (zero-variance / all-NaN feed pre-flight, or degenerate walk-forward `preds_std`) — the strategy is not judged | tombstone `INCONCLUSIVE`; fix the feed / model spec and re-run on a new snapshot |
 
 `INCONCLUSIVE` at a stage (too little data, degenerate inputs) is an
 honest outcome: the overall result is `INCONCLUSIVE`, reopening is

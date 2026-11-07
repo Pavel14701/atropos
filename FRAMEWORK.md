@@ -418,6 +418,42 @@ Note. PERSISTENCE-DEATH is about the aging of a known effect; DECAY-DEATH is
 about the signal's intrinsic speed against the execution delay; PARADIGM-DEATH is
 about the structural break of an entire class of hypotheses.
 
+### What a kill verdict means
+
+The code emits tokens in the underscore form; this document's doctrine
+uses the hyphen form (see the mapping below). Every run reports
+`verdict_class`, one of four:
+
+- **DEAD** — absence of edge proven on this feed. A conclusion: act on
+  it. Only two paths qualify: the battery baseline is catastrophically
+  dead (mean ≤ 0 with power / no active days), and `CS_NO_EDGE` when
+  the config target is `"xs"`.
+- **NEEDS_ANALYSIS** — a specific gate was informative but did not
+  prove absence of edge: investigate the mechanism. The most common
+  outcome.
+- **INCONCLUSIVE** — the test could not run: fix the feed, the model
+  or the window and re-run.
+- **SURVIVES** — this protocol on this feed could not kill it. NOT
+  proof of truth.
+
+Every kill reports five facts: (1) which gate fired, (2) on what feed
+(anchor, n_obs, active_days), (3) which specific test failed, (4)
+whether the failure is informative, (5) what would change the verdict.
+A verdict without all five facts is not a verdict.
+
+Code token ↔ doctrine term (rows of the table above): `ROBUSTNESS_DEATH`
+↔ ROBUSTNESS-DEATH (the battery row), `OVERFIT_DEATH` ↔ OVERFIT-DEATH
+(the walk-forward shrink row), `DEGENERATE_FEED` /
+`CONSTANT_PREDICTIONS` ≈ DATA-BLOCKED (the feed or model could not be
+tested), `PLACEBO_VIOLATION` ≈ the NULL-DEATH family (the effect
+survives its own manipulation).
+
+**Booked-R caveat.** A feed whose signal is the exposure sign and whose
+returns are booked R is circular for a signal-vs-return protocol: the
+"prediction" is verified against its own P&L bookkeeping. Such legs
+need per-trade or predictor-form ingestion — e.g. the SYSTEM-9 legs
+ported in `system9_legs.py`; that ingestion is separate work.
+
 ---
 
 ## §5 The Red Thread
