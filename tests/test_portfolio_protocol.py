@@ -9,6 +9,7 @@ import pytest
 from atropos.portfolio_protocol import (
     anchor_prereg,
     check_calibration_progression,
+    gates_kwargs_from_prereg,
     hash_kill_prereg,
     save_prereg_snapshot,
     validate_kill_prereg,
@@ -97,6 +98,73 @@ class TestValidateKillPrereg:
         problems = validate_kill_prereg(prereg)
         assert any("slots" in problem_text for problem_text in problems)
 
+    def test_missing_field_does_not_hide_other_problems(self) -> None:
+        """Missing keys AND field problems are reported together.
+
+        Regression: the validator early-returned on the first missing
+        key, hiding every other problem (here a broken alpha) from the
+        one-pass fix the docstring promises.
+        """
+        prereg = _valid_prereg()
+        del prereg["slots"]
+        del prereg["frozen_date"]
+        prereg["alpha"] = 0.9
+        problems = validate_kill_prereg(prereg)
+        assert any(
+            "missing required field: slots" in problem_text
+            for problem_text in problems
+        )
+        assert any(
+            "missing required field: frozen_date" in problem_text
+            for problem_text in problems
+        )
+        assert any("alpha" in problem_text for problem_text in problems)
+
+    def test_gate_threshold_domains(self) -> None:
+        """Each gate's threshold is domain-checked per gate name.
+
+        Regression: any numeric threshold was accepted regardless of
+        the gate -- a dsr_min of 1.5 (unsatisfiable), a dd_floor of
+        0.5 (not a drawdown floor) and a share cap of 0.0 (triggers on
+        every held bar) all hashed silently.
+        """
+        prereg = _valid_prereg()
+        prereg["gates"]["dsr_min"]["threshold"] = 1.5
+        prereg["gates"]["dd_floor"]["threshold"] = 0.5
+        prereg["gates"]["side_concentration"]["threshold"] = 0.0
+        problems = validate_kill_prereg(prereg)
+        assert any(
+            "dsr_min.threshold" in problem_text for problem_text in problems
+        )
+        assert any(
+            "dd_floor.threshold" in problem_text for problem_text in problems
+        )
+        assert any(
+            "side_concentration.threshold" in problem_text
+            for problem_text in problems
+        )
+
+    def test_frozen_date_must_be_a_real_date(self) -> None:
+        """A strict YYYY-MM-DD check rejects impossible dates.
+
+        Regression: only the length and a dash position were checked,
+        so ``"2026-13-99"`` passed as a freeze stamp.
+        """
+        prereg = _valid_prereg()
+        prereg["frozen_date"] = "2026-13-99"
+        problems = validate_kill_prereg(prereg)
+        assert any("frozen_date" in problem_text for problem_text in problems)
+
+    def test_frozen_date_must_be_dashed_iso_shape(self) -> None:
+        """Compact ``YYYYMMDD`` and short-month shapes are rejected."""
+        for bad_date in ("20261106", "2026-1-6"):
+            prereg = _valid_prereg()
+            prereg["frozen_date"] = bad_date
+            problems = validate_kill_prereg(prereg)
+            assert any(
+                "ISO date" in problem_text for problem_text in problems
+            )
+
 
 class TestHashAndSave:
     def test_hash_deterministic(self) -> None:
@@ -126,6 +194,64 @@ class TestHashAndSave:
         save_prereg_snapshot(_valid_prereg(), nested)
         assert (nested / "prereg.json").is_file()
 
+    def test_hash_rejects_nan_threshold(self) -> None:
+        """A NaN prereg value must not silently produce a hash.
+
+        Regression: the canonical JSON allowed ``NaN``, so a prereg
+        with a NaN threshold hashed happily -- an anchor over a value
+        that can never be part of a valid prereg.
+        """
+        prereg = _valid_prereg()
+        prereg["gates"]["dsr_min"]["threshold"] = float("nan")
+        with pytest.raises(ValueError, match="JSON-serializable"):
+            hash_kill_prereg(prereg)
+
+    def test_hash_rejects_non_serializable_value(self) -> None:
+        """A non-JSON object raises ValueError, not raw TypeError.
+
+        Regression: a non-serializable value (a set) leaked json.dumps'
+        TypeError straight to the caller instead of the documented
+        ValueError contract.
+        """
+        prereg = _valid_prereg()
+        prereg["hypothesis"] = {"not", "serializable"}  # a set
+        with pytest.raises(ValueError, match="JSON-serializable"):
+            hash_kill_prereg(prereg)
+
+
+class TestGatesKwargsFromPrereg:
+    def test_extracts_all_three_thresholds(self) -> None:
+        kwargs = gates_kwargs_from_prereg(_valid_prereg())
+        assert kwargs == {
+            "dsr_min": 0.95,
+            "dd_floor": -0.20,
+            "share_cap": 0.80,
+        }
+
+    def test_disabled_gate_raises(self) -> None:
+        """A disabled gate is fail-closed, never a skipped check."""
+        prereg = _valid_prereg()
+        prereg["gates"]["side_concentration"]["enabled"] = False
+        with pytest.raises(ValueError, match="disabled"):
+            gates_kwargs_from_prereg(prereg)
+
+    def test_missing_gate_raises(self) -> None:
+        prereg = _valid_prereg()
+        del prereg["gates"]["dd_floor"]
+        with pytest.raises(ValueError, match="missing"):
+            gates_kwargs_from_prereg(prereg)
+
+    def test_missing_gates_dict_raises(self) -> None:
+        prereg = {"hypothesis": "no gates here"}
+        with pytest.raises(ValueError, match="gates"):
+            gates_kwargs_from_prereg(prereg)
+
+    def test_non_numeric_threshold_raises(self) -> None:
+        prereg = _valid_prereg()
+        prereg["gates"]["dsr_min"]["threshold"] = "0.95"
+        with pytest.raises(ValueError, match="real number"):
+            gates_kwargs_from_prereg(prereg)
+
 
 class TestCalibrationProgression:
     def test_all_pass(self) -> None:
@@ -154,13 +280,49 @@ class TestCalibrationProgression:
         assert result["all_pass"] is False
         assert "negative control" in result["next_step"]
 
+    def test_null_fpr_domain_checked(self) -> None:
+        """A measured FPR cannot leave [0, 1].
+
+        Regression: null_fpr was never domain-checked, so a slip like
+        1.5 or -0.1 flowed straight into the ``<= 2 * alpha`` verdict.
+        """
+        with pytest.raises(ValueError, match="null_fpr"):
+            check_calibration_progression(1.5, "SURVIVES", "DEAD(cost_line)")
+        with pytest.raises(ValueError, match="null_fpr"):
+            check_calibration_progression(-0.1, "SURVIVES", "DEAD(cost_line)")
+
+    def test_alpha_domain_checked(self) -> None:
+        """Prereg alpha domain (0, 0.2] is enforced.
+
+        Regression: any positive alpha was accepted, silently widening
+        the null-FPR tolerance past the preregistered ceiling.
+        """
+        with pytest.raises(ValueError, match="alpha"):
+            check_calibration_progression(
+                0.03, "SURVIVES", "DEAD(x)", alpha=0.5
+            )
+        with pytest.raises(ValueError, match="alpha"):
+            check_calibration_progression(
+                0.03, "SURVIVES", "DEAD(x)", alpha=0.0
+            )
+
 
 class TestAnchorPrereg:
     def test_valid_hash_anchored(self) -> None:
         report: dict[str, str] = {"verdict": "SURVIVES"}
-        anchored = anchor_prereg(report, "a" * 8)
-        assert anchored["prereg_hash"] == "a" * 8
+        anchored = anchor_prereg(report, "a" * 64)
+        assert anchored["prereg_hash"] == "a" * 64
 
     def test_short_hash_raises(self) -> None:
-        with pytest.raises(ValueError, match="hex string"):
+        with pytest.raises(ValueError, match="sha256"):
             anchor_prereg({}, "xyz")
+
+    def test_non_sha256_width_hex_raises(self) -> None:
+        """Exactly 64 chars are required, not merely >= 8.
+
+        Regression: any hex string of at least 8 chars was accepted, so
+        a truncated or otherwise malformed digest could be anchored as
+        if it were a full sha256 commitment.
+        """
+        with pytest.raises(ValueError, match="64-char sha256"):
+            anchor_prereg({}, "a" * 40)

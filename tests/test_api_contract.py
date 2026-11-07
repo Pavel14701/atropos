@@ -488,6 +488,10 @@ EXPECTED_KEY_SETS: dict[str, frozenset[str]] = {
             "wf_direction_consistency",
             "wf_shrink_ratio",
             "verdict",
+            # verdict_reason — stage-2 shrink gate (OVERFIT_DEATH /
+            # shrinkage-NaN INCONCLUSIVE); do not remove without
+            # syncing ensemble_pipeline stage-4 detection
+            "verdict_reason",
             "n_folds",
             "in_sample_t",
             "folds",
@@ -748,6 +752,7 @@ EXPECTED_KEY_SETS: dict[str, frozenset[str]] = {
             "ev",
             "dd",
             "concurrent_max",
+            "prereg_hash",
         }
     ),
     "run_portfolio_replay.per_slot": frozenset({"slot", "trades", "ev_r"}),
@@ -769,7 +774,13 @@ EXPECTED_KEY_SETS: dict[str, frozenset[str]] = {
         }
     ),
     "portfolio_gates": frozenset(
-        {"gates", "portfolio_verdict", "n_trades", "min_trades"}
+        {
+            "gates",
+            "portfolio_verdict",
+            "n_trades",
+            "min_trades",
+            "prereg_hash",
+        }
     ),
     "portfolio_gates.gate": frozenset(
         {"gate", "triggered", "value", "floor", "reason"}

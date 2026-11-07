@@ -21,12 +21,14 @@ import pytest
 from atropos.backtesting import DEFAULT_COST, simulate_signal
 from atropos.evaluation_metrics import deflated_sharpe_from_moments
 from atropos.portfolio import (
+    _policy_credit,
     filter_by_correlation,
     portfolio_gates,
     run_portfolio,
     run_portfolio_replay,
 )
-from scipy.stats import kurtosis, skew
+from atropos.portfolio_protocol import hash_kill_prereg
+from scipy.stats import kurtosis, skew, spearmanr
 
 _DRIFT = np.repeat([0.10, 0.05], 5).astype(np.float64)
 """Healthy 10-point EV stream: finite DSR, no drawdown."""
@@ -596,28 +598,37 @@ def test_replay_admits_independent_candidate() -> None:
 
 
 def test_replay_extends_stale_position_snapshots() -> None:
-    """Growing common-anchor proxies catch clones across staleness.
+    """Rejection needs the snapshot EXTENSION, not plain tail alignment.
 
-    The replay extends the open position's SAME-INSTRUMENT snapshot to
-    the candidate's bar from the candidate's own cell, so a clone is
-    caught even when the candidate's cell is longer (ATR-02 kept this
-    alignment for the same-instrument pair only).
+    The candidate cell is the open position's pattern ``head`` plus six
+    fresh bars (``tail``) that DECORRELATE the shifted tail window:
+    bar-for-bar extension reconstructs the candidate cell exactly
+    (|rho| = 1 -> reject), while tail-alignment-without-extension pairs
+    ``head`` against the shifted ``head[6:] + tail`` window
+    (|rho| ~ 0.27 < cap 0.7 -> admit).  The verdict therefore flips on
+    the extension branch alone -- a plain tail-aligned filter would
+    admit the clone.
     """
-    snapshot = np.linspace(0.0, 1.0, 20)  # ends at its decision bar 19
-    longer = np.concatenate(
-        [snapshot, np.linspace(1.0, 2.0, 2)]  # ends at decision bar 21
-    )
+    gen = np.random.default_rng(11)  # seed pinned: the split below holds
+    head = gen.standard_normal(20)  # snapshot, ends at its decision bar
+    tail = gen.standard_normal(6)
+    longer = np.concatenate([head, tail])  # candidate cell, +6 bars
+    no_extension_rho = float(spearmanr(head, longer[-20:]).statistic)
+    assert abs(no_extension_rho) < 0.7  # tail alignment alone admits
+    assert (
+        float(spearmanr(longer, longer).statistic) > 0.7
+    )  # extension reads |rho| = 1
     frame = _signals(
-        [19, 21],
+        [19, 25],
         ["long", "long"],
         [99.0, 99.0],
         [200.0, 200.0],
         [0.5, 0.9],
         instruments=["AAA", "AAA"],
-        proxies=[snapshot, longer],
+        proxies=[head, longer],
     )
     result = run_portfolio_replay(
-        frame, _multi_panel(), slots=2, hold_bars=4, corr_cap=0.7
+        frame, _multi_panel(), slots=2, hold_bars=100, corr_cap=0.7
     )
     assert [row["reason"] for row in result["rejected"]] == [
         "correlation_cap"
@@ -686,6 +697,20 @@ def test_filter_no_open_positions_admits() -> None:
     proxy = np.linspace(-1.0, 1.0, 30)
     frame = pd.DataFrame({"instrument": ["btc"], "r_proxy": [proxy]})
     assert filter_by_correlation(frame, 0, {}, min_overlap=20) is True
+
+
+def test_filter_validates_candidate_before_empty_early_return() -> None:
+    """A NaN candidate proxy fails loudly even with no open positions.
+
+    Regression: the candidate proxy was validated only AFTER the
+    empty-streams early return, so a NaN candidate plus an empty
+    mapping silently admitted (the NaN never reached a comparison).
+    """
+    proxy = np.linspace(-1.0, 1.0, 8)
+    proxy[2] = np.nan
+    frame = pd.DataFrame({"instrument": ["btc"], "r_proxy": [proxy]})
+    with pytest.raises(ValueError, match="finite"):
+        filter_by_correlation(frame, 0, {}, min_overlap=4)
 
 
 def test_filter_cap_is_strict_inequality() -> None:
@@ -871,7 +896,9 @@ def test_gates_report_structure() -> None:
         "portfolio_verdict",
         "n_trades",
         "min_trades",
+        "prereg_hash",
     }
+    assert report["prereg_hash"] is None  # legacy kwargs path: unanchored
     assert [gate["gate"] for gate in report["gates"]] == [
         "deflated_sharpe",
         "drawdown_floor",
@@ -975,6 +1002,66 @@ def test_dsr_gate_nan_is_fail_closed() -> None:
     assert "fail-closed" in dsr_gate["reason"]
 
 
+def test_dsr_gate_boundary_equal_dsr_triggers() -> None:
+    """DSR exactly AT the floor triggers (the prereg's '>' is exclusive).
+
+    Boundary pin: the prereg comparison reads "dsr passes when above
+    dsr_min", so equality must fail.  The engine used to trigger on a
+    strict ``dsr < dsr_min``, letting an exactly-at-floor DSR pass.
+    """
+    ev_stream = np.arange(10, dtype=np.float64) * 0.05
+    spread = float(np.std(ev_stream, ddof=1))
+    sr = float(np.mean(ev_stream) / spread)
+    skew_val = float(skew(ev_stream))
+    kurt_val = float(kurtosis(ev_stream, fisher=False))
+    denom2 = 1.0 - skew_val * sr + ((kurt_val - 1.0) / 4.0) * sr * sr
+    expected = deflated_sharpe_from_moments(
+        sr, 10, skew_val, kurt_val, denom2 / 9.0, n_trials=3
+    )
+    assert math.isfinite(expected)
+    at_floor = portfolio_gates(
+        np.cumsum(ev_stream),
+        ev_stream,
+        dsr_min=expected,
+        min_trades=10,
+        n_trials=3,
+    )
+    dsr_gate = at_floor["gates"][0]
+    assert dsr_gate["value"] == expected
+    assert dsr_gate["triggered"] is True
+    # one ulp BELOW the observed DSR: strictly above -> passes
+    above = portfolio_gates(
+        np.cumsum(ev_stream),
+        ev_stream,
+        dsr_min=float(np.nextafter(expected, 0.0)),
+        min_trades=10,
+        n_trials=3,
+    )
+    assert above["gates"][0]["triggered"] is False
+
+
+def test_drawdown_gate_boundary_equal_dd_triggers() -> None:
+    """A drawdown exactly AT the floor breaches (consistency pin).
+
+    The drawdown gate has always triggered on ``value <= floor``; this
+    pins the exact-equality boundary (all values binary-exact: 1.0 -
+    0.75 = 0.25) alongside the DSR and concentration pins.
+    """
+    credited = np.array([1.0, -0.25])
+    report = portfolio_gates(
+        np.cumsum(credited),
+        credited,
+        dsr_min=0.0,
+        dd_floor=-0.25,
+        min_trades=2,
+        n_trials=1,
+    )
+    dd_gate = report["gates"][1]
+    assert dd_gate["value"] == pytest.approx(-0.25)
+    assert dd_gate["floor"] == pytest.approx(-0.25)
+    assert dd_gate["triggered"] is True
+
+
 def test_drawdown_floor_breach_triggers() -> None:
     """Reaching the floor breaches; the verdict names the gate.
 
@@ -1041,6 +1128,51 @@ def test_concentration_gate_balanced_passes() -> None:
     conc_gate = report["gates"][2]
     assert conc_gate["value"] == pytest.approx(0.75)
     assert conc_gate["triggered"] is False
+
+
+def test_concentration_gate_boundary_equal_share_triggers() -> None:
+    """Share exactly AT the cap triggers (the prereg's '<' is exclusive).
+
+    10 concurrent with net 6: share = 0.5 + 6 / 20 = 0.80 against cap
+    0.80.  The prereg comparison reads "concentration passes when below
+    the cap", so equality must fail.  The engine used to trigger on a
+    strict ``value > share_cap``, letting an exactly-at-cap book slip
+    through.
+    """
+    report = portfolio_gates(
+        np.cumsum(_DRIFT),
+        _DRIFT,
+        min_trades=10,
+        n_trials=1,
+        dsr_min=0.0,
+        concurrent=np.full(10, 10.0),
+        net_exposure=np.full(10, 6.0),
+    )
+    conc_gate = report["gates"][2]
+    assert conc_gate["value"] == pytest.approx(0.80)
+    assert conc_gate["floor"] == pytest.approx(0.80)
+    assert conc_gate["triggered"] is True
+
+
+def test_power_floor_counts_only_nonzero_credits() -> None:
+    """A zero-credit row does not count toward the min_trades floor.
+
+    Regression: the power floor counted ``equity.size`` rows, so a
+    trade crediting exactly 0 (an unresolved trade, a
+    ``replace_low``-displaced trade, a breakeven exit) padded the
+    floor.  Here two rows carry ONE realized credit: the honest count
+    is 1 < min_trades=2 -> UNDERPOWERED, while the old row count read
+    2 and let the gates decide (verdict DEAD(deflated_sharpe) on this
+    too-short EV stream).
+    """
+    report = portfolio_gates(
+        np.array([2.0, 2.0]),
+        np.array([2.0, 0.0]),
+        min_trades=2,
+        n_trials=1,
+    )
+    assert report["n_trades"] == 1
+    assert report["portfolio_verdict"] == "UNDERPOWERED"
 
 
 def test_concentration_gate_empty_book_is_zero() -> None:
@@ -1186,6 +1318,133 @@ def test_run_portfolio_on_empty_book_is_underpowered() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 6b. the frozen preregistration path
+# ---------------------------------------------------------------------------
+def _kill_prereg() -> dict[str, Any]:
+    """A valid frozen prereg with NON-legacy gate thresholds.
+
+    The thresholds (0.90 / -0.10 / 0.90) deliberately differ from the
+    legacy kwargs defaults (0.95 / -0.20 / 0.80): the echoed gate
+    floors prove the executed gates derive from the prereg.
+    """
+    return {
+        "hypothesis": "Sector momentum portfolio (top-3 / bottom-3).",
+        "gates": {
+            "dsr_min": {
+                "enabled": True,
+                "threshold": 0.90,
+                "comparison": ">",
+            },
+            "dd_floor": {
+                "enabled": True,
+                "threshold": -0.10,
+                "comparison": ">",
+            },
+            "side_concentration": {
+                "enabled": True,
+                "threshold": 0.90,
+                "comparison": "<",
+            },
+        },
+        "slots": 3,
+        "policy": "replace_low",
+        "corr_cap": 0.70,
+        "alpha": 0.05,
+        "data_window": {"start": "2005-01-01", "end": "2024-12-31"},
+        "snapshot_sha256": "a" * 64,
+        "instruments": ["AAA", "BBB"],
+        "frozen_date": "2026-11-06",
+    }
+
+
+def test_run_portfolio_prereg_binds_hash_and_thresholds() -> None:
+    """The prereg path derives thresholds and embeds the verified hash.
+
+    The gate floors echo the PRERG thresholds (0.90 / -0.10 / 0.90),
+    not the legacy kwargs defaults (0.95 / -0.20 / 0.80) -- thresholds
+    derive only from the hashed prereg -- and the verified hash lands
+    in ``summary["prereg_hash"]``.
+    """
+    prereg = _kill_prereg()
+    committed = hash_kill_prereg(prereg)
+    result = run_portfolio(
+        _proxy_frame(),
+        _multi_panel(),
+        slots=2,
+        hold_bars=4,
+        min_trades=1,
+        prereg=prereg,
+        prereg_hash=committed,
+    )
+    assert result["summary"]["prereg_hash"] == committed
+    floors = [gate["floor"] for gate in result["gates"]]
+    assert floors == [0.90, -0.10, 0.90]
+    assert result["portfolio_verdict"].startswith(
+        ("SURVIVES", "DEAD", "UNDERPOWERED")
+    )
+
+
+def test_run_portfolio_prereg_hash_mismatch_raises() -> None:
+    """Any drift between prereg and committed hash fails loudly.
+
+    Regression: the prereg hash was never bound to gate execution, so
+    thresholds could silently differ from the hashed preregistration.
+    """
+    prereg = _kill_prereg()
+    with pytest.raises(ValueError, match="hash mismatch"):
+        run_portfolio(
+            _proxy_frame(),
+            _multi_panel(),
+            slots=2,
+            hold_bars=4,
+            prereg=prereg,
+            prereg_hash="0" * 64,
+        )
+
+
+def test_run_portfolio_prereg_requires_hash() -> None:
+    """A prereg without its committed hash is refused (fail-closed)."""
+    with pytest.raises(ValueError, match="prereg_hash is required"):
+        run_portfolio(
+            _proxy_frame(),
+            _multi_panel(),
+            slots=2,
+            hold_bars=4,
+            prereg=_kill_prereg(),
+        )
+
+
+def test_run_portfolio_prereg_disabled_gate_raises() -> None:
+    """A disabled prereg gate must not silently skip a check."""
+    prereg = _kill_prereg()
+    prereg["gates"]["dd_floor"]["enabled"] = False
+    with pytest.raises(ValueError, match="disabled"):
+        run_portfolio(
+            _proxy_frame(),
+            _multi_panel(),
+            slots=2,
+            hold_bars=4,
+            prereg=prereg,
+            prereg_hash=hash_kill_prereg(prereg),
+        )
+
+
+def test_run_portfolio_prereg_invalid_dict_raises() -> None:
+    """A malformed prereg is validated before anything runs."""
+    prereg = _kill_prereg()
+    prereg["alpha"] = 0.9  # outside the (0, 0.2] prereg domain
+    with pytest.raises(ValueError, match="invalid prereg"):
+        run_portfolio(
+            _proxy_frame(),
+            _multi_panel(),
+            slots=2,
+            hold_bars=4,
+            prereg=prereg,
+            prereg_hash=hash_kill_prereg(prereg),
+        )
+
+
+# ---------------------------------------------------------------------------
 # 7. determinism
 # ---------------------------------------------------------------------------
 def test_replay_deterministic_bit_for_bit() -> None:
@@ -1311,6 +1570,31 @@ def test_unknown_instrument_rejected() -> None:
     )
     with pytest.raises(ValueError, match="price panel"):
         run_portfolio_replay(frame, _world(), slots=2, hold_bars=4)
+
+
+def test_nonstring_instrument_label_rejected() -> None:
+    """A non-string level-1 label is a loud error, not a collision.
+
+    Regression: the panel is keyed by the raw column level-1 value but
+    signals are matched on ``str(instrument)``, so a non-string label
+    (e.g. the int ``7``) used to surface only as a confusing "not in
+    the price panel" -- or collide silently with its ``str()`` form --
+    instead of being rejected as a type error.
+    """
+    columns = pd.MultiIndex.from_tuples(
+        [("open", 7), ("high", 7), ("low", 7), ("close", 7)]
+    )
+    panel = pd.DataFrame(np.full((30, 4), 100.0), columns=columns)
+    frame = _signals(
+        [0],
+        ["long"],
+        [99.0],
+        [200.0],
+        [0.5],
+        instruments=["7"],
+    )
+    with pytest.raises(ValueError, match="must be a string"):
+        run_portfolio_replay(frame, panel, slots=2, hold_bars=4)
 
 
 @pytest.mark.parametrize(

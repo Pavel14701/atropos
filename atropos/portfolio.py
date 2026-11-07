@@ -15,11 +15,12 @@ portfolio-level controls the single-slot engine cannot express:
   :func:`atropos.backtesting.simulate_signal` (a partial hold; the
   row's isolated ``r_pess``/``exit_idx`` stay stale, mirroring the
   engine's force-close contract).  The equity CREDIT follows the
-  policy: ``replace_low`` credits the displaced trade exactly 0 (a
-  mid-flight close is assumed to give back), ``replace_high`` keeps
-  its full isolated ``r_pess`` (optimistic bound) -- both bounds
-  motivated by the donor finding that FCFS capping rejects BETTER
-  trades.
+  policy: an UNRESOLVED trade (no exit inside the data) credits
+  exactly 0 under every policy, a displaced trade credits 0 under
+  ``replace_low`` (a mid-flight close is assumed to give back) and
+  keeps its full isolated ``r_pess`` under ``replace_high``
+  (optimistic bound) -- both bounds motivated by the donor finding
+  that FCFS capping rejects BETTER trades.
 * correlation-aware admission -- a candidate whose recent R proxy is
   |Spearman|-correlated above ``corr_cap`` with any SAME-INSTRUMENT
   open position's proxy is rejected (reason ``"correlation_cap"``);
@@ -64,6 +65,11 @@ from atropos.backtesting import (
     simulate_signal,
 )
 from atropos.evaluation_metrics import deflated_sharpe_from_moments
+from atropos.portfolio_protocol import (
+    gates_kwargs_from_prereg,
+    hash_kill_prereg,
+    validate_kill_prereg,
+)
 
 __all__ = [
     "ExposureSeries",
@@ -135,6 +141,9 @@ class PortfolioSummary(TypedDict):
     drawdown (both in R), ``concurrent_max`` the busiest bar,
     ``n_correlation_rejects`` the ``"correlation_cap"`` rejects and
     ``n_unresolved`` the accepted trades with no exit inside the data.
+    ``prereg_hash`` carries the VERIFIED preregistration hash when the
+    run executed under a frozen prereg (see :func:`run_portfolio`),
+    else ``None``.
     """
 
     slots: int
@@ -147,6 +156,7 @@ class PortfolioSummary(TypedDict):
     ev: float
     dd: float
     concurrent_max: int
+    prereg_hash: str | None
 
 
 class GateVerdict(TypedDict):
@@ -170,13 +180,17 @@ class GateReport(TypedDict):
     ``gates`` holds the gate verdicts in fixed order (deflated Sharpe,
     drawdown floor, side concentration); ``portfolio_verdict`` is
     ``"SURVIVES"``, ``"DEAD(<gate>)"`` for the first triggered gate or
-    ``"UNDERPOWERED"`` below ``min_trades`` credited trades.
+    ``"UNDERPOWERED"`` below ``min_trades`` credited trades (a credit
+    of exactly 0 -- an unresolved or displaced-to-zero trade -- does
+    not count toward the floor).  ``prereg_hash`` carries the verified
+    preregistration hash the gates ran under, else ``None``.
     """
 
     gates: list[GateVerdict]
     portfolio_verdict: str
     n_trades: int
     min_trades: int
+    prereg_hash: str | None
 
 
 class PortfolioResult(TypedDict):
@@ -213,6 +227,47 @@ class PortfolioResult(TypedDict):
 # ---------------------------------------------------------------------------
 # input validation helpers
 # ---------------------------------------------------------------------------
+def _validated_price_column(
+    prices: pd.DataFrame, column: Any
+) -> tuple[str, str, np.ndarray]:
+    """Coerce ONE ``(field, instrument)`` panel column to a float array.
+
+    Returns ``(field, instrument, values)`` with a known OHLC field, a
+    string instrument label and a finite 1-D float64 array.
+
+    Raises:
+        ValueError: on an unknown field, a non-string instrument label
+            (it would collide silently with its ``str()`` form once
+            the panel is keyed), a non-1-D array, or a non-finite
+            array.
+    """
+    field = str(column[0])
+    instrument = column[1]
+    if not isinstance(instrument, str):
+        raise ValueError(
+            f"prices instrument label (column level 1) must be a"
+            f" string, got {instrument!r}: non-string labels collide"
+            " silently with their str() forms once the panel is"
+            " keyed"
+        )
+    if field not in _PRICE_FIELDS:
+        raise ValueError(
+            f"prices field must be one of {_PRICE_FIELDS}, got {field!r}"
+        )
+    values = np.asarray(prices[column], dtype=np.float64)
+    if values.ndim != 1:
+        raise ValueError(
+            f"prices[{field!r}, {instrument!r}] must be 1-D, got"
+            f" ndim={values.ndim}"
+        )
+    if values.size and not bool(np.all(np.isfinite(values))):
+        raise ValueError(
+            f"prices[{field!r}, {instrument!r}] must be finite, got"
+            " NaN/inf entries"
+        )
+    return field, instrument, values
+
+
 def _validated_price_panel(
     prices: pd.DataFrame,
 ) -> tuple[dict[str, dict[str, np.ndarray]], int]:
@@ -231,9 +286,9 @@ def _validated_price_panel(
 
     Raises:
         ValueError: on a non-DataFrame input, missing/wrong MultiIndex,
-            unknown or duplicate fields, a non-finite array, unequal
-            bar-grid lengths, a missing OHLC field, or fewer than two
-            bars.
+            unknown or duplicate fields, a non-string instrument label,
+            a non-finite array, unequal bar-grid lengths, a missing
+            OHLC field, or fewer than two bars.
     """
     if not isinstance(prices, pd.DataFrame):
         raise ValueError("prices must be a pandas DataFrame")
@@ -252,23 +307,7 @@ def _validated_price_panel(
     panel: dict[str, dict[str, np.ndarray]] = {}
     sizes: set[int] = set()
     for column in columns:
-        field = str(column[0])
-        instrument = str(column[1])
-        if field not in _PRICE_FIELDS:
-            raise ValueError(
-                f"prices field must be one of {_PRICE_FIELDS}, got {field!r}"
-            )
-        values = np.asarray(prices[column], dtype=np.float64)
-        if values.ndim != 1:
-            raise ValueError(
-                f"prices[{field!r}, {instrument!r}] must be 1-D, got"
-                f" ndim={values.ndim}"
-            )
-        if values.size and not bool(np.all(np.isfinite(values))):
-            raise ValueError(
-                f"prices[{field!r}, {instrument!r}] must be finite, got"
-                " NaN/inf entries"
-            )
+        field, instrument, values = _validated_price_column(prices, column)
         panel.setdefault(instrument, {})[field] = values
         sizes.add(int(values.size))
 
@@ -553,14 +592,14 @@ def filter_by_correlation(
             f"candidate_idx={candidate_position} is past the frame"
             f" (len={len(signals_df)})"
         )
-    streams = list(open_positions_r_streams.values())
-    if not streams:
-        return True
     candidate_proxy = _validated_proxy_series(
         signals_df.iloc[candidate_position]["r_proxy"],
         "candidate r_proxy",
     )
-    if candidate_proxy.size == 0:
+    streams = list(open_positions_r_streams.values())
+    # the candidate is validated BEFORE the empty-streams early return:
+    # a NaN proxy must fail loudly even with nothing to compare against
+    if not streams or candidate_proxy.size == 0:
         return True
     candidate_tail = candidate_proxy[-window_bars:]
     for stream in streams:
@@ -1091,7 +1130,8 @@ def run_portfolio_replay(
       carries the RECONSTRUCTED partial-hold P&L (``force_close_r``,
       via :func:`atropos.backtesting.simulate_signal`) -- its equity
       credit is 0 under ``replace_low``, its full isolated R under
-      ``replace_high``.
+      ``replace_high``; an unresolved displaced trade (no exit inside
+      the data, stale NaN ``r_pess``) credits 0 under every policy.
 
     Equity is EVENT-based: every accepted trade credits exactly once
     (``credit_r`` at ``credit_bar``; an unresolved trade credits 0 at
@@ -1249,6 +1289,7 @@ def run_portfolio_replay(
         ev=final_equity,
         dd=drawdown,
         concurrent_max=int(gross.max()) if gross.size else 0,
+        prereg_hash=None,
     )
     return PortfolioResult(
         slots=slots_total,
@@ -1309,7 +1350,9 @@ def _deflated_sharpe_gate(
     kurtosis (NaN below ``_MIN_SKEW_OBS`` observations -- the
     ``deflated_sharpe`` convention) and the trial variance go in.  A
     non-finite DSR triggers FAIL-CLOSED: an unverifiable stream can
-    not count as verified.
+    not count as verified.  The gate triggers at or below ``dsr_min``
+    (the prereg's ``>`` comparison: equality is a fail -- the prereg
+    is the frozen contract the engine implements).
 
     ``var_sr`` is in PER-PERIOD SR units like ``sr`` (the formula
     compares them 1:1) and is estimated from the stream itself -- the
@@ -1343,9 +1386,9 @@ def _deflated_sharpe_gate(
             "dsr non-finite: fail-closed (too few observations or"
             " degenerate stream)"
         )
-    elif dsr < dsr_min:
+    elif dsr <= dsr_min:
         triggered = True
-        reason = f"dsr {dsr:.3f} below floor {dsr_min:.3f}"
+        reason = f"dsr {dsr:.3f} at or below floor {dsr_min:.3f}"
     else:
         triggered = False
         reason = "ok"
@@ -1390,9 +1433,11 @@ def _concentration_gate(
 
     Per bar with positions held, the same-side share is
     ``0.5 + |net| / (2 * concurrent)`` (the larger of the long /
-    short fractions); ``value`` is the maximum over bars.  Without
-    exposure data the gate is skipped honestly: value NaN, triggered
-    False, the reason says so.
+    short fractions); ``value`` is the maximum over bars.  REACHING
+    the cap triggers (``value >= share_cap`` -- the prereg's ``<``
+    comparison: equality is a fail, the prereg is the frozen contract
+    the engine implements).  Without exposure data the gate is skipped
+    honestly: value NaN, triggered False, the reason says so.
     """
     if concurrent is None or net_exposure is None:
         return GateVerdict(
@@ -1418,9 +1463,11 @@ def _concentration_gate(
         )
     shares = 0.5 + np.abs(net_exposure[held]) / (2.0 * concurrent[held])
     value = float(np.max(shares))
-    triggered = bool(value > share_cap)
+    triggered = bool(value >= share_cap)
     if triggered:
-        reason = f"same-side share {value:.3f} above cap {share_cap:.3f}"
+        reason = (
+            f"same-side share {value:.3f} at or above cap {share_cap:.3f}"
+        )
     else:
         reason = "ok"
     return GateVerdict(
@@ -1443,6 +1490,7 @@ def portfolio_gates(
     min_trades: int = 30,
     concurrent: Any | None = None,
     net_exposure: Any | None = None,
+    prereg_hash: str | None = None,
 ) -> GateReport:
     """Portfolio-level kill gates over the realized portfolio streams.
 
@@ -1452,36 +1500,43 @@ def portfolio_gates(
       (``daily_ev``: R credited per aggregation period, "daily" in
       the caller's grid) run through
       :func:`atropos.evaluation_metrics.deflated_sharpe_from_moments`
-      (delegation, never a copy of the arithmetic); triggered below
-      ``dsr_min`` or when the DSR is non-finite (fail-closed).
+      (delegation, never a copy of the arithmetic); triggered at or
+      below ``dsr_min`` (equality fails) or when the DSR is non-finite
+      (fail-closed).
     * ``drawdown_floor`` -- the event-basis max drawdown of
       ``equity_r`` (the cumulative event equity) against ``dd_floor``
       in the curve's units; REACHING the floor breaches.
     * ``side_concentration`` -- the max same-side (long/short) share
       of concurrent positions against ``max_same_side_share``; needs
       the ``concurrent`` / ``net_exposure`` series (skipped honestly
-      when either is missing).
+      when either is missing); REACHING the cap triggers.
 
     Verdict: ``"UNDERPOWERED"`` when fewer than ``min_trades`` trades
-    are credited (the equity curve carries one point per credited
-    trade), else ``"DEAD(<gate>)"`` naming the first triggered gate,
-    else ``"SURVIVES"``.
+    are credited, else ``"DEAD(<gate>)"`` naming the first triggered
+    gate, else ``"SURVIVES"``.  A trade counts toward the floor when
+    its equity step is NONZERO: the equity curve carries one point per
+    accepted trade, but a trade crediting exactly 0 (an unresolved
+    trade, a ``replace_low``-displaced trade, an exactly-breakeven
+    exit) realized nothing and does not count.
 
     Args:
         equity_r: 1-D finite event equity curve (cumulative credited
-            R; its length IS the credited-trade count).
+            R; one point per accepted trade).
         daily_ev: 1-D finite per-period portfolio EV stream.
         dsr_min: minimum deflated Sharpe in ``[0, 1]``.
         dd_floor: drawdown floor, strictly negative, in equity units.
         max_same_side_share: same-side share cap in ``(0, 1]``.
         n_trials: declared number of trials for the deflation,
             integer >= 1.
-        min_trades: minimum credited trades for a verdict other than
-            ``"UNDERPOWERED"``, integer >= 0.
+        min_trades: minimum credited (nonzero-credit) trades for a
+            verdict other than ``"UNDERPOWERED"``, integer >= 0.
         concurrent: optional per-bar concurrent-position series (the
             replay's ``exposure["concurrent"]``).
         net_exposure: optional per-bar signed exposure series (the
             replay's ``exposure["net"]``).
+        prereg_hash: optional VERIFIED preregistration hash embedded
+            in the report (``None`` on the legacy independent-kwargs
+            path); :func:`run_portfolio` sets it on the prereg path.
 
     Returns:
         :class:`GateReport` with the three gate verdicts and the
@@ -1539,7 +1594,11 @@ def portfolio_gates(
         _drawdown_gate(equity, floor_dd),
         _concentration_gate(conc_series, net_series, share_cap),
     ]
-    n_trades = int(equity.size)
+    if equity.size:
+        steps = np.diff(np.concatenate([[0.0], equity]))
+        n_trades = int(np.count_nonzero(steps))
+    else:
+        n_trades = 0
     if n_trades < trades_floor:
         verdict = "UNDERPOWERED"
     else:
@@ -1554,6 +1613,7 @@ def portfolio_gates(
         portfolio_verdict=verdict,
         n_trades=n_trades,
         min_trades=trades_floor,
+        prereg_hash=prereg_hash,
     )
 
 
@@ -1578,6 +1638,8 @@ def run_portfolio(
     n_trials: int = 5,
     min_trades: int = 30,
     ev_period_bars: int = 1,
+    prereg: dict[str, Any] | None = None,
+    prereg_hash: str | None = None,
 ) -> PortfolioResult:
     """Full portfolio pipeline: replay -> gates -> verdict.
 
@@ -1589,6 +1651,11 @@ def run_portfolio(
     replay's exposure series, and attaches ``gates`` /
     ``portfolio_verdict`` to the replay result.  This is the function
     a user calls.
+
+    With ``prereg`` the gate thresholds derive ONLY from the frozen
+    preregistration (fail-closed: every gate present and enabled, and
+    the committed hash verified loudly before anything runs), so the
+    executed gates cannot silently drift from the hashed prereg.
 
     Args:
         signals_df: candidate signals (see
@@ -1614,14 +1681,28 @@ def run_portfolio(
             ``"UNDERPOWERED"``, integer >= 0.
         ev_period_bars: bar width of the EV buckets fed to the DSR
             gate (1 = the per-bar grid), integer >= 1.
+        prereg: optional frozen preregistration dict; when given, the
+            three gate thresholds (``dsr_min`` / ``dd_floor`` /
+            ``share_cap``) are read ONLY from ``prereg["gates"]`` via
+            :func:`atropos.portfolio_protocol.gates_kwargs_from_prereg`
+            and the legacy ``dsr_min`` / ``dd_floor`` /
+            ``max_same_side_share`` values are ignored.
+        prereg_hash: the committed sha256 of ``prereg``
+            (:func:`atropos.portfolio_protocol.hash_kill_prereg`);
+            REQUIRED together with ``prereg`` and verified loudly.  The
+            verified hash is embedded in ``summary["prereg_hash"]``.
 
     Returns:
         :class:`PortfolioResult` with ``gates`` and
-        ``portfolio_verdict`` populated.
+        ``portfolio_verdict`` populated; on the prereg path
+        ``summary["prereg_hash"]`` carries the VERIFIED hash (else
+        ``None``).
 
     Raises:
         ValueError: on any invalid input (the replay's and the gates'
-            contracts apply).
+            contracts apply), an invalid prereg dict, a missing
+            ``prereg_hash`` on the prereg path, or a prereg/hash
+            mismatch.
 
     Example::
 
@@ -1654,6 +1735,13 @@ def run_portfolio(
         3
     """
     period = validate_int("ev_period_bars", ev_period_bars, minimum=1)
+    verified_hash: str | None = None
+    if prereg is not None:
+        verified_hash = _verified_prereg_hash(prereg, prereg_hash)
+        gate_kwargs = gates_kwargs_from_prereg(prereg)
+        dsr_min = gate_kwargs["dsr_min"]
+        dd_floor = gate_kwargs["dd_floor"]
+        max_same_side_share = gate_kwargs["share_cap"]
     result = run_portfolio_replay(
         signals_df,
         prices,
@@ -1682,10 +1770,48 @@ def run_portfolio(
         min_trades=min_trades,
         concurrent=result["exposure"]["concurrent"],
         net_exposure=result["exposure"]["net"],
+        prereg_hash=verified_hash,
     )
     result["gates"] = report["gates"]
     result["portfolio_verdict"] = report["portfolio_verdict"]
+    if verified_hash is not None:
+        result["summary"]["prereg_hash"] = verified_hash
     return result
+
+
+def _verified_prereg_hash(
+    prereg: dict[str, Any], prereg_hash: str | None
+) -> str:
+    """Bind the executed gates to the committed prereg hash (fail-closed).
+
+    Validates the full prereg, requires the committed hash and verifies
+    :func:`atropos.portfolio_protocol.hash_kill_prereg` against it
+    LOUDLY: a threshold that drifted after the hash was committed must
+    never run under the frozen prereg's name.
+
+    Returns:
+        The verified hash (embedded in the run's summary).
+
+    Raises:
+        ValueError: on any prereg validation problem, a missing
+            ``prereg_hash`` or a hash mismatch.
+    """
+    problems = validate_kill_prereg(prereg)
+    if problems:
+        raise ValueError(f"invalid prereg: {problems}")
+    if prereg_hash is None:
+        raise ValueError(
+            "prereg_hash is required when prereg is given: the gates "
+            "must be bound to the committed hash they were frozen under"
+        )
+    computed = hash_kill_prereg(prereg)
+    if computed != prereg_hash:
+        raise ValueError(
+            f"prereg hash mismatch: the prereg hashes to {computed} "
+            f"but the committed hash is {prereg_hash} -- the executed "
+            "gates drifted from the frozen prereg"
+        )
+    return computed
 
 
 # ---------------------------------------------------------------------------
