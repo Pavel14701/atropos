@@ -553,6 +553,17 @@ def check_no_peeking(result: dict[str, Any]) -> bool:
     ``train_end + purge_gap <= test_start`` per fold, so a purged
     walk-forward is verified against its own, stricter boundary.
 
+    Scope (read before trusting the name): this is a TAMPER DETECTOR
+    on the fold frame, not an independent lookahead proof.  For a
+    result this module produced, the check re-verifies bookkeeping the
+    walk-forward loop itself wrote (it reduces to ``t0 <= t0``); it
+    only fires when a caller edits the frame.  Structural
+    anti-peeking is enforced by construction elsewhere — ``fit_fn``
+    never receives test rows (pinned by
+    ``test_predict_fn_gets_test_frame_without_outcome``) and the
+    no-lookahead suite pins fold-0 invariance.  A data-level
+    re-derivation of the boundaries is tracked in KNOWN-ISSUES §6.
+
     Example::
 
         >>> res = walkforward(df, fit_fn=f, predict_fn=p)   # doctest: +SKIP

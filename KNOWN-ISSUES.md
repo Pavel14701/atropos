@@ -236,6 +236,17 @@ documented where the hazard lives.
   the caller-owned contract unchanged (metadata without the flag is a
   dead configuration and also raises). No warning layer was added on
   top of the existing raise — a warning would have been a downgrade.
+- **`subperiod_stability` gates on the concentration cap; the
+  permutation p-value is a reported diagnostic, not a gate** — the
+  verdict requires sign consistency across chunks AND `max_share`
+  strictly below the (auto-scaled) cap; the permutation probability
+  that a random shuffle shows at least this concentration is computed
+  and returned but does not FAIL the control. Deliberate statistic
+  choice, not an oversight — but a reviewer may want it reversed.
+  Trigger to close: a preregistered decision to gate on the
+  permutation p (with the same strict-α boundary pins as the other
+  permutation controls) or an explicit docstring rationale that the
+  cap is the preregistered gate and p is diagnostic-only.
 
 ## 6. Walk-forward label overlap is an accepted (uncalibrated) risk
 
@@ -266,6 +277,18 @@ Trigger to close: a P2 wave implementing the Newey-West correction
 (lags = horizon − 1) of `wf_t`, calibrated on the null at horizon in
 {1, 5, 20}, with horizon=1 bit-for-bit identical to the current
 statistic — then the guard is lifted.
+
+**Also in the walk-forward layer — `check_no_peeking` is a tamper
+detector, not a lookahead proof.** For a result the module produced,
+the check re-verifies bookkeeping the loop itself wrote (it reduces
+to `t0 <= t0`); it fires only when a caller edits the fold frame
+(that direction IS pinned: `test_check_no_peeking_rejects_tampered_folds`).
+Structural anti-peeking is enforced by construction — `fit_fn` never
+receives test rows (`test_predict_fn_gets_test_frame_without_outcome`)
+and the no-lookahead suite pins fold-0 invariance; the docstring now
+states this scope honestly. Trigger to close: an independent
+lookahead test that re-derives the train/test boundaries from the
+raw data instead of the module's own folds frame.
 
 ## 7. `cost_death_test` is a standalone API, not a pipeline stage
 
