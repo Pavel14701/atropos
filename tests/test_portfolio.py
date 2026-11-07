@@ -324,6 +324,65 @@ def test_replace_credits_zero_low_full_high() -> None:
     assert math.isfinite(displaced_low["force_close_r"])
 
 
+def test_policy_credit_unresolved_displaced_is_zero() -> None:
+    """An unresolved displaced row credits 0 under BOTH policies.
+
+    Unit regression: the ``replaced`` branch used to precede the
+    unresolved check, so a displaced trade with ``exit_idx == -1``
+    (its isolated sim never resolved, ``r_pess`` stale NaN) credited
+    NaN under ``replace_high`` and poisoned the whole equity stream.
+    Its realized partial P&L sits on ``force_close_r`` -- the credit
+    itself is exactly 0.
+    """
+    row = {
+        "replaced": True,
+        "exit_idx": -1,
+        "r_pess": float("nan"),
+        "force_close_r": 0.0,
+    }
+    assert _policy_credit(row, "replace_high") == 0.0
+    assert _policy_credit(row, "replace_low") == 0.0
+
+
+def test_same_bar_displacement_unresolved_credits_zero() -> None:
+    """Same-bar displacement of an unresolved trade: finite equity.
+
+    End-to-end regression: two same-bar signals, one slot, replace_high
+    -- the score-0.9 candidate displaces the score-0.5 fill the very
+    bar it fills, so the displaced row keeps ``exit_idx == -1`` with a
+    stale NaN ``r_pess``.  The old replaced-branch-first credit made
+    the equity curve and drawdown NaN (run_portfolio_replay silently;
+    run_portfolio raises on the NaN summary).
+    """
+    opens = np.full(8, 100.0)
+    panel = _panel("solo", opens, opens + 0.5, opens - 0.5, opens)
+    frame = _signals(
+        [0, 0],
+        ["long", "long"],
+        [99.0, 99.0],
+        [200.0, 200.0],
+        [0.5, 0.9],
+    )
+    result = run_portfolio_replay(
+        # hold_bars=8 on the 8-bar world: the fill at bar 1 cannot
+        # resolve (time exit past the data) -> exit_idx == -1, NaN r_pess
+        frame,
+        panel,
+        slots=1,
+        policy="replace_high",
+        hold_bars=8,
+    )
+    assert result["summary"]["n_replaced"] == 1
+    displaced = result["accepted"][0]
+    assert displaced["exit_idx"] == -1
+    assert displaced["replaced"] is True
+    assert math.isnan(displaced["r_pess"])
+    assert displaced["credit_r"] == 0.0
+    assert bool(np.all(np.isfinite(result["equity_curve"])))
+    assert math.isfinite(result["max_drawdown_r"])
+    assert result["final_equity_r"] == 0.0
+
+
 def test_replace_ev_bounds_formula() -> None:
     """EV(high) - EV(low) equals the displaced trades' full r_pess."""
     low = run_portfolio_replay(

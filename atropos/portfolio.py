@@ -873,18 +873,24 @@ def _admit_full_policy(
 def _policy_credit(row: dict[str, Any], policy: str) -> float:
     """Equity credit of one accepted ledger row under ``policy``.
 
-    Ordinary trades credit their isolated pessimistic R at their exit
-    bar.  A displaced trade credits :data:`_NO_CREDIT` under
-    ``replace_low`` (mid-flight close assumed to give back) and keeps
-    its full isolated R under ``replace_high`` -- in both cases the
-    honest partial-hold P&L it actually realized sits on its
-    ``force_close_r`` field, never overwriting the policy credit.  A
-    trade with no exit inside the data credits nothing (unresolved).
+    A trade with no exit inside the data credits nothing (unresolved)
+    -- checked FIRST: a displaced unresolved trade carries a stale NaN
+    ``r_pess`` (its isolated sim never resolved), so falling into the
+    ``replaced`` branch first used to credit NaN under ``replace_high``
+    and poison the whole equity stream; its realized partial P&L (0.0
+    for a same-bar displacement) already sits on ``force_close_r``.  A
+    RESOLVED displaced trade credits :data:`_NO_CREDIT` under
+    ``replace_low`` (mid-flight close assumed to give back) and its
+    full isolated R under ``replace_high`` (optimistic bound) -- in
+    both cases the honest partial-hold P&L it actually realized sits
+    on its ``force_close_r`` field, never overwriting the policy
+    credit.  An ordinary resolved trade credits its isolated
+    pessimistic R at its exit bar.
     """
-    if row["replaced"]:
-        return _NO_CREDIT if policy == "replace_low" else float(row["r_pess"])
     if int(row["exit_idx"]) == -1:
         return _NO_CREDIT
+    if row["replaced"]:
+        return _NO_CREDIT if policy == "replace_low" else float(row["r_pess"])
     return float(row["r_pess"])
 
 

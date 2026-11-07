@@ -138,12 +138,17 @@ def _validate_ml_dataset(ml_dataset: dict[str, Any]) -> None:
 def _unify(rule_verdict: str, ml_verdict: str | None) -> dict[str, Any]:
     """Aggregate the two chain verdicts into the unified namespace.
 
-    Kill dominates, undecidedness (ML ``UNDERPOWERED``) beats bare
-    survival, and plain ``SURVIVES`` requires every executed chain to
+    Kill dominates, undecidedness beats bare survival and death on the
+    other chain (a rule ``INCONCLUSIVE`` is undecided against every ml
+    outcome, an ml ``DEAD`` included; ML ``UNDERPOWERED`` beats bare
+    survival), and plain ``SURVIVES`` requires every executed chain to
     be alive.  Pure function of the two verdict strings: no winner
     picking, no re-interpretation of the engine reports.
     """
-    rule_dead = rule_verdict not in _RULE_ALIVE_VERDICTS
+    rule_dead = (
+        rule_verdict not in _RULE_ALIVE_VERDICTS
+        and rule_verdict != "INCONCLUSIVE"
+    )
     ml_dead = ml_verdict is not None and ml_verdict.startswith("DEAD")
     if rule_dead and ml_dead:
         return {
@@ -153,6 +158,24 @@ def _unify(rule_verdict: str, ml_verdict: str | None) -> dict[str, Any]:
             "source": "rule+ml",
             "reason": (
                 f"both chains killed: rule {rule_verdict}, ml {ml_verdict}"
+            ),
+        }
+    if rule_verdict == "INCONCLUSIVE":
+        # ATR-06: a walk-forward configuration the data cannot carry is
+        # undecided, not a kill -- "could not test" is not evidence of
+        # "no edge", so it can never read KILLED [rule] or SURVIVES.
+        # Matrix row "INCONCLUSIVE | any decision": rule undecidedness
+        # dominates EVERY ml outcome, an ml DEAD included (the ml chain
+        # ran on a different dataset; the rule chain decided nothing),
+        # so this branch must sit before the ml-kill branch.
+        return {
+            "verdict": "INCONCLUSIVE",
+            "rule_verdict": rule_verdict,
+            "ml_verdict": ml_verdict,
+            "source": "rule",
+            "reason": (
+                f"rule chain undecided: {rule_verdict} (undecided is "
+                "not death; decide on a wider snapshot)"
             ),
         }
     if rule_dead:
@@ -170,20 +193,6 @@ def _unify(rule_verdict: str, ml_verdict: str | None) -> dict[str, Any]:
             "ml_verdict": ml_verdict,
             "source": "ml",
             "reason": f"ml chain killed: {ml_verdict}",
-        }
-    if rule_verdict == "INCONCLUSIVE":
-        # ATR-06: a walk-forward configuration the data cannot carry is
-        # undecided, not a kill -- "could not test" is not evidence of
-        # "no edge", so it can never read KILLED [rule] or SURVIVES
-        return {
-            "verdict": "INCONCLUSIVE",
-            "rule_verdict": rule_verdict,
-            "ml_verdict": ml_verdict,
-            "source": "rule",
-            "reason": (
-                f"rule chain undecided: {rule_verdict} (undecided is "
-                "not death; decide on a wider snapshot)"
-            ),
         }
     if ml_verdict is not None and ml_verdict != "SURVIVES":
         return {

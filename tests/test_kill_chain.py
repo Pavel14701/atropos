@@ -1,12 +1,13 @@
 """Contracts for the unified kill-chain wrapper (``atropos.kill_chain``).
 
 Covers the unified verdict matrix (a kill in either chain dominates;
-``UNDERPOWERED`` is undecided, not death; plain ``SURVIVES`` needs
-every executed chain alive), pass-through fidelity of both engine
-reports, bit-identical determinism of repeated runs, dataset-key
-validation (``ValueError`` before any engine runs) and the panel-only
-rule mode the wrapper must not block.  All worlds are deterministic
-synthetic constructions with fixed seeds.
+``UNDERPOWERED`` is undecided, not death; a rule ``INCONCLUSIVE`` is
+undecided against EVERY ml outcome, an ml ``DEAD`` included; plain
+``SURVIVES`` needs every executed chain alive), pass-through fidelity
+of both engine reports, bit-identical determinism of repeated runs,
+dataset-key validation (``ValueError`` before any engine runs) and the
+panel-only rule mode the wrapper must not block.  All worlds are
+deterministic synthetic constructions with fixed seeds.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ import pandas as pd
 import pytest
 from atropos.ensemble_pipeline import _make_synthetic, run_full_pipeline
 from atropos.kill_chain import (
+    _unify,
     run_all_examples,
     run_full_kill_chain,
 )
@@ -201,6 +203,67 @@ def test_ml_underpowered_is_inconclusive_not_dead() -> None:
     assert result["unified"]["verdict"] == "INCONCLUSIVE"
     assert result["unified"]["source"] == "ml"
     assert result["unified"]["reason"] is not None
+
+
+@pytest.mark.parametrize(
+    ("ml_verdict", "expected_source"),
+    [
+        (None, "rule"),
+        ("SURVIVES", "rule"),
+        ("DEAD(cost_line)", "rule"),
+        ("UNDERPOWERED", "rule"),
+    ],
+)
+def test_rule_inconclusive_dominates_every_ml_outcome(
+    ml_verdict: str | None, expected_source: str
+) -> None:
+    """Rule INCONCLUSIVE x every ml cell -> INCONCLUSIVE [rule].
+
+    Matrix rows "INCONCLUSIVE | (not run)" and "INCONCLUSIVE | any
+    decision": a walk-forward configuration the data cannot carry
+    (ATR-06) is undecided, never KILLED -- not even against an ml
+    ``DEAD``.
+
+    Regression: ``INCONCLUSIVE`` was missing from the rule
+    alive-verdict set, so all four cells unified to KILLED -- three as
+    ``KILLED [rule]`` and the ml-DEAD cell as ``KILLED [rule+ml]`` --
+    and the ATR-06 branch of ``_unify`` was unreachable dead code.
+    """
+    result = _unify("INCONCLUSIVE", ml_verdict)
+    assert frozenset(result) == UNIFIED_KEYS
+    assert result["verdict"] == "INCONCLUSIVE"
+    assert result["rule_verdict"] == "INCONCLUSIVE"
+    assert result["ml_verdict"] == ml_verdict
+    assert result["source"] == expected_source
+    assert result["reason"] is not None
+    assert "undecided" in result["reason"]
+
+
+def test_rule_stage4_walkforward_oversized_train_is_inconclusive() -> None:
+    """E2E: a stage-4 config that cannot fit -> unified INCONCLUSIVE.
+
+    A ``train_window`` no dataset can carry makes the rule pipeline's
+    stage 4 report INCONCLUSIVE (ATR-06: the configuration, not the
+    edge, failed), and the unified verdict must agree with source
+    ``rule`` -- undecided is not death.
+
+    Regression: the wrapper read the rule ``INCONCLUSIVE`` as a kill
+    and unified to ``KILLED [rule]``, contradicting the module's own
+    matrix row "INCONCLUSIVE | (not run) | INCONCLUSIVE [rule]".
+    """
+    result = run_full_kill_chain(
+        _rule_world("genuine"),
+        None,
+        config={"walkforward": {"train_window": 100_000_000}},
+    )
+    assert result["rule"]["overall_verdict"] == "INCONCLUSIVE"
+    assert result["rule"]["kill_reason"] == (
+        "insufficient data for walk-forward configuration"
+    )
+    assert result["ml"] is None
+    assert result["unified"]["verdict"] == "INCONCLUSIVE"
+    assert result["unified"]["source"] == "rule"
+    assert "undecided" in result["unified"]["reason"]
 
 
 def test_unified_namespace_keys_are_pinned() -> None:
