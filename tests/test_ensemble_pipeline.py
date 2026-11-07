@@ -1,6 +1,7 @@
 """Tests for atropos.ensemble_pipeline: the seven-stage kill chain."""
 
 import json
+import re
 from types import SimpleNamespace
 from typing import Any
 
@@ -94,6 +95,9 @@ def test_momentum_echo_killed_as_repackaging_at_stage_two() -> None:
         REDUCED_CONFIG,
     )
     assert result["overall_verdict"] == "REPACKAGING"
+    # taxonomy: a repackaging kill is analysable, never dead
+    assert result["verdict_class"] == "NEEDS_ANALYSIS"
+    assert result["informative"] is True
     assert result["killed_by_stage"] == 2
     assert "repackaging of known information" in str(result["kill_reason"])
     stages = result["stages"]
@@ -219,9 +223,11 @@ def test_config_overrides_merge_over_defaults() -> None:
 def test_pipeline_requires_aligned_inputs() -> None:
     with pytest.raises(ValueError, match="must contain 'returns'"):
         run_full_pipeline({"returns": [0.1] * 320}, REDUCED_CONFIG)
+    # non-constant values: a constant feed is classified
+    # DEGENERATE_FEED by the pre-flight before this floor is reached
     with pytest.raises(ValueError, match="need >= 300 aligned observations"):
         run_full_pipeline(
-            {"returns": [0.01] * 250, "signal": [0.02] * 250},
+            {"returns": [0.01, 0.02] * 125, "signal": [0.02, -0.01] * 125},
             REDUCED_CONFIG,
         )
 
@@ -242,6 +248,8 @@ def test_prohibitive_costs_kill_genuine_edge_as_cost_death() -> None:
         REDUCED_CONFIG | {"cost": {"cost_bps": 140.0}},
     )
     assert result["overall_verdict"] == "COST_DEATH"
+    # taxonomy: a cost death is analysable, never dead
+    assert result["verdict_class"] == "NEEDS_ANALYSIS"
     assert result["killed_by_stage"] == 5
     assert "transaction costs" in str(result["kill_reason"])
     stage5 = result["stages"][4]
@@ -589,6 +597,9 @@ def test_noise_panel_dies_as_cs_no_edge() -> None:
         REDUCED_CONFIG,
     )
     assert result["overall_verdict"] == "CS_NO_EDGE"
+    # taxonomy: default target is "ts", so a CS_NO_EDGE kill is only
+    # NEEDS_ANALYSIS -- the "DEAD" class is reserved for target="xs"
+    assert result["verdict_class"] == "NEEDS_ANALYSIS"
     assert result["killed_by_stage"] == 7
     assert result["stages"][6]["status"] == "FAIL"
 
@@ -769,13 +780,16 @@ def test_unreachable_threshold_kills_genuine_edge_as_dead() -> None:
     10.0 lies above every draw of a unit-std signal, the long/flat rule
     never takes a position ("no active days"), and stage 3 reports the
     battery's DEAD verdict.  Stages 1-2 are rule-blind and still pass:
-    the edge is real, the entry rule is untradeable.
+    the edge is real, the entry rule is untradeable.  Taxonomy: the
+    battery OVERALL DEAD is the ONE case where the generic "DEAD"
+    verdict token survives, and its class is "DEAD" too.
     """
     result = run_full_pipeline(
         _make_synthetic("genuine_edge", n_obs=SERIES_N_OBS, seed=4),
         REDUCED_CONFIG | {"battery": {"threshold": 10.0}},
     )
     assert result["overall_verdict"] == "DEAD"
+    assert result["verdict_class"] == "DEAD"
     assert result["killed_by_stage"] == 3
     stage_three = result["stages"][2]
     assert stage_three["status"] == "FAIL"
@@ -788,19 +802,25 @@ def test_unreachable_threshold_kills_genuine_edge_as_dead() -> None:
 
 
 def test_fragile_battery_kills_at_stage_three() -> None:
-    """FRAGILE (< 5/7 battery) is a stage-3 FAIL -> DEAD, never a WARN.
+    """FRAGILE (< 5/7) kills as ROBUSTNESS_DEATH at stage 3, not WARN.
 
     ATR-04 doctrine pin (FRAMEWORK.md ROBUSTNESS-DEATH: fewer than 5
     of 7 tests passed -> stop).  The slow-class world on sweep seed 7
     reads FRAGILE (3/7) under REDUCED_CONFIG; the pre-doctrine mapping
     let it through stage 3 on a WARN and the run survived -- the code
-    must not be softer than the doctrine.
+    must not be softer than the doctrine.  Taxonomy: the generic
+    "DEAD" verdict is reserved for a catastrophic battery (OVERALL
+    DEAD); a merely FRAGILE book reads the specific ROBUSTNESS_DEATH
+    token, class NEEDS_ANALYSIS, and the report names the battery rows
+    that failed plus the run's observation count.
     """
     result = run_full_pipeline(
         _make_synthetic("slow_genuine_edge", n_obs=SERIES_N_OBS, seed=7),
         REDUCED_CONFIG,
     )
-    assert result["overall_verdict"] == "DEAD"
+    assert result["overall_verdict"] == "ROBUSTNESS_DEATH"
+    assert result["verdict_class"] == "NEEDS_ANALYSIS"
+    assert result["informative"] is True
     assert result["killed_by_stage"] == 3
     assert result["kill_reason"] is not None
     assert "ROBUSTNESS-DEATH" in str(result["kill_reason"])
@@ -808,6 +828,21 @@ def test_fragile_battery_kills_at_stage_three() -> None:
     assert stage_three["status"] == "FAIL"
     assert stage_three["summary"].startswith("FRAGILE")
     assert "3/7" in stage_three["summary"]
+    # failed_test names the battery rows that FAILed: FRAGILE 3/7
+    # means at least 4 of the 7 battery tests failed, and every
+    # failing row name must appear in the report's failed_test
+    table = stage_three["results"]["battery_table"]
+    failed_rows = table.loc[
+        ~table["test"].isin(["OVERALL", "baseline"])
+        & table["verdict"].eq("FAIL"),
+        "test",
+    ]
+    assert not failed_rows.empty
+    for row_name in failed_rows:
+        assert row_name in result["failed_test"]
+    # interpretation carries RUN FACTS, never a bare template: the
+    # run's own observation count must appear verbatim
+    assert str(result["n_obs"]) in result["interpretation"]
     later_stages = result["stages"][3:]
     for stage in later_stages:
         assert stage["status"] == "SKIPPED"
@@ -957,6 +992,10 @@ def _canned_wf(**overrides: Any) -> dict[str, Any]:
         "purge_gap": 0,
         "n_pnl_unique": 60,
         "overlap_factor": 1.0,
+        # preds_std: std of the union OOS predictions - the stage-4
+        # CONSTANT_PREDICTIONS gate reads it (taxonomy wave A2), so a
+        # canned stage-4 world must always carry the key
+        "preds_std": 0.87,
     }
     result.update(overrides)
     return result
@@ -965,12 +1004,15 @@ def _canned_wf(**overrides: Any) -> dict[str, Any]:
 def test_overfit_shrinkage_kills_as_dead_at_stage_four(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """OVERFIT_DEATH at stage 4 is DEAD, not NO_OOS_EDGE.
+    """OVERFIT_DEATH at stage 4 reads the OVERFIT_DEATH token.
 
     Old behaviour: every stage-4 walk-forward FAIL was classified
     NO_OOS_EDGE and the computed shrinkage was never consulted, so an
     overfit signature (finite ratio strictly above the 2.0x cap) died
-    with the wrong verdict and a generic reason.
+    with the wrong verdict and a generic reason.  Taxonomy: the
+    overfit kill has its own token (generic "DEAD" is reserved for a
+    battery OVERALL DEAD), class NEEDS_ANALYSIS, and the report
+    interpretation quotes the shrink value that fired the gate.
     """
     overfit = _canned_wf(
         wf_t=3.4,
@@ -986,9 +1028,14 @@ def test_overfit_shrinkage_kills_as_dead_at_stage_four(
         _make_synthetic("genuine_edge", n_obs=SERIES_N_OBS, seed=4),
         REDUCED_CONFIG,
     )
-    assert result["overall_verdict"] == "DEAD"
+    assert result["overall_verdict"] == "OVERFIT_DEATH"
+    assert result["verdict_class"] == "NEEDS_ANALYSIS"
+    assert result["informative"] is True
     assert result["killed_by_stage"] == 4
     assert "OVERFIT_DEATH" in str(result["kill_reason"])
+    # the shrink value that fired the gate is a RUN FACT and must
+    # appear in the interpretation ("3.0" matches the 3.00x reason)
+    assert "3.0" in result["interpretation"]
     stage_four = result["stages"][3]
     assert stage_four["status"] == "FAIL"
     assert "OVERFIT_DEATH" in stage_four["summary"]
@@ -1000,7 +1047,7 @@ def test_overfit_shrinkage_kills_as_dead_at_stage_four(
 def test_overfit_gate_is_independent_of_wf_t_finiteness(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Shrink > cap still kills DEAD when wf_t itself is NaN.
+    """Shrink > cap still kills as OVERFIT_DEATH when wf_t is NaN.
 
     The gate reads only the shrink ratio; a NaN wf_t must not reroute
     the verdict into the plain weak-edge path.  (A finite ratio above
@@ -1024,9 +1071,11 @@ def test_overfit_gate_is_independent_of_wf_t_finiteness(
         _make_synthetic("genuine_edge", n_obs=SERIES_N_OBS, seed=4),
         REDUCED_CONFIG,
     )
-    assert result["overall_verdict"] == "DEAD"
+    assert result["overall_verdict"] == "OVERFIT_DEATH"
+    assert result["verdict_class"] == "NEEDS_ANALYSIS"
     assert result["killed_by_stage"] == 4
     assert "OVERFIT_DEATH" in str(result["kill_reason"])
+    assert "3.0" in result["interpretation"]
 
 
 def test_shrinkage_nan_is_inconclusive_with_visible_reason(
@@ -1166,6 +1215,402 @@ def test_label_horizon_config_error_propagates() -> None:
             _make_synthetic("genuine_edge", n_obs=SERIES_N_OBS, seed=4),
             REDUCED_CONFIG | {"walkforward": {"label_horizon": 5}},
         )
+
+
+# ----------------------------------------------------------------------------
+# verdict taxonomy wave: per-kill tokens, the 4-value verdict_class,
+# the informative flag, run-fact report metadata, the degenerate-feed
+# pre-flight and feed-format acceptance.  Class contract: "DEAD" only
+# for a battery OVERALL DEAD (or CS_NO_EDGE with target="xs");
+# NEEDS_ANALYSIS for every other kill; informative is False ONLY for
+# DEGENERATE_FEED / CONSTANT_PREDICTIONS / INCONCLUSIVE.
+# ----------------------------------------------------------------------------
+_NOT_APPLICABLE_CAUSE = "no panel data"
+
+
+def _degenerate_world(column: str, degeneracy: str) -> dict[str, Any]:
+    """A valid synthetic world with ONE feed column made degenerate.
+
+    ``degeneracy`` is "all_nan" (every value NaN) or "zero_variance"
+    (one repeated value); ``column`` is "signal" or "returns".  The
+    untouched columns stay the honest genuine-edge draw, so only the
+    pre-flight can be responsible for the DEGENERATE_FEED outcome.
+    """
+    data = _make_synthetic("genuine_edge", n_obs=SERIES_N_OBS, seed=4)
+    index = data["returns"].index
+    if degeneracy == "all_nan":
+        data[column] = pd.Series(np.nan, index=index, dtype=float)
+    else:
+        data[column] = pd.Series(5.0, index=index, dtype=float)
+    return data
+
+
+@pytest.mark.parametrize("degeneracy", ["all_nan", "zero_variance"])
+def test_degenerate_signal_feed_maps_to_degenerate_feed(
+    degeneracy: str,
+) -> None:
+    """A degenerate SIGNAL feed stops the pipeline before stage 1.
+
+    Taxonomy pre-flight: an all-NaN or zero-variance signal cannot be
+    tested, and "cannot be tested" is DEGENERATE_FEED (class
+    NEEDS_ANALYSIS, informative False) -- never a stage kill.  The
+    zero-variance world would otherwise die at stage 3 as generic
+    DEAD via a never-trading battery, and the all-NaN world would die
+    in the aligner's row drop; the pre-flight must fire first.
+    """
+    result = run_full_pipeline(
+        _degenerate_world("signal", degeneracy), REDUCED_CONFIG
+    )
+    assert result["overall_verdict"] == "DEGENERATE_FEED"
+    assert result["verdict_class"] == "NEEDS_ANALYSIS"
+    assert result["informative"] is False
+
+
+@pytest.mark.parametrize("degeneracy", ["all_nan", "zero_variance"])
+def test_degenerate_returns_feed_maps_to_degenerate_feed(
+    degeneracy: str,
+) -> None:
+    """A degenerate RETURNS feed stops the pipeline before stage 1.
+
+    Same pre-flight contract as the signal side, mirrored on the
+    returns column: the feed, not the hypothesis, is the problem, so
+    the verdict is DEGENERATE_FEED and the flag says uninformative.
+    """
+    result = run_full_pipeline(
+        _degenerate_world("returns", degeneracy), REDUCED_CONFIG
+    )
+    assert result["overall_verdict"] == "DEGENERATE_FEED"
+    assert result["verdict_class"] == "NEEDS_ANALYSIS"
+    assert result["informative"] is False
+
+
+_BATTERY_TEST_NAMES: tuple[str, ...] = (
+    "threshold_sensitivity",
+    "window_sensitivity",
+    "subperiod_thirds",
+    "leave_one_out",
+    "placebo_lag",
+    "declustering",
+    "sign_monotonicity",
+)
+
+
+def _battery_table(*failed: str) -> pd.DataFrame:
+    """Canned battery table (run_battery's schema) with ``failed`` FAIL.
+
+    Same columns as the ``atropos.robustness_battery.run_battery``
+    output ({test, stat, t_stat, ci_low, ci_high, verdict,
+    catastrophic, note}) so stage-3 reporting and the taxonomy
+    metadata builder read real columns.  FAIL rows carry a negative
+    stat (a flipped-effect battery row) so a report quoting the
+    battery stat has something real to quote.
+    """
+    rows: list[dict[str, Any]] = []
+    for name in _BATTERY_TEST_NAMES:
+        is_failed = name in failed
+        rows.append(
+            {
+                "test": name,
+                "stat": -0.0004 if is_failed else 0.0012,
+                "t_stat": -2.6 if is_failed else 3.1,
+                "ci_low": -0.0009 if is_failed else 0.0004,
+                "ci_high": 0.0001 if is_failed else 0.0020,
+                "verdict": "FAIL" if is_failed else "PASS",
+                "catastrophic": False,
+                "note": "canned row for the taxonomy pin",
+            }
+        )
+    n_pass = 7 - len(failed)
+    rows.append(
+        {
+            "test": "OVERALL",
+            "stat": float(n_pass),
+            "t_stat": float("nan"),
+            "ci_low": float("nan"),
+            "ci_high": float("nan"),
+            "verdict": "FRAGILE",
+            "catastrophic": False,
+            "note": f"FRAGILE: {n_pass}/7 tests passed",
+        }
+    )
+    return pd.DataFrame(rows)
+
+
+def _run_with_canned_battery(
+    monkeypatch: pytest.MonkeyPatch, table: pd.DataFrame
+) -> dict[str, Any]:
+    """Run the genuine-edge pipeline with the stage-3 battery canned.
+
+    Stages 1-2 run for real; only the battery call is swapped (the
+    repo's established canned-monkeypatch pattern for stage-3 worlds
+    that honest synthetics cannot reach).
+    """
+    monkeypatch.setattr(
+        ensemble_pipeline,
+        "run_battery",
+        lambda *_args, **_kwargs: table,
+    )
+    monkeypatch.setattr(
+        ensemble_pipeline, "battery_overall", lambda *_a, **_k: "FRAGILE"
+    )
+    return run_full_pipeline(
+        _make_synthetic("genuine_edge", n_obs=SERIES_N_OBS, seed=4),
+        REDUCED_CONFIG,
+    )
+
+
+def test_placebo_failure_maps_to_placebo_violation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A FRAGILE battery driven by placebo_lag reads PLACEBO_VIOLATION.
+
+    Stage-3 mapping (taxonomy wave): a battery FAIL whose failing
+    rows include the causally impossible placebo lag is not a generic
+    robustness death -- the specific PLACEBO_VIOLATION token keeps
+    the cause visible (class NEEDS_ANALYSIS) and the report's
+    failed_test must name the placebo row.
+    """
+    result = _run_with_canned_battery(
+        monkeypatch, _battery_table("placebo_lag")
+    )
+    assert result["overall_verdict"] == "PLACEBO_VIOLATION"
+    assert result["verdict_class"] == "NEEDS_ANALYSIS"
+    assert result["informative"] is True
+    assert result["killed_by_stage"] == 3
+    assert "placebo_lag" in result["failed_test"]
+
+
+@pytest.mark.parametrize(
+    ("canned_overrides", "expected_verdict"),
+    [
+        pytest.param(
+            {"preds_std": 1e-17, "verdict": "FAIL", "verdict_reason": None},
+            "CONSTANT_PREDICTIONS",
+            id="preds_std_tiny",
+        ),
+        pytest.param(
+            {
+                "preds_std": float("nan"),
+                "verdict": "FAIL",
+                "verdict_reason": None,
+            },
+            "CONSTANT_PREDICTIONS",
+            id="preds_std_nan",
+        ),
+        pytest.param(
+            {
+                "preds_std": float("nan"),
+                "n_pnl_unique": 1,
+                "verdict": "INCONCLUSIVE",
+                "verdict_reason": (
+                    "INCONCLUSIVE: 1 unique OOS prediction (< 2)"
+                ),
+            },
+            "INCONCLUSIVE",
+            id="fewer_than_two_unique_preds",
+        ),
+    ],
+)
+def test_constant_predictions_is_uninformative(
+    monkeypatch: pytest.MonkeyPatch,
+    canned_overrides: dict[str, Any],
+    expected_verdict: str,
+) -> None:
+    """Constant OOS predictions kill uninformative; < 2 is INCONCLUSIVE.
+
+    Stage-4 mapping (taxonomy wave): a preds_std that is non-finite
+    or below 1e-12 means the model emitted (numerically) a single
+    prediction -- the run dies as CONSTANT_PREDICTIONS, class
+    NEEDS_ANALYSIS, informative False.  Fewer than 2 unique OOS
+    predictions is caught one level down: the walk-forward itself
+    refuses to hand out a tier (verdict INCONCLUSIVE) and the
+    pipeline surfaces that undecided verdict unchanged, also
+    uninformative.  The canned dict carries the new preds_std key the
+    framework now reports.
+    """
+    canned = _canned_wf(**canned_overrides)
+    monkeypatch.setattr(
+        ensemble_pipeline, "walkforward", lambda *_a, **_k: canned
+    )
+    result = run_full_pipeline(
+        _make_synthetic("genuine_edge", n_obs=SERIES_N_OBS, seed=4),
+        REDUCED_CONFIG,
+    )
+    assert result["overall_verdict"] == expected_verdict
+    assert result["informative"] is False
+    expected_class = (
+        "INCONCLUSIVE"
+        if expected_verdict == "INCONCLUSIVE"
+        else "NEEDS_ANALYSIS"
+    )
+    assert result["verdict_class"] == expected_class
+
+
+def test_kill_report_carries_verdict_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A kill report quotes RUN FACTS: counts, failed rows, the stat.
+
+    The taxonomy report contract: interpretation / next_step /
+    what_would_change are filled strings carrying this run's numbers
+    (n_obs, active days, failed test names, the battery stat) --
+    never bare templates.  Canned FRAGILE battery with two failing
+    rows (no placebo row: that maps to PLACEBO_VIOLATION) keeps every
+    quoted fact deterministic.
+    """
+    result = _run_with_canned_battery(
+        monkeypatch, _battery_table("window_sensitivity", "declustering")
+    )
+    assert result["overall_verdict"] == "ROBUSTNESS_DEATH"
+    assert result["verdict_class"] == "NEEDS_ANALYSIS"
+    assert result["informative"] is True
+    assert result["killed_by_stage"] == 3
+    assert result["failed_test"]
+    interpretation = result["interpretation"]
+    assert str(result["n_obs"]) in interpretation
+    assert "window_sensitivity" in interpretation
+    assert "declustering" in interpretation
+    # the canned FAIL rows carry stat=-0.0004: the report must quote
+    # a real battery stat (mu = <float>), not a placeholder
+    assert re.search(r"mu\s*=\s*-?0\.\d+", interpretation)
+    assert isinstance(result["next_step"], str) and result["next_step"]
+    assert isinstance(result["what_would_change"], str)
+    assert result["what_would_change"]
+    assert "active_days" in result
+
+
+def test_c_trade_level_feed_produces_verdict_with_n_trades() -> None:
+    """A trade-level feed is ACCEPTED, with its trade count.
+
+    Feed-format contract: trade rows -- entry state (+1 / -1 / 0) as
+    the signal, the trade's forward-R outcome as returns, clean
+    consecutive timestamps -- must run through run_full_pipeline and
+    the report must carry the trade count as a run fact in its
+    interpretation.  The 300-row series minimum still applies (a
+    power guard, kept intact per the prereg doctrine -- a 5-row feed
+    is refused as underpowered, pinned by
+    test_pipeline_requires_aligned_inputs); this pin holds the format
+    acceptance at that boundary with 330 entry states (300 aligned
+    after the 30-row mom30 warmup drop).  The real cache path feeding
+    this format lives in the transfer layer.
+    """
+    index = pd.date_range("2024-01-01", periods=330, freq="h")
+    entry_states = [1.0, -1.0, 1.0, 0.0, -1.0]
+    forward_r = [0.8, -0.4, 1.2, 0.0, -1.0]
+    feed = {
+        "returns": pd.Series(forward_r * 66, index=index),
+        "signal": pd.Series(entry_states * 66, index=index),
+        "hypothesis": (
+            "minimal trade-level feed: repeating entry states with "
+            "forward-R outcomes"
+        ),
+    }
+    result = run_full_pipeline(feed, REDUCED_CONFIG)
+    # ACCEPTED: a verdict comes back (nothing raises), whatever the
+    # trades decide.  330 raw rows -> 300 aligned (the first 30 rows
+    # feed the mom30 rolling warmup and are dropped by the aligner)
+    assert isinstance(result["overall_verdict"], str)
+    assert result["overall_verdict"]
+    assert result["n_obs"] == 300
+    # the trade count is a RUN FACT in the interpretation
+    assert str(result["n_obs"]) in result["interpretation"]
+
+
+def _validate_not_applicable_record(
+    record: dict[str, Any], cause: str
+) -> None:
+    """Conformance validator for the NOT_APPLICABLE journal schema.
+
+    Schema (transfer-layer journal record): the record must carry the
+    leg name, the NEEDS_ANALYSIS verdict class, the uninformative
+    flag, an interpretation that says WHY the leg was skipped ("not
+    applicable" plus the cause substring, with run facts), and a
+    non-empty next_step.  Deliberately local: the in-repo pin must
+    not import the transfer layer's constants.
+    """
+    assert isinstance(record["leg"], str) and record["leg"]
+    assert record["verdict_class"] == "NEEDS_ANALYSIS"
+    assert record["informative"] is False
+    interpretation = record["interpretation"]
+    assert isinstance(interpretation, str)
+    assert "not applicable" in interpretation
+    assert cause in interpretation
+    assert isinstance(record["next_step"], str) and record["next_step"]
+
+
+def test_e_not_applicable_records_reason() -> None:
+    """A NOT_APPLICABLE journal record names its cause, not just a flag.
+
+    Schema-conformance pin: a leg that cannot run (the cross-sectional
+    leg on a trade-level feed) records verdict_class NEEDS_ANALYSIS,
+    informative False, an interpretation containing "not applicable"
+    AND the cause ("no panel data"), and a non-empty next_step.  The
+    negative controls keep the validator honest: a drifted record and
+    a record missing the next_step key must both fail it.
+    """
+    sample: dict[str, Any] = {
+        "leg": "cross_sectional",
+        "verdict_class": "NEEDS_ANALYSIS",
+        "informative": False,
+        "interpretation": (
+            "cross_sectional leg not applicable: no panel data in a "
+            "trade-level feed (0 panel dates, 5 trades observed)"
+        ),
+        "next_step": (
+            "supply an asset-date panel to test the cross-sectional "
+            "leg, or restrict the prereg to the trade-level leg"
+        ),
+    }
+    _validate_not_applicable_record(sample, _NOT_APPLICABLE_CAUSE)
+    drifted = {**sample, "informative": True}
+    with pytest.raises(AssertionError):
+        _validate_not_applicable_record(drifted, _NOT_APPLICABLE_CAUSE)
+    incomplete = {
+        key: value for key, value in sample.items() if key != "next_step"
+    }
+    with pytest.raises(KeyError):
+        _validate_not_applicable_record(incomplete, _NOT_APPLICABLE_CAUSE)
+
+
+def test_cs_no_edge_class_follows_target() -> None:
+    """CS_NO_EDGE class follows the target: xs -> DEAD, ts -> ANALYSIS.
+
+    The cross-sectional kill means "dead" only when the hypothesis
+    target WAS the cross-section (config target="xs"): no CS edge is
+    death for an xs book.  For a time-series target (target="ts", the
+    default) the CS stage is corroborating evidence only, so the same
+    CS_NO_EDGE verdict reads NEEDS_ANALYSIS.  Same noise-panel world,
+    two runs in one test.
+    """
+    data = _make_panel("cs_noise", n_dates=200, n_assets=30, seed=13)
+    xs = run_full_pipeline(data, REDUCED_CONFIG | {"target": "xs"})
+    assert xs["overall_verdict"] == "CS_NO_EDGE"
+    assert xs["verdict_class"] == "DEAD"
+    assert xs["informative"] is True
+    ts = run_full_pipeline(data, REDUCED_CONFIG | {"target": "ts"})
+    assert ts["overall_verdict"] == "CS_NO_EDGE"
+    assert ts["verdict_class"] == "NEEDS_ANALYSIS"
+    assert ts["informative"] is True
+
+
+def test_repackaging_is_needs_analysis() -> None:
+    """REPACKAGING is informative and needs analysis, never DEAD.
+
+    Explicit taxonomy pin (kept separate from the stage-ordering
+    repackaging test so the class/informative contract survives even
+    if the kill moves stages): an echo of known information is a
+    live, analysable finding about the candidate.
+    """
+    result = run_full_pipeline(
+        _make_synthetic("momentum_echo", n_obs=SERIES_N_OBS, seed=4),
+        REDUCED_CONFIG,
+    )
+    assert result["overall_verdict"] == "REPACKAGING"
+    assert result["verdict_class"] == "NEEDS_ANALYSIS"
+    assert result["informative"] is True
+    assert isinstance(result["interpretation"], str)
+    assert result["interpretation"]
+    assert isinstance(result["next_step"], str) and result["next_step"]
 
 
 # ----------------------------------------------------------------------------

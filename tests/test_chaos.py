@@ -1141,6 +1141,9 @@ _SPEC_WALKFORWARD: dict[str, Any] = {
         "wf_direction_consistency",
         "wf_shrink_ratio",
         "verdict",
+        # preds_std: std of the union OOS predictions - consumed by
+        # the ensemble pipeline's stage-4 CONSTANT_PREDICTIONS gate
+        "preds_std",
         "n_folds",
         "in_sample_t",
         "folds",

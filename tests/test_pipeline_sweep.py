@@ -33,10 +33,23 @@ REDUCED_CONFIG: dict[str, Any] = {
 # rest of the suite only ever exercises the seed=4 / seed=13 worlds.
 SWEEP_SEEDS: tuple[int, ...] = tuple(range(10))
 
-# any verdict that means "candidate killed"; CS_NO_EDGE needs panel
-# data the series-only sweep never supplies.
+# kill tokens of the verdict taxonomy.  Generic "DEAD" is NOT a
+# member on purpose: it is reserved for a battery OVERALL DEAD, and
+# the sweep seed that produces one is pinned explicitly.  CS_NO_EDGE
+# needs panel data the series-only sweep never supplies.
 KILL_VERDICTS: frozenset[str] = frozenset(
-    {"REPACKAGING", "DEAD", "NO_OOS_EDGE", "RISK", "COST_DEATH", "ARTIFACT"}
+    {
+        "REPACKAGING",
+        "ROBUSTNESS_DEATH",
+        "PLACEBO_VIOLATION",
+        "OVERFIT_DEATH",
+        "NO_OOS_EDGE",
+        "RISK",
+        "COST_DEATH",
+        "ARTIFACT",
+        "DEGENERATE_FEED",
+        "CONSTANT_PREDICTIONS",
+    }
 )
 
 
@@ -137,11 +150,15 @@ def test_edge_class_contract_fast_vs_slow() -> None:
             REDUCED_CONFIG,
         )
         if seed == 7:
-            assert result["overall_verdict"] == "DEAD", (
+            assert result["overall_verdict"] == "ROBUSTNESS_DEATH", (
                 f"seed={seed}: the pinned ATR-04 death vanished: "
                 f"verdict={result['overall_verdict']} "
                 f"killed_by_stage={result['killed_by_stage']}"
             )
+            # taxonomy: a FRAGILE battery is the ROBUSTNESS_DEATH
+            # token, class NEEDS_ANALYSIS -- generic "DEAD" is
+            # reserved for a battery OVERALL DEAD
+            assert result["verdict_class"] == "NEEDS_ANALYSIS"
             assert result["killed_by_stage"] == 3
             assert "ROBUSTNESS-DEATH" in str(result["kill_reason"])
             continue
@@ -161,12 +178,25 @@ def test_pure_noise_is_killed_on_every_sweep_seed() -> None:
     9/10 seeds die as REPACKAGING at stage 1; seed 7 passes stage 1 by
     multiple-testing luck (every control p-value lands at 0.02-0.03,
     including the 1/31 permutation floor at n_perm_draws=30) and the
-    battery then kills it at stage 3 as DEAD.  The requirement is only
-    that EVERY seed ends in a kill verdict with ``killed_by_stage`` set.
+    battery then kills it at stage 3 as DEAD (OVERALL DEAD: the
+    baseline is catastrophic).  The requirement is only that EVERY
+    seed ends in a kill verdict with ``killed_by_stage`` set.
     Budget: ~0.2 s measured (10 early-dying REDUCED_CONFIG runs).
     """
     for seed in SWEEP_SEEDS:
         result = run_full_pipeline(_make_noise_world(seed), REDUCED_CONFIG)
+        if seed == 7:
+            # battery OVERALL DEAD on this seed: the ONE case where
+            # the generic DEAD verdict survives, so it is pinned here
+            # instead of being a KILL_VERDICTS member
+            assert result["overall_verdict"] == "DEAD", (
+                f"seed={seed}: the pinned OVERALL-DEAD death changed: "
+                f"verdict={result['overall_verdict']} "
+                f"killed_by_stage={result['killed_by_stage']}"
+            )
+            assert result["verdict_class"] == "DEAD"
+            assert result["killed_by_stage"] == 3
+            continue
         assert result["overall_verdict"] in KILL_VERDICTS, (
             f"seed={seed}: noise survived as "
             f"{result['overall_verdict']} "

@@ -32,17 +32,29 @@ run):
                                net-of-cost quantile long-short spread,
                                quantile monotonicity.
 
-Decision tree (first FAIL decides):
+Decision tree (first FAIL decides; stage 0 is the degenerate-feed
+pre-flight that runs BEFORE any stage, before the aligner's row drop
+can mask a degenerate column with a generic size error):
 
+* pre-flight: ``signal`` or ``returns`` is empty /
+  all-NaN / constant (zero peak-to-peak)          -> ``DEGENERATE_FEED``
 * stage 1, momentum / known-features control fails -> ``REPACKAGING``
 * stage 1, other controls fail                     -> ``ARTIFACT``
 * stage 2 curve death                              -> ``REPACKAGING``
   (a curve SURVIVES call backed by fewer than 5 testable
   specs is INCONCLUSIVE - a WARN, not a pass)
-* stage 3 DEAD or FRAGILE (fewer than 5/7 battery
-  tests passed: ROBUSTNESS-DEATH)                  -> ``DEAD``
+* stage 3 battery OVERALL ``DEAD`` (the baseline rule
+  itself is catastrophic or never trades - no active
+  days)                                           -> ``DEAD``
+* stage 3 FRAGILE driven by the ``placebo_lag``
+  row (its ONLY failing attack)                   -> ``PLACEBO_VIOLATION``
+* stage 3 FRAGILE, any other failing book
+  (fewer than 5/7 tests passed: ROBUSTNESS-DEATH) -> ``ROBUSTNESS_DEATH``
 * stage 4 walk-forward FAIL, shrinkage over
-  the cap (OVERFIT_DEATH)                          -> ``DEAD``
+  the cap (OVERFIT_DEATH marker)                  -> ``OVERFIT_DEATH``
+* stage 4 walk-forward model emitted (numerically)
+  constant OOS predictions (``preds_std`` below
+  1e-12 or non-finite)                            -> ``CONSTANT_PREDICTIONS``
 * stage 4 walk-forward FAIL (weak OOS edge only)  -> ``NO_OOS_EDGE``
 * stage 4 walk-forward cannot run (the
   configuration exceeds the aligned data)          -> ``INCONCLUSIVE``
@@ -67,6 +79,24 @@ cross-sectional stage ran (panel-only mode), the verdict says so
 (``SURVIVES_CS_ONLY`` / ``SURVIVES_CS_ONLY_WITH_WARNINGS``) instead of
 borrowing the stronger all-stages label.
 
+Verdict metadata layer: every report carries ``verdict_class``,
+``informative``, ``interpretation``, ``next_step``,
+``what_would_change``, ``failed_test`` and ``active_days`` alongside
+the verdict token.  ``verdict_class`` takes exactly four values:
+``DEAD`` (ONLY a battery OVERALL DEAD - a proven no-edge baseline -
+and a ``CS_NO_EDGE`` when config ``target == "xs"``), ``NEEDS_ANALYSIS``
+(every other kill: the finding is live and analysable), ``INCONCLUSIVE``
+and ``SURVIVES`` (the whole survives family, CS-only forms included).
+``informative`` is False ONLY for ``DEGENERATE_FEED`` /
+``CONSTANT_PREDICTIONS`` / ``INCONCLUSIVE`` (the signal was not
+tested, so the run says nothing about it); every other kill and every
+survival is informative.  ``interpretation`` / ``next_step`` /
+``what_would_change`` are FILLED strings quoting this run's facts
+(n_obs, active days, failed battery rows and their stats, the shrink
+ratio that fired a gate) - never bare templates; ``failed_test`` is
+the comma-joined names of the FAILing battery rows (battery kills
+only) or ``None``; ``active_days`` counts finite non-zero returns.
+
 Input ``data`` keys: ``returns`` (per-period forward returns the signal is
 supposed to predict), ``signal`` (same index), optional ``features``
 (DataFrame of known controls), optional ``mom7`` / ``mom30`` (observed 7d/30d
@@ -76,24 +106,31 @@ momentum factors; fallback: trailing sums of past returns), optional
 they may be supplied alone (stages 1-6 are then SKIPPED: panel-only mode,
 verdict ``SURVIVES_CS_ONLY``) or together with the series inputs.
 
-Run ``python -m atropos.ensemble_pipeline`` for the ten synthetic
+Run ``python -m atropos.ensemble_pipeline`` for the thirteen synthetic
 verification cases: a genuine edge must SURVIVE; a SLOW genuine edge
 (smoothed driver) must SURVIVE - the battery passes slow-robust edges
-(9/10 swept seeds; seed 7 stops on the ATR-04 FRAGILE kill); a momentum
-echo must die as REPACKAGING; an edge concentrated in the first third
-of the sample is caught by the OOS evaluation as NO_OOS_EDGE (its
-single stage-1 concentration FAIL is only a WARN under ATR-12); a
-genuine edge behind an unreachable entry threshold must die as DEAD; a
-genuine edge under prohibitive costs must die as COST_DEATH; a genuine
-edge under a strict drawdown mandate must die as RISK; a genuine
+(9/10 swept seeds); a momentum echo must die as REPACKAGING; an edge
+concentrated in the first third of the sample is caught by the OOS
+evaluation as NO_OOS_EDGE (its single stage-1 concentration FAIL is
+only a WARN under ATR-12); a genuine edge behind an unreachable entry
+threshold must die as DEAD (battery OVERALL DEAD); the slow class on
+the sweep's seed 7 reads a FRAGILE battery and must die as
+ROBUSTNESS_DEATH; the stage-4 shrink gate fired by a canned
+walk-forward must die as OVERFIT_DEATH; a constant (zero-variance)
+signal feed must stop at the pre-flight as DEGENERATE_FEED; a genuine
+edge under prohibitive costs must die as COST_DEATH; a genuine edge
+under a strict drawdown mandate must die as RISK; a genuine
 cross-sectional panel must report SURVIVES_CS_ONLY (only the
 cross-sectional attack ran); a thin panel must report
 SURVIVES_CS_ONLY_WITH_WARNINGS; a pure-noise panel must die as
-CS_NO_EDGE.  ARTIFACT and INCONCLUSIVE are the two verdicts without a
-demo case: ARTIFACT needs two independent stage-1 rejections with
-clean factor controls (ATR-12; no honest synthetic reaches it - pinned
-in tests/test_ensemble_pipeline.py), and INCONCLUSIVE needs a
-walk-forward configuration that outgrows the data (unit-tested).
+CS_NO_EDGE.  ARTIFACT, INCONCLUSIVE, PLACEBO_VIOLATION and
+CONSTANT_PREDICTIONS are the four verdicts without a demo case:
+ARTIFACT needs two independent stage-1 rejections with clean factor
+controls (ATR-12; no honest synthetic reaches it), INCONCLUSIVE needs
+a walk-forward configuration that outgrows the data, and the stage-3
+placebo row and the stage-4 constant-prediction gate cannot be hit by
+an honest synthetic - all four are pinned with canned/patched worlds
+in tests/test_ensemble_pipeline.py.
 """
 
 from __future__ import annotations
@@ -183,6 +220,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "model": "ols",  # "ols" | "knn" | "kernel" | callable factory
     "model_params": {},  # kwargs for knn_model_fn / kernel_model_fn
+    # target: what the hypothesis predicts.  "ts" (default) - a
+    # time-series book: the stage-7 cross-sectional attack is
+    # corroborating evidence only, so a CS_NO_EDGE reads
+    # NEEDS_ANALYSIS with a sanity-check note.  "xs" - the
+    # cross-section IS the target: CS_NO_EDGE is a proven no-edge and
+    # reads verdict_class DEAD.
+    "target": "ts",  # "ts" | "xs"
     "cross_sectional": {
         "n_quantiles": 5,
         "min_assets": 5,
@@ -204,10 +248,16 @@ _STAGE_NAMES = {
 _KILL_VERDICTS: dict[int, str] = {
     1: "ARTIFACT",  # refined to REPACKAGING when the factor controls fail
     2: "REPACKAGING",
-    3: "DEAD",
-    4: "NO_OOS_EDGE",
+    # refined inside _finish: a battery OVERALL DEAD reads DEAD (the
+    # only DEAD in the pipeline), a FRAGILE book driven by the
+    # placebo_lag row reads PLACEBO_VIOLATION, everything else
+    # ROBUSTNESS_DEATH
+    3: "ROBUSTNESS_DEATH",
+    4: "NO_OOS_EDGE",  # refined to OVERFIT_DEATH / CONSTANT_PREDICTIONS
     5: "RISK",  # refined to COST_DEATH when only the net envelope dies
     6: "NO_OOS_EDGE",
+    # explicit (taxonomy): the cross-sectional kill keeps its own
+    # token; its verdict_class follows config["target"] (xs -> DEAD)
     7: "CS_NO_EDGE",
 }
 
@@ -235,12 +285,32 @@ _COST_DEATH_REASON = (
     "passes - the edge is eaten by transaction costs (COST-DEATH)"
 )
 
+# stage-3 refinement reasons (taxonomy wave): the generic DEAD is
+# reserved for a catastrophic battery; a merely FRAGILE book with a
+# failing placebo row is a causality red flag, not a shape problem.
+_DEAD_BATTERY_REASON = (
+    "robustness battery OVERALL DEAD (ROBUSTNESS-DEATH: the baseline "
+    "rule is catastrophic or never trades - no active days - so no "
+    "edge survived to attack)"
+)
+_PLACEBO_VIOLATION_REASON = (
+    "robustness battery FRAGILE with the placebo_lag row FAILING: the "
+    "apparent edge survives a causality-violating lag - likely feed "
+    "lookahead"
+)
+
+_CONSTANT_PREDICTIONS_REASON = (
+    "walk-forward OOS predictions are numerically constant (preds_std "
+    "below 1e-12 or non-finite) - the model degenerated on the folds; "
+    "the signal was not tested"
+)
+
 _OVERFIT_DEATH_MARKER = "OVERFIT_DEATH"
 """Marker inside the stage-4 result's ``verdict_reason`` (set by
 :func:`atropos.walkforward_framework.walkforward` when the shrink ratio
-is finite and strictly above ``shrink_cap``): the verdict is a DEAD,
-not a plain missing-edge NO_OOS_EDGE (FRAMEWORK.md stage-6 kill
-criterion)."""
+is finite and strictly above ``shrink_cap``): the verdict is the
+specific OVERFIT_DEATH token, not a plain missing-edge NO_OOS_EDGE
+(FRAMEWORK.md stage-6 kill criterion)."""
 
 _INCONCLUSIVE_REASON = "insufficient data for walk-forward configuration"
 """Stage-4 INCONCLUSIVE cause: the configuration cannot fit even one
@@ -252,6 +322,272 @@ INCONCLUSIVE carries its own verdict_reason instead of this one."""
 # SURVIVES call is trusted (max-of-few-specs is a multiple search too
 # small to believe); fewer specs downgrade the stage to INCONCLUSIVE/WARN
 _MIN_CURVE_SPECS = 5
+
+# stage-4 CONSTANT_PREDICTIONS gate (taxonomy): a std of the union OOS
+# predictions that is non-finite or below this floor means the model
+# emitted (numerically) a single prediction - the run dies as
+# CONSTANT_PREDICTIONS instead of a tier verdict
+_CONSTANT_PREDS_STD_FLOOR = 1e-12
+
+# CONSTANT_PREDICTIONS, low-evidence branch (B14): below this many
+# active (finite, non-zero) return days the feed, not the model, is the
+# blocker and the interpretation says so
+_CONSTANT_PREDICTIONS_MIN_ACTIVE_DAYS = 5
+
+# CS_NO_EDGE, time-series-target suffix: for a "ts" book the
+# cross-sectional stage is corroborating evidence only
+_CS_TS_TARGET_NOTE = (
+    "; XS was a sanity check, not the target — for a time-series "
+    "strategy this verdict is informational"
+)
+
+# the SURVIVES family shares one metadata triple
+_SURVIVES_INTERPRETATION = (
+    "protocol could not kill it on this feed; not proof of truth"
+)
+_SURVIVES_NEXT_STEP = "OOS and live tracking are still required"
+_SURVIVES_WWC = "a stronger adversarial battery or a different feed"
+
+# the CONSTANT_PREDICTIONS interpretation when the feed had almost no
+# active days: the walk-forward model could not be evaluated at all
+_CONSTANT_PREDICTIONS_LOW_ACTIVE_DAYS = (
+    "insufficient active days ({active_days}); the walk-forward model "
+    "cannot be evaluated — check feed"
+)
+
+# verdict -> (verdict_class, informative, interpretation template,
+# next_step template, what_would_change template).  Placeholders are
+# filled at _finish time from run facts: {n_obs}, {active_days},
+# {failed_tests} (battery rows with their mu stats, "N/A" when none),
+# {passed} (battery pass count), {shrink:.2f} (the firing shrink
+# ratio), {stage} (the killing stage), {which_array} (the degenerate
+# feed column), {reason} (the INCONCLUSIVE blocker), {target_note}
+# (CS_NO_EDGE time-series suffix).  Filled strings are reported, never
+# the bare templates.
+_VERDICT_META: dict[str, tuple[str, bool, str, str, str]] = {
+    # --- kills -----------------------------------------------------------
+    "ARTIFACT": (
+        "NEEDS_ANALYSIS",
+        True,
+        (
+            "stage-1 null controls failed on n_obs={n_obs}: the effect "
+            "is indistinguishable from alignment/placebo/concentration/"
+            "calendar nulls"
+        ),
+        (
+            "check the feed for lookahead, alignment, calendar "
+            "artifacts; if clean, the signal is not distinguishable "
+            "from noise on this feed"
+        ),
+        (
+            "a different signal or a feed where at least one null is "
+            "rejected with power"
+        ),
+    ),
+    "REPACKAGING": (
+        "NEEDS_ANALYSIS",
+        True,
+        (
+            "the signal's edge matches a known factor (stage-2 spec "
+            "curve, n_obs={n_obs}); not novel, but not dead"
+        ),
+        "identify the parent factor; orthogonal-information check",
+        (
+            "evidence the signal carries information orthogonal to the "
+            "parent factor"
+        ),
+    ),
+    "ROBUSTNESS_DEATH": (
+        "NEEDS_ANALYSIS",
+        True,
+        (
+            "baseline edge survived but battery failed {failed_tests} "
+            "on n_obs={n_obs} ({passed}/7 passed) — about the signal's "
+            "shape (smoothing inversion, regime concentration, LOO "
+            "non-persistence), not about its booked P&L"
+        ),
+        (
+            "name the failed test's mechanism: strategy-class property "
+            "(e.g. smoothing hostile to trend) vs data property "
+            "(regime concentration)"
+        ),
+        (
+            "a structurally appropriate test representation — a "
+            "different test, NOT a softened one"
+        ),
+    ),
+    "PLACEBO_VIOLATION": (
+        "NEEDS_ANALYSIS",
+        True,
+        (
+            "placebo_lag FAILED: the apparent edge survives a "
+            "causality-violating lag — likely feed lookahead"
+        ),
+        (
+            "audit the feed construction (alignment, point-in-time "
+            "semantics, indicator warmup); do not trade this signal "
+            "until explained"
+        ),
+        (
+            "a strictly point-in-time feed: edge disappears -> it was "
+            "a leak; survives -> placebo passes and the verdict changes"
+        ),
+    ),
+    "DEAD": (
+        "DEAD",
+        True,
+        (
+            "battery OVERALL DEAD on n_obs={n_obs} ({active_days} "
+            "active days): the baseline rule is catastrophic or never "
+            "trades - proven no-edge, there is nothing left to attack"
+        ),
+        (
+            "stop here: a dead baseline is proven no-edge; rebuild the "
+            "rule or fix the feed before re-testing"
+        ),
+        (
+            "a rule whose baseline trades and books a positive gross "
+            "edge on this feed"
+        ),
+    ),
+    "OVERFIT_DEATH": (
+        "NEEDS_ANALYSIS",
+        True,
+        (
+            "in-sample edge exists, OOS is worse by {shrink:.2f}x "
+            "(shrink cap exceeded) — does not generalize as measured"
+        ),
+        (
+            "check whether the IS period overlaps a regime the OOS "
+            "does not; if IS thirds are single-regime, that is the "
+            "explanation"
+        ),
+        "an OOS period overlapping the IS regime distribution",
+    ),
+    "NO_OOS_EDGE": (
+        "NEEDS_ANALYSIS",
+        True,
+        (
+            "battery passed, but forward-looking predictiveness is not "
+            "significant in purged evaluation (stage {stage}, "
+            "n_obs={n_obs}) — the tested features do not capture the "
+            "mechanism"
+        ),
+        (
+            "feature question: test execution quality, microstructure, "
+            "regime timing, carry — do not force the same features "
+            "through a stricter threshold"
+        ),
+        "a feature set that captures the actual mechanism",
+    ),
+    "COST_DEATH": (
+        "NEEDS_ANALYSIS",
+        True,
+        (
+            "gross edge exists; net of modelled costs it does not "
+            "(breakeven gate)"
+        ),
+        (
+            "reduce turnover, improve execution, or accept lower scale "
+            "— execution problem, not signal problem"
+        ),
+        "cheaper execution or a lower-turnover variant",
+    ),
+    "RISK": (
+        "NEEDS_ANALYSIS",
+        True,
+        (
+            "drawdown/risk envelope breached while statistical gates "
+            "pass — the edge is real, the sizing is wrong"
+        ),
+        "reduce exposure, diversify, accept lower scale",
+        "sizing within risk limits",
+    ),
+    "CS_NO_EDGE": (
+        # refined to DEAD inside _finish when config target == "xs"
+        "NEEDS_ANALYSIS",
+        True,
+        "cross-sectional structure absent at required power{target_note}",
+        (
+            "XS-by-design: stop pursuing on this feed. TS strategy: "
+            "ignore for this signal"
+        ),
+        (
+            "nothing on this feed if XS was the target; a different "
+            "target, different test"
+        ),
+    ),
+    "DEGENERATE_FEED": (
+        "NEEDS_ANALYSIS",
+        False,
+        (
+            "feed cannot be tested: {which_array} is degenerate (zero "
+            "variance / all-NaN / empty)"
+        ),
+        (
+            "fix the feed; common causes: paused leg, key-mapping "
+            "error, degenerate threshold on a dominant ternary signal"
+        ),
+        (
+            "a valid feed — any prior verdict on this feed is voided "
+            "in the journal"
+        ),
+    ),
+    "CONSTANT_PREDICTIONS": (
+        "NEEDS_ANALYSIS",
+        False,
+        (
+            "walk-forward model produced constant predictions on "
+            "{active_days} active days — the model degenerated on the "
+            "folds; the signal was not tested"
+        ),
+        (
+            "check the model spec: too simple for the feature set, "
+            "training window too short, single-class fold"
+        ),
+        (
+            "a model spec producing non-constant predictions — model "
+            "problem, not signal problem"
+        ),
+    ),
+    # --- undecided --------------------------------------------------------
+    "INCONCLUSIVE": (
+        "INCONCLUSIVE",
+        False,
+        "test could not be run: {reason}; fix and re-run",
+        "fix the feed/model/window and re-run",
+        "a valid feed/model/window",
+    ),
+    # --- survival ---------------------------------------------------------
+    "SURVIVES": (
+        "SURVIVES",
+        True,
+        _SURVIVES_INTERPRETATION,
+        _SURVIVES_NEXT_STEP,
+        _SURVIVES_WWC,
+    ),
+    "SURVIVES_WITH_WARNINGS": (
+        "SURVIVES",
+        True,
+        _SURVIVES_INTERPRETATION,
+        _SURVIVES_NEXT_STEP,
+        _SURVIVES_WWC,
+    ),
+    "SURVIVES_CS_ONLY": (
+        "SURVIVES",
+        True,
+        _SURVIVES_INTERPRETATION,
+        _SURVIVES_NEXT_STEP,
+        _SURVIVES_WWC,
+    ),
+    "SURVIVES_CS_ONLY_WITH_WARNINGS": (
+        "SURVIVES",
+        True,
+        _SURVIVES_INTERPRETATION,
+        _SURVIVES_NEXT_STEP,
+        _SURVIVES_WWC,
+    ),
+}
 
 
 def _merge_config(overrides: dict[str, Any] | None) -> dict[str, Any]:
@@ -272,6 +608,54 @@ def _merge_config(overrides: dict[str, Any] | None) -> dict[str, Any]:
 # ----------------------------------------------------------------------------
 # input alignment
 # ----------------------------------------------------------------------------
+def _is_degenerate(values: np.ndarray) -> bool:
+    """True when a feed array cannot carry any statistical test.
+
+    Degenerate means one of: empty; all-NaN; no finite entry; or a
+    zero peak-to-peak range over the finite slice (a constant feed,
+    e.g. a paused leg or a degenerate threshold on a dominant ternary
+    signal).  This is the DEGENERATE_FEED pre-flight predicate: it
+    runs BEFORE :func:`_align_inputs`, whose NaN row drop would turn
+    an all-NaN column into a generic "too few observations" error and
+    mask the diagnosable feed problem.
+    """
+    arr = np.asarray(values, dtype=float).reshape(-1)
+    if arr.size == 0:
+        return True
+    if np.all(np.isnan(arr)):
+        return True
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        return True
+    return bool(np.ptp(finite) == 0.0)
+
+
+def _input_array(value: Any) -> np.ndarray | None:
+    """Float array view of a raw ``returns`` / ``signal`` input.
+
+    ``None`` (key absent, panel-only mode) stays ``None``; anything
+    else is flattened exactly like :func:`_align_inputs` flattens it,
+    so the pre-flight judges the same values the aligner would see.
+    """
+    if value is None:
+        return None
+    if isinstance(value, pd.Series):
+        return value.to_numpy(dtype=float)
+    return np.asarray(value, dtype=float).reshape(-1)
+
+
+def _raw_index(value: Any) -> pd.Index:
+    """Best-effort index of a raw feed input (RangeIndex fallback).
+
+    Used only by the degenerate-feed pre-flight report, which runs
+    before alignment: Series / DataFrame inputs carry their own index,
+    bare arrays get a positional one.
+    """
+    if isinstance(value, (pd.Series, pd.DataFrame)):
+        return value.index
+    return pd.RangeIndex(int(np.asarray(value).size))
+
+
 def _align_inputs(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
     """Index-align every input (inner join, NaN rows dropped).
 
@@ -605,13 +989,24 @@ def _stage_4_walkforward(
     cause) so the caller can classify without recomputing; when set it
     is also appended to the summary.
 
+    CONSTANT_PREDICTIONS gate (taxonomy): a ``preds_std`` (std of the
+    union OOS predictions, reported by the framework) that is
+    non-finite or below ``_CONSTANT_PREDS_STD_FLOOR`` means the model
+    emitted (numerically) a single prediction - the sign rule carried
+    no information, so the run is marked FAIL with
+    ``results["constant_predictions"] = True`` and the orchestrator
+    kills as CONSTANT_PREDICTIONS (the signal was not tested).  An
+    INCONCLUSIVE walk-forward verdict is surfaced unchanged and is
+    never reclassified by this gate: undecided beats the gate.
+
     A :class:`ValueError` whose message marks a capacity the data
     cannot carry (``"too small"``: not enough rows for even one fold)
     is INCONCLUSIVE, not a FAIL (ATR-06) -- the configuration did not
     fit, which says nothing about the edge.  Any other walk-forward
     rejection is a caller/config error (bad window sizes, negative
-    purge gap, ``label_horizon > 1``) and PROPAGATES loudly instead of
-    being classified here.
+    purge gap, ``label_horizon > 1``, the default predictor's own
+    exactly-constant-prediction raise) and PROPAGATES loudly instead
+    of being classified here.
     """
     wcfg = cfg["walkforward"]
     df_wf = pd.DataFrame({"signal": al["signal"], "outcome": al["returns"]})
@@ -643,31 +1038,50 @@ def _stage_4_walkforward(
             "results": {"error": str(exc)},
         }
     no_peek = check_no_peeking(wf)
-    status = {
-        "PASS": "PASS",
-        "DEGRADED": "WARN",
-        "FAIL": "FAIL",
-        "INCONCLUSIVE": "INCONCLUSIVE",
-    }[wf["verdict"]]
-    if not no_peek:
-        status = "FAIL"
+    preds_std = float(wf.get("preds_std", float("nan")))
+    constant_predictions = (
+        not np.isfinite(preds_std) or preds_std < _CONSTANT_PREDS_STD_FLOOR
+    )
+    wf_verdict = str(wf["verdict"])
+    if wf_verdict == "INCONCLUSIVE":
+        # undecided beats the gate: "could not test" stays undecided
+        status = "INCONCLUSIVE"
+    else:
+        status = {
+            "PASS": "PASS",
+            "DEGRADED": "WARN",
+            "FAIL": "FAIL",
+        }[wf_verdict]
+        if constant_predictions or not no_peek:
+            status = "FAIL"
     summary = (
-        f"{wf['verdict']}: wf_t={wf['wf_t']:.2f} "
+        f"{wf_verdict}: wf_t={wf['wf_t']:.2f} "
         f"direction={wf['wf_direction_consistency']:.3f} "
         f"shrink={wf['wf_shrink_ratio']:.2f} ({wf['n_folds']} folds, "
         f"no_peeking={no_peek}, mode={wf['mode']}, "
         f"purge={int(wf.get('purge_gap', 0))})"
     )
+    if constant_predictions and wf_verdict != "INCONCLUSIVE":
+        summary = (
+            "walk-forward model produced constant predictions "
+            f"(preds_std={preds_std:.2e}) - the model degenerated on "
+            "the folds; the signal was not tested"
+        )
     reason = wf.get("verdict_reason")
     if reason:
         summary = f"{summary} [{reason}]"
+    results = {key: value for key, value in wf.items() if key != "folds"} | {
+        "folds": wf["folds"],
+        "no_peeking": no_peek,
+    }
+    if constant_predictions and wf_verdict != "INCONCLUSIVE":
+        results["constant_predictions"] = True
     return {
         "stage": 4,
         "name": _STAGE_NAMES[4],
         "status": status,
         "summary": summary,
-        "results": {key: value for key, value in wf.items() if key != "folds"}
-        | {"folds": wf["folds"], "no_peeking": no_peek},
+        "results": results,
     }
 
 
@@ -1080,6 +1494,58 @@ def _stage_by_id(
     raise KeyError(f"stage {stage_id} has not run yet")
 
 
+def _battery_failed_rows(table: Any) -> list[tuple[str, float]]:
+    """(test name, baseline stat) of the battery's FAILing attack rows.
+
+    The ``OVERALL`` and ``baseline`` rows are excluded: OVERALL is the
+    aggregate, not a test, and a FAILing baseline IS the battery-OVERALL
+    DEAD case (the DEAD verdict itself already says it).  Non-DataFrame
+    input (a non-battery kill) yields an empty list - never a KeyError.
+    """
+    if not isinstance(table, pd.DataFrame) or table.empty:
+        return []
+    failed = table.loc[
+        ~table["test"].isin(["OVERALL", "baseline"])
+        & table["verdict"].eq("FAIL")
+    ]
+    return [
+        (str(name), float(stat))
+        for name, stat in failed[["test", "stat"]].itertuples(
+            index=False, name=None
+        )
+    ]
+
+
+def _battery_pass_count(table: Any) -> int:
+    """Number of battery attack rows that PASS (the ``x`` in ``x/7``).
+
+    Same counting as the stage-3 summary; non-DataFrame input counts 0.
+    """
+    if not isinstance(table, pd.DataFrame) or table.empty:
+        return 0
+    return int(
+        table.loc[~table["test"].isin(["OVERALL", "baseline"]), "verdict"]
+        .eq("PASS")
+        .sum()
+    )
+
+
+def _placebo_driven(table: Any) -> bool:
+    """True when ``placebo_lag`` is the battery's ONLY failing row.
+
+    The stage-3 PLACEBO_VIOLATION refinement predicate: a FRAGILE book
+    whose single failing attack is the causality-violating lag is a
+    causality story, not a shape story.  A broadly fragile book (the
+    honest minority-seed worlds, where smoothing inversion and
+    declustering fail alongside the placebo) stays ROBUSTNESS_DEATH
+    with the placebo row named in ``failed_test``.  Guards a
+    non-DataFrame table (never a KeyError); an absent placebo row
+    (untestable placebo) is not a violation.
+    """
+    failed_rows = _battery_failed_rows(table)
+    return len(failed_rows) == 1 and failed_rows[0][0] == "placebo_lag"
+
+
 def _json_safe_config(cfg: dict[str, Any]) -> dict[str, Any]:
     """JSON-serializable copy of the merged config.
 
@@ -1117,7 +1583,7 @@ def _json_safe_value(value: Any) -> Any:
 # panel-only branch, and the all-survived return), mirroring the
 # kill-on-first-FAIL decision tree.  Intentionally NOT refactored into a
 # class: the flat return-per-verdict shape is the decision tree.
-def run_full_pipeline(  # noqa: PLR0911, PLR0915
+def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
     data: dict[str, Any],
     hypothesis_config: dict[str, Any] | None = None,
     *,
@@ -1133,12 +1599,21 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0915
             absent), optional ``hypothesis`` (description).  Panel
             mode: ``panel_signal`` / ``panel_returns`` DataFrames
             (rows = dates, columns = assets) enable stage 7; given
-            alone, stages 1-6 are SKIPPED (panel-only mode).
+            alone, stages 1-6 are SKIPPED (panel-only mode).  A
+            degenerate ``signal`` or ``returns`` feed (empty /
+            all-NaN / zero peak-to-peak) stops the run at the
+            stage-0 pre-flight as ``DEGENERATE_FEED`` - before the
+            aligner can mask it with a size error.
         hypothesis_config: optional overrides over
             :data:`DEFAULT_CONFIG` (nested dicts are merged
             key-wise).  Notable keys: ``cost.cost_bps`` (one-way cost
             in bps, netted out in stage 5), ``model`` (``"ols"`` |
-            ``"knn"`` | ``"kernel"`` | callable factory, stage 6).
+            ``"knn"`` | ``"kernel"`` | callable factory, stage 6),
+            ``target`` (``"ts"`` | ``"xs"``; what the hypothesis
+            predicts - ``"ts"`` the default: a time-series book for
+            which the stage-7 cross-sectional attack is corroborating
+            evidence only; ``"xs"``: the cross-section IS the target,
+            so a CS_NO_EDGE kill reads verdict_class ``DEAD``).
         prereg_hash: keyword-only hash of the frozen preregistration
             this run is bound to (e.g.
             :func:`atropos.prereg_generator.spec_hash` of the frozen
@@ -1150,41 +1625,121 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0915
 
     Returns:
         One dict: ``{hypothesis, n_obs, date_range, overall_verdict,
-        killed_by_stage, kill_reason, stages (list of per-stage
-        dicts), config, runtime_seconds, prereg_hash}``.  Verdicts:
-        ``REPACKAGING`` / ``ARTIFACT`` / ``DEAD`` / ``NO_OOS_EDGE`` /
-        ``RISK`` / ``COST_DEATH`` / ``CS_NO_EDGE`` (kills; ``DEAD``
-        also covers a stage-4 OVERFIT_DEATH - walk-forward shrinkage
-        strictly above the cap - with the gate's reason as
-        ``kill_reason``),
-        ``INCONCLUSIVE`` (a walk-forward configuration the data
-        cannot carry, or a NaN shrinkage -- undecided, not a kill; the
-        reason names the blocker), ``SURVIVES`` /
-        ``SURVIVES_WITH_WARNINGS`` (every executed series attack
-        missed) and the panel-only ``SURVIVES_CS_ONLY`` /
-        ``SURVIVES_CS_ONLY_WITH_WARNINGS`` (only the cross-sectional
-        attack ran -- never a plain ``SURVIVES``).  Stages after the
-        killer are ``SKIPPED`` (with a kill-context summary); in a
-        series-only survival stage 7 is ``SKIPPED`` as an optional
-        stage (no panel data).  The returned ``config`` is a
-        JSON-serializable copy: a callable ``model`` shows up as
-        ``"<callable>"`` while the pipeline itself runs the real
-        factory.
+        verdict_class, informative, interpretation, next_step,
+        what_would_change, failed_test, active_days, killed_by_stage,
+        kill_reason, stages (list of per-stage dicts), config,
+        runtime_seconds, prereg_hash}``.
+
+        ``overall_verdict`` tokens - kills: ``DEGENERATE_FEED``
+        (stage-0 pre-flight: a degenerate feed column), ``ARTIFACT``,
+        ``REPACKAGING`` (stage 1/2), ``DEAD`` (ONLY a battery OVERALL
+        DEAD: catastrophic baseline / no active days),
+        ``ROBUSTNESS_DEATH`` (stage-3 FRAGILE book),
+        ``PLACEBO_VIOLATION`` (stage-3 FRAGILE driven solely by the
+        ``placebo_lag`` row - its only failing attack),
+        ``OVERFIT_DEATH`` (stage-4 shrink gate),
+        ``CONSTANT_PREDICTIONS`` (stage-4 model degenerated),
+        ``NO_OOS_EDGE`` (stages 4/6), ``RISK`` / ``COST_DEATH``
+        (stage 5), ``CS_NO_EDGE`` (stage 7); ``INCONCLUSIVE`` (a
+        walk-forward configuration the data cannot carry, a NaN
+        shrinkage, or fewer than two unique OOS predictions -
+        undecided, not a kill; ``kill_reason`` names the blocker);
+        ``SURVIVES`` / ``SURVIVES_WITH_WARNINGS`` (every executed
+        series attack missed) and the panel-only
+        ``SURVIVES_CS_ONLY`` / ``SURVIVES_CS_ONLY_WITH_WARNINGS``
+        (only the cross-sectional attack ran - never a plain
+        ``SURVIVES``).  Stages after the killer are ``SKIPPED`` (with
+        a kill-context summary); in a series-only survival stage 7 is
+        ``SKIPPED`` as an optional stage (no panel data).
+
+        Metadata keys: ``verdict_class`` is exactly one of ``DEAD`` /
+        ``NEEDS_ANALYSIS`` / ``INCONCLUSIVE`` / ``SURVIVES`` (DEAD
+        only for the battery-OVERALL-DEAD verdict and for
+        ``CS_NO_EDGE`` when ``target == "xs"``); ``informative`` is
+        False ONLY for ``DEGENERATE_FEED`` / ``CONSTANT_PREDICTIONS``
+        / ``INCONCLUSIVE``; ``interpretation`` / ``next_step`` /
+        ``what_would_change`` are filled strings quoting this run's
+        facts; ``failed_test`` is the comma-joined names of the
+        FAILing battery rows for a stage-3 kill (baseline and OVERALL
+        rows excluded), ``None`` for every other outcome;
+        ``active_days`` counts finite non-zero returns of the feed.
+        ``killed_by_stage`` is ``0`` for the pre-flight
+        (``DEGENERATE_FEED``), ``1..7`` for a stage kill, ``None``
+        when no stage killed.
 
     Raises:
-        ValueError: if ``data`` lacks a usable ``returns`` stream or
-            the panel inputs violate the aligner's label contract.
+        ValueError: if ``data`` lacks a usable ``returns`` stream,
+            the panel inputs violate the aligner's label contract,
+            the aligned feed has fewer than 300 usable observations,
+            or ``config["target"]`` is not ``"ts"`` / ``"xs"``.
     """
     t0 = time.time()
     cfg = _merge_config(hypothesis_config)
-    al, n_obs = _align_inputs(data)
+    target = str(cfg.get("target", "ts"))
+    if target not in ("ts", "xs"):
+        raise ValueError(
+            f"config['target'] must be 'ts' or 'xs', got {target!r}"
+        )
     hypothesis = str(data.get("hypothesis", ""))
+    # stage-0 DEGENERATE_FEED pre-flight (B1): BEFORE _align_inputs.
+    # The aligner drops NaN rows and raises its generic <300-obs
+    # ValueError when a column is all-NaN, and a constant column would
+    # otherwise survive alignment into stages that read it as a real
+    # feed - both mask the diagnosable "the feed itself is broken"
+    # verdict, so the pre-flight judges the RAW arrays first.
+    signal_input = data.get("signal")
+    returns_input = data.get("returns")
+    signal_arr = _input_array(signal_input)
+    returns_arr = _input_array(returns_input)
+    degenerate_which: str | None = None
+    if signal_arr is not None and returns_arr is not None:
+        if _is_degenerate(signal_arr):
+            degenerate_which = "signal"
+        elif _is_degenerate(returns_arr):
+            degenerate_which = "returns"
+    if degenerate_which is not None:
+        # the stages cannot run: nothing below the pre-flight touches
+        # the feed, alignment included
+        al: dict[str, Any] = {
+            "returns": None,
+            "signal": None,
+            "mom7": None,
+            "mom30": None,
+            "features": None,
+            "panel_signal": None,
+            "panel_returns": None,
+        }
+        n_obs = 0
+    else:
+        al, n_obs = _align_inputs(data)
     has_series = al["returns"] is not None
     has_panel = al["panel_signal"] is not None
+    # report facts hoisted once (the _finish closure reads them): the
+    # report index falls back to the raw feed index in the pre-flight
+    # case, and active_days follows the contract formula on the
+    # returns the run carried (flattened panel in panel-only mode)
+    if al["returns"] is not None:
+        report_index: pd.Index = al["returns"].index
+        active_returns: np.ndarray = al["returns"].to_numpy(dtype=float)
+    elif al["panel_signal"] is not None:
+        report_index = al["panel_signal"].index
+        active_returns = np.asarray(al["panel_returns"], dtype=float)
+        active_returns = active_returns.reshape(-1)
+    elif returns_arr is not None:
+        report_index = _raw_index(returns_input)
+        active_returns = returns_arr
+    else:  # unreachable: series or panel inputs are validated above
+        report_index = pd.RangeIndex(0)
+        active_returns = np.empty(0, dtype=float)
+    active_days = int(
+        np.count_nonzero(
+            np.isfinite(active_returns) & (active_returns != 0.0)
+        )
+    )
 
     stages: list[dict[str, Any]] = []
 
-    def _finish(
+    def _finish(  # noqa: PLR0912, PLR0915
         killed_stage: int | None,
         *,
         panel_only: bool = False,
@@ -1194,10 +1749,28 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0915
     ) -> dict[str, Any]:
         """Assemble the report; kill on ``killed_stage`` is final.
 
+        ``killed_stage == 0`` is the DEGENERATE_FEED pre-flight (before
+        stage 1): the skip-summary loop then runs over an empty stage
+        list and marks stages 1-7 "not run: candidate killed earlier",
+        and the report's ``killed_by_stage`` is ``0`` (documented as
+        the pre-flight gate).
+
         ``kill_verdict`` / ``kill_reason_override`` refine the default
         kill label for one case: the stage-4 OVERFIT_DEATH gate reads
-        DEAD (not NO_OOS_EDGE) with the gate's own reason - the
-        killed_by_stage and kill_chain handling of DEAD are unchanged.
+        the OVERFIT_DEATH token (not NO_OOS_EDGE) with the gate's own
+        reason, the stage-4 constant-prediction gate reads
+        CONSTANT_PREDICTIONS, and the stage-0 pre-flight reads
+        DEGENERATE_FEED with a reason naming the degenerate column.
+        A stage-3 kill is refined internally from the battery table:
+        OVERALL DEAD -> DEAD, FRAGILE driven solely by the placebo_lag
+        row -> PLACEBO_VIOLATION, otherwise ROBUSTNESS_DEATH.
+
+        The report carries the verdict metadata layer on every
+        outcome (kill, INCONCLUSIVE, survival): ``verdict_class`` /
+        ``informative`` from ``_VERDICT_META`` (CS_NO_EDGE refined to
+        class DEAD under ``target == "xs"``), and ``interpretation`` /
+        ``next_step`` / ``what_would_change`` as the meta templates
+        filled with this run's facts - never the bare templates.
         """
         if killed_stage is None and inconclusive_reason is not None:
             # "could not test" is not a kill and not a pass: undecided,
@@ -1220,6 +1793,35 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0915
             elif cost_kill:
                 verdict = "COST_DEATH"
                 reason = _COST_DEATH_REASON
+            elif killed_stage == 3:
+                # taxonomy refinement from the battery table itself
+                battery_results = _stage_by_id(stages, 3)["results"]
+                battery_overall_token = str(
+                    battery_results.get("overall", "")
+                )
+                if battery_overall_token == "DEAD":
+                    # baseline catastrophic / no active days: the one
+                    # proven no-edge in the pipeline
+                    verdict = "DEAD"
+                    reason = _DEAD_BATTERY_REASON
+                elif battery_overall_token == "FRAGILE" and _placebo_driven(
+                    battery_results.get("battery_table")
+                ):
+                    # the FRAGILE book is DRIVEN BY the causality
+                    # violation: placebo_lag is the only failing attack
+                    # row, so the causality red flag dominates; a
+                    # broadly fragile book (other rows failing too)
+                    # stays ROBUSTNESS_DEATH with the placebo row named
+                    # in failed_test
+                    verdict = "PLACEBO_VIOLATION"
+                    reason = _PLACEBO_VIOLATION_REASON
+                else:
+                    verdict = "ROBUSTNESS_DEATH"
+                    reason = (
+                        kill_reason_override
+                        if kill_reason_override is not None
+                        else _KILL_REASONS[3]
+                    )
             else:
                 verdict = (
                     kill_verdict
@@ -1246,6 +1848,64 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0915
             has_warn = any(stage["status"] == "WARN" for stage in stages)
             verdict = "SURVIVES_WITH_WARNINGS" if has_warn else "SURVIVES"
             reason = None
+        # metadata layer: class/informative from the table, CS_NO_EDGE
+        # refined by the configured target, interpretation/next_step/
+        # what_would_change filled with THIS run's facts
+        (
+            verdict_class,
+            informative,
+            interpretation_tpl,
+            next_step_tpl,
+            wwc_tpl,
+        ) = _VERDICT_META[verdict]
+        if verdict == "CS_NO_EDGE" and target == "xs":
+            verdict_class = "DEAD"
+        fill_values: dict[str, Any] = {
+            "n_obs": n_obs,
+            "active_days": active_days,
+            "failed_tests": "N/A",
+            "passed": "N/A",
+            "shrink": float("nan"),
+            "stage": killed_stage if killed_stage is not None else "N/A",
+            "which_array": (
+                degenerate_which if degenerate_which is not None else "N/A"
+            ),
+            "reason": reason if reason is not None else "N/A",
+            "target_note": (
+                _CS_TS_TARGET_NOTE
+                if (verdict == "CS_NO_EDGE" and target == "ts")
+                else ""
+            ),
+        }
+        failed_names: list[str] = []
+        if killed_stage == 3:
+            battery_results = _stage_by_id(stages, 3)["results"]
+            failed_rows = _battery_failed_rows(
+                battery_results.get("battery_table")
+            )
+            failed_names = [name for name, _stat in failed_rows]
+            fill_values["failed_tests"] = (
+                ", ".join(
+                    f"{name} (mu={stat:.4f})" for name, stat in failed_rows
+                )
+                or "N/A"
+            )
+            fill_values["passed"] = _battery_pass_count(
+                battery_results.get("battery_table")
+            )
+        if verdict == "OVERFIT_DEATH":
+            fill_values["shrink"] = float(
+                _stage_by_id(stages, 4)["results"]["wf_shrink_ratio"]
+            )
+        if (
+            verdict == "CONSTANT_PREDICTIONS"
+            and active_days < _CONSTANT_PREDICTIONS_MIN_ACTIVE_DAYS
+        ):
+            interpretation_tpl = _CONSTANT_PREDICTIONS_LOW_ACTIVE_DAYS
+        interpretation = interpretation_tpl.format(**fill_values)
+        # B10 formatting: comma-joined names, None when no battery
+        # rows failed (non-battery kills included - never a KeyError)
+        failed_test = ", ".join(failed_names) if failed_names else None
         # context-dependent skip summary: after a kill the remaining
         # stages are moot; an inconclusive stop left them untestable; a
         # survivor simply lacked panel data for the optional stage 7
@@ -1269,16 +1929,23 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0915
             }
             for skipped in range(next_stage, 8)
         )
-        index = (
-            al["returns"].index
-            if al["returns"] is not None
-            else al["panel_signal"].index
+        date_range = (
+            (str(report_index.min()), str(report_index.max()))
+            if len(report_index) > 0
+            else (None, None)
         )
         return {
             "hypothesis": hypothesis,
             "n_obs": n_obs,
-            "date_range": (str(index.min()), str(index.max())),
+            "date_range": date_range,
             "overall_verdict": verdict,
+            "verdict_class": verdict_class,
+            "informative": informative,
+            "interpretation": interpretation,
+            "next_step": next_step_tpl.format(**fill_values),
+            "what_would_change": wwc_tpl.format(**fill_values),
+            "failed_test": failed_test,
+            "active_days": active_days,
             "killed_by_stage": killed_stage,
             "kill_reason": reason,
             "stages": stages,
@@ -1286,6 +1953,18 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0915
             "runtime_seconds": round(time.time() - t0, 2),
             "prereg_hash": prereg_hash,
         }
+
+    if degenerate_which is not None:
+        # stage-0 pre-flight kill: nothing ran, everything below is
+        # "not run"; the override names the degenerate feed column
+        return _finish(
+            0,
+            kill_verdict="DEGENERATE_FEED",
+            kill_reason_override=(
+                f"the {degenerate_which} feed is degenerate (zero "
+                "variance / all-NaN / empty) - the signal was not tested"
+            ),
+        )
 
     if not has_series:  # panel-only mode: jump straight to stage 7
         stages.extend(
@@ -1337,15 +2016,24 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0915
             inconclusive_reason=s4_reason or _INCONCLUSIVE_REASON,
         )
     if s4["status"] == "FAIL":
-        s4_reason = str(s4.get("results", {}).get("verdict_reason") or "")
-        if _OVERFIT_DEATH_MARKER in s4_reason:
-            # FRAMEWORK.md stage-6 kill criterion: the shrink gate
-            # fired - an overfit signature is a DEAD, not a plain
-            # missing-edge NO_OOS_EDGE; kill_chain handles DEAD
-            # already and killed_by_stage stays 4
+        s4_results = s4.get("results", {})
+        s4_reason = str(s4_results.get("verdict_reason") or "")
+        if s4_results.get("constant_predictions"):
+            # taxonomy: the model degenerated on the folds - the
+            # signal was not tested (uninformative), not a weak edge
             return _finish(
                 4,
-                kill_verdict="DEAD",
+                kill_verdict="CONSTANT_PREDICTIONS",
+                kill_reason_override=_CONSTANT_PREDICTIONS_REASON,
+            )
+        if _OVERFIT_DEATH_MARKER in s4_reason:
+            # FRAMEWORK.md stage-6 kill criterion: the shrink gate
+            # fired - an overfit signature reads the specific
+            # OVERFIT_DEATH token, not a plain missing-edge
+            # NO_OOS_EDGE; killed_by_stage stays 4
+            return _finish(
+                4,
+                kill_verdict="OVERFIT_DEATH",
                 kill_reason_override=s4_reason,
             )
         return _finish(4)
@@ -1413,13 +2101,27 @@ def _print_report(res: dict[str, Any], title: str) -> None:
         )
     print("-" * 78)
     if res["killed_by_stage"] is not None:
+        killed_at = str(res["killed_by_stage"])
+        if res["killed_by_stage"] == 0:
+            killed_at += " (pre-flight)"
         print(
             f"OVERALL VERDICT: {res['overall_verdict']}  "
-            f"(killed at stage {res['killed_by_stage']}: "
+            f"(killed at stage {killed_at}: "
             f"{res['kill_reason']})"
         )
     else:
         print(f"OVERALL VERDICT: {res['overall_verdict']}")
+    print(
+        f"verdict_class={res['verdict_class']}  "
+        f"informative={res['informative']}  "
+        f"active_days={res['active_days']}"
+    )
+    if res["interpretation"]:
+        print(f"interpretation : {res['interpretation']}")
+        print(f"next_step      : {res['next_step']}")
+        print(f"would change if: {res['what_would_change']}")
+        if res["failed_test"]:
+            print(f"failed_test    : {res['failed_test']}")
     print(f"runtime: {res['runtime_seconds']}s")
 
 
@@ -1655,17 +2357,20 @@ def _verdict_matches(verdict: str, expected: str) -> bool:
     return verdict == expected
 
 
-def _verify_demo_cases(
+def _verify_demo_cases(  # noqa: PLR0915
     cases: list[dict[str, Any]], results: list[dict[str, Any]]
 ) -> None:
     """Assert the demo contract: verdicts, kill stages, kill causes.
 
     Layer-0 self-check of the demo: every case's overall verdict must
     match its expected label, the canonical kills must land at the right
-    stage with the right cause, and the achieved verdict-matrix coverage
-    is printed (10/12 - ARTIFACT needs a two-rejection stage-1 world no
-    honest synthetic reaches, and INCONCLUSIVE is config-driven; both
-    are pinned in tests/test_ensemble_pipeline.py).
+    stage with the right cause and verdict class, and the achieved
+    verdict-matrix coverage is printed (13/17 - ARTIFACT needs a
+    two-rejection stage-1 world no honest synthetic reaches,
+    INCONCLUSIVE is config-driven, and the stage-3 placebo row /
+    stage-4 constant-prediction gate are mapping-level cases no honest
+    synthetic hits; all four are pinned with canned/patched worlds in
+    tests/test_ensemble_pipeline.py).
     """
     checks = [
         (
@@ -1683,9 +2388,21 @@ def _verify_demo_cases(
         )
     if not all(ok for *_, ok in checks):
         raise AssertionError("ensemble_pipeline verification failed")
-    (res_a, res_b, res_c, res_d, res_e, res_f, res_g, res_h, res_i, res_j) = (
-        results
-    )
+    (
+        res_a,
+        res_b,
+        res_c,
+        res_d,
+        res_e,
+        res_f,
+        res_g,
+        res_h,
+        res_i,
+        res_j,
+        res_k,
+        res_l,
+        res_m,
+    ) = results
     # canonical kills land at the right stages with the right causes
     assert res_a["killed_by_stage"] is None
     # momentum echo: the single stage-1 known-features FAIL is only a
@@ -1693,15 +2410,19 @@ def _verify_demo_cases(
     # spec and kills as REPACKAGING
     assert res_b["killed_by_stage"] == 2
     assert res_b["overall_verdict"] == "REPACKAGING"
+    assert res_b["verdict_class"] == "NEEDS_ANALYSIS"
+    assert res_b["informative"] is True
     assert res_b["stages"][0]["status"] == "WARN"
     assert res_b["stages"][0]["repackaging"] is True
     assert res_b["stages"][1]["status"] == "FAIL"
     assert res_c["killed_by_stage"] is None
     # panel-only survivor: CS-scoped verdict, never a plain SURVIVES
     assert res_c["overall_verdict"] == "SURVIVES_CS_ONLY"
+    assert res_c["verdict_class"] == "SURVIVES"
     assert res_c["stages"][6]["status"] == "PASS"
     assert res_d["killed_by_stage"] == 5
     assert res_d["stages"][4]["results"]["cost_breach"] is True
+    assert res_d["verdict_class"] == "NEEDS_ANALYSIS"
     assert res_e["killed_by_stage"] == 7
     assert res_e["stages"][6]["status"] == "FAIL"
     assert res_f["killed_by_stage"] == 5
@@ -1718,8 +2439,11 @@ def _verify_demo_cases(
     assert res_h["overall_verdict"] == "SURVIVES_CS_ONLY_WITH_WARNINGS"
     assert res_h["stages"][6]["status"] == "WARN"
     assert res_h["stages"][6]["summary"].startswith("INCONCLUSIVE")
-    # unreachable threshold: the rule never trades -> DEAD at stage 3
+    # unreachable threshold: the rule never trades -> battery OVERALL
+    # DEAD -> the one generic DEAD verdict, class DEAD
     assert res_i["killed_by_stage"] == 3
+    assert res_i["verdict_class"] == "DEAD"
+    assert res_i["informative"] is True
     assert res_i["stages"][2]["status"] == "FAIL"
     battery_table = res_i["stages"][2]["results"]["battery_table"]
     overall_note = str(
@@ -1739,6 +2463,40 @@ def _verify_demo_cases(
     )
     assert res_j["stages"][5]["name"] == "predictive_model_eval"
     assert res_j["stages"][5]["status"] == "FAIL"
+    # sweep seed 7 on the slow class: FRAGILE 3/7 battery, placebo row
+    # clean -> the specific ROBUSTNESS_DEATH token, NEEDS_ANALYSIS,
+    # and the report names the FAILing battery rows
+    assert res_k["overall_verdict"] == "ROBUSTNESS_DEATH"
+    assert res_k["verdict_class"] == "NEEDS_ANALYSIS"
+    assert res_k["informative"] is True
+    assert res_k["killed_by_stage"] == 3
+    assert res_k["failed_test"]
+    assert str(res_k["n_obs"]) in res_k["interpretation"]
+    for stage in res_k["stages"][3:]:
+        assert stage["status"] == "SKIPPED"
+        assert stage["summary"] == "not run: candidate killed earlier"
+    # canned shrink-gate world: OVERFIT_DEATH at stage 4, and the
+    # interpretation quotes the shrink value that fired the gate
+    assert res_l["overall_verdict"] == "OVERFIT_DEATH"
+    assert res_l["verdict_class"] == "NEEDS_ANALYSIS"
+    assert res_l["informative"] is True
+    assert res_l["killed_by_stage"] == 4
+    assert "OVERFIT_DEATH" in str(res_l["kill_reason"])
+    assert "3.00" in res_l["interpretation"]
+    assert res_l["stages"][3]["status"] == "FAIL"
+    for stage in res_l["stages"][4:]:
+        assert stage["status"] == "SKIPPED"
+        assert stage["summary"] == "not run: candidate killed earlier"
+    # zero-variance signal: the stage-0 pre-flight stops the run
+    # before stage 1 (killed_by_stage 0 = pre-flight), uninformative
+    assert res_m["overall_verdict"] == "DEGENERATE_FEED"
+    assert res_m["verdict_class"] == "NEEDS_ANALYSIS"
+    assert res_m["informative"] is False
+    assert res_m["killed_by_stage"] == 0
+    assert "signal" in str(res_m["kill_reason"])
+    assert "signal" in res_m["interpretation"]
+    for stage in res_m["stages"]:
+        assert stage["status"] == "SKIPPED"
     covered = {
         "SURVIVES",
         "SURVIVES_WITH_WARNINGS",
@@ -1746,36 +2504,118 @@ def _verify_demo_cases(
         "SURVIVES_CS_ONLY_WITH_WARNINGS",
         "REPACKAGING",
         "DEAD",
+        "ROBUSTNESS_DEATH",
+        "OVERFIT_DEATH",
+        "DEGENERATE_FEED",
         "COST_DEATH",
         "RISK",
         "CS_NO_EDGE",
         "NO_OOS_EDGE",
     }
     print(
-        f"verdict matrix coverage: {len(covered)}/12 "
+        f"verdict matrix coverage: {len(covered)}/17 "
         "(missing ARTIFACT: a stage-1 kill needs two independent "
         "rejections under ATR-12 and no honest synthetic fails two "
-        "controls while keeping the factor controls clean, and "
-        "INCONCLUSIVE: needs an undersized walk-forward configuration "
-        "- both pinned in tests/test_ensemble_pipeline.py)"
+        "controls while keeping the factor controls clean; "
+        "INCONCLUSIVE: needs an undersized walk-forward configuration; "
+        "PLACEBO_VIOLATION and CONSTANT_PREDICTIONS: mapping-level "
+        "cases no honest synthetic reaches - all four pinned with "
+        "canned/patched worlds in tests/test_ensemble_pipeline.py)"
     )
     print("all verification checks passed")
 
 
+def _canned_walkforward_stub(
+    canned: dict[str, Any],
+) -> Any:
+    """Walk-forward stand-in that always returns ``canned`` (a copy).
+
+    Demo-only helper for mapping-level cases no honest synthetic
+    reaches (the OVERFIT_DEATH shrink gate): binds the canned result
+    as a parameter so the per-case swap never captures a loop
+    variable, and swaps only the stage-4 call - stages 1-3 run for
+    real, exactly like the test suite's canned-monkeypatch pattern.
+    """
+
+    def _stub(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return dict(canned)
+
+    return _stub
+
+
+def _canned_overfit_wf() -> dict[str, Any]:
+    """Stage-4 result shaped like walkforward_framework's dict.
+
+    The honest world-construction debt (KNOWN-ISSUES section 3: no
+    honest series world reaches stage 4 with a shrink ratio above the
+    2.0x cap) forces the OVERFIT_DEATH demo to be a mapping-level
+    case: this canned dict is exactly what the framework returns when
+    the shrink gate fires, and the demo swaps only the stage-4
+    walk-forward call while stages 1-3 run for real - the same
+    canned-monkeypatch pattern the test suite pins.
+    """
+    folds = pd.DataFrame(
+        {
+            "fold": [0, 1],
+            "train_end": [180, 240],
+            "test_start": [180, 240],
+            "test_end": [210, 270],
+            "n_train": [180, 240],
+            "purge_gap": [0, 0],
+            "hit_rate": [0.6, 0.6],
+            "fold_pnl_mean": [0.01, 0.01],
+        }
+    )
+    return {
+        "wf_t": 3.4,
+        "wf_direction_consistency": 0.6,
+        "wf_shrink_ratio": 3.0,
+        "verdict": "FAIL",
+        "verdict_reason": "OVERFIT_DEATH: shrinkage 3.00x",
+        "n_folds": 2,
+        "in_sample_t": 1.1,
+        "folds": folds,
+        "warnings": [],
+        "mode": "expanding",
+        "purge_gap": 0,
+        "n_pnl_unique": 60,
+        "overlap_factor": 1.0,
+        # preds_std: std of the union OOS predictions - the stage-4
+        # CONSTANT_PREDICTIONS gate reads it; a firing OVERFIT world
+        # has healthy, non-constant predictions
+        "preds_std": 0.87,
+    }
+
+
 def run_all_examples() -> None:
-    """Verify the ten cases of the 7-stage kill chain.
+    """Verify the thirteen cases of the 7-stage kill chain.
 
     Cases A-D are the four canonical verdicts (series survive,
     repackaging, panel-only CS-scoped survive, cost death); E-F pin the
-    panel kill and the risk-mandate kill; G-J complete the verdict
-    matrix (slow-class survive, thin-panel CS-scoped warnings,
-    unreachable-threshold DEAD, concentration NO_OOS_EDGE).  ARTIFACT
-    and INCONCLUSIVE are the two verdicts without a demo case:
+    panel kill and the risk-mandate kill; G-J complete the core matrix
+    (slow-class survive, thin-panel CS-scoped warnings,
+    unreachable-threshold battery-OVERALL DEAD, concentration
+    NO_OOS_EDGE); K-M pin the taxonomy wave (sweep-seed-7 FRAGILE
+    battery -> ROBUSTNESS_DEATH, canned shrink-gate world ->
+    OVERFIT_DEATH, zero-variance signal feed -> DEGENERATE_FEED at the
+    stage-0 pre-flight).  ARTIFACT, INCONCLUSIVE, PLACEBO_VIOLATION and
+    CONSTANT_PREDICTIONS are the four verdicts without a demo case:
     ARTIFACT needs two independent stage-1 rejections with clean
-    factor controls (ATR-12; no honest synthetic reaches it), and
+    factor controls (ATR-12; no honest synthetic reaches it),
     INCONCLUSIVE needs a walk-forward configuration that outgrows the
-    data - both are pinned in tests/test_ensemble_pipeline.py.
+    data, and the placebo row / constant-prediction gate are
+    mapping-level cases - all four are pinned in
+    tests/test_ensemble_pipeline.py.
     """
+    # CI-budget config for the added taxonomy cases (same knobs as
+    # DEFAULT_CONFIG, fewer draws/sims), matching the test suite's
+    # REDUCED_CONFIG so the pinned sweep-seed world behaves identically
+    demo_reduced_config: dict[str, Any] = {
+        "n_perm_draws": 30,
+        "battery": {"n_boot": 100},
+        "mc": {"n_sim": 100},
+        "importance": {"n_bootstrap": 10},
+    }
 
     def thin_edge_data() -> dict[str, Any]:
         # realistic return amplitude: the same statistical edge, but
@@ -1790,6 +2630,19 @@ def run_all_examples() -> None:
             "140bps one-way costs must eat it (COST-DEATH)"
         )
         return thin
+
+    def degenerate_signal_data() -> dict[str, Any]:
+        # zero-variance signal on an otherwise honest genuine edge: the
+        # stage-0 pre-flight must stop the run BEFORE the aligner/stages
+        degenerate = _make_synthetic("genuine_edge", n_obs=400, seed=4)
+        degenerate["signal"] = pd.Series(
+            5.0, index=degenerate["returns"].index, dtype=float
+        )
+        degenerate["hypothesis"] = (
+            "claim: a persistent edge - but the signal leg is constant "
+            "(paused leg / key-mapping error): the feed cannot be tested"
+        )
+        return degenerate
 
     cases: list[dict[str, Any]] = [
         {
@@ -1879,11 +2732,12 @@ def run_all_examples() -> None:
             "label": "case I dead threshold",
             "title": (
                 "CASE I: genuine edge, unreachable entry threshold "
-                "(must die DEAD)"
+                "(battery OVERALL DEAD - must die DEAD)"
             ),
             # honest DEAD by configuration: threshold 10.0 lies above
             # every draw of the signal (std ~1), so the long/flat rule
-            # never trades - "no active days" DEAD at stage 3.  The
+            # never trades - "no active days" battery OVERALL DEAD at
+            # stage 3, the ONE generic-DEAD case in the taxonomy.  The
             # stage-1/2 controls are cost/rule-blind and still pass:
             # the edge is real, the RULE is untradeable.
             "data": _make_synthetic("genuine_edge", seed=4),
@@ -1908,11 +2762,65 @@ def run_all_examples() -> None:
             "config": None,
             "expect": "NO_OOS_EDGE",
         },
+        {
+            "label": "case K fragile book ",
+            "title": (
+                "CASE K: slow class on sweep seed 7 - FRAGILE battery, "
+                "placebo row clean (must die ROBUSTNESS_DEATH)"
+            ),
+            # the sweep-pinned world (tests/test_pipeline_sweep.py):
+            # slow_genuine_edge at seed 7 reads FRAGILE 3/7 under the
+            # reduced CI config - a sub-5/7 book stops under the ATR-04
+            # doctrine with the specific taxonomy token (NEEDS_ANALYSIS,
+            # the FAILing rows named in failed_test)
+            "data": _make_synthetic("slow_genuine_edge", n_obs=400, seed=7),
+            "config": demo_reduced_config,
+            "expect": "ROBUSTNESS_DEATH",
+        },
+        {
+            "label": "case L overfit gate ",
+            "title": (
+                "CASE L: canned shrink-gate walk-forward "
+                "(must die OVERFIT_DEATH at stage 4)"
+            ),
+            # mapping-level case: no honest series world reaches stage 4
+            # with a shrink ratio above the 2.0x cap (KNOWN-ISSUES
+            # section 3 debt), so the demo swaps only the stage-4
+            # walk-forward call for the canned gate-fired result while
+            # stages 1-3 run for real - the test suite's own pattern
+            "data": _make_synthetic("genuine_edge", n_obs=400, seed=4),
+            "config": demo_reduced_config,
+            "expect": "OVERFIT_DEATH",
+            "stub_walkforward": _canned_overfit_wf(),
+        },
+        {
+            "label": "case M degenerate   ",
+            "title": (
+                "CASE M: zero-variance signal feed (stage-0 pre-flight "
+                "must stop it as DEGENERATE_FEED)"
+            ),
+            # constant signal leg on an otherwise honest world: the
+            # pre-flight fires BEFORE alignment (whose NaN row drop /
+            # row floor would mask the diagnosable feed problem), the
+            # run is uninformative (the signal was not tested) and
+            # killed_by_stage 0 documents the pre-flight gate
+            "data": degenerate_signal_data(),
+            "config": demo_reduced_config,
+            "expect": "DEGENERATE_FEED",
+        },
     ]
     results: list[dict[str, Any]] = []
     for case in cases:
         print()
-        result = run_full_pipeline(case["data"], case["config"])
+        stub = case.get("stub_walkforward")
+        real_walkforward_fn = globals().get("walkforward")
+        if stub is not None and real_walkforward_fn is not None:
+            globals()["walkforward"] = _canned_walkforward_stub(stub)
+        try:
+            result = run_full_pipeline(case["data"], case["config"])
+        finally:
+            if stub is not None and real_walkforward_fn is not None:
+                globals()["walkforward"] = real_walkforward_fn
         _print_report(result, case["title"])
         results.append(result)
 

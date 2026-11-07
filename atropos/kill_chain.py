@@ -29,8 +29,17 @@ names ``unified["source"]``)::
     INCONCLUSIVE         | any decision | INCONCLUSIVE [rule]
 
 Rule kill verdicts are every ``overall_verdict`` outside the four alive
-forms and ``INCONCLUSIVE``: ``REPACKAGING``, ``ARTIFACT``, ``DEAD``,
-``NO_OOS_EDGE``, ``COST_DEATH``, ``RISK``, ``CS_NO_EDGE``.  Undecided
+forms and ``INCONCLUSIVE``: ``REPACKAGING``, ``ARTIFACT``,
+``ROBUSTNESS_DEATH``, ``PLACEBO_VIOLATION``, ``DEAD`` (reserved for a
+battery OVERALL DEAD - catastrophic baseline / no active days),
+``OVERFIT_DEATH``, ``NO_OOS_EDGE``, ``COST_DEATH``, ``RISK``,
+``CS_NO_EDGE``, ``DEGENERATE_FEED``, ``CONSTANT_PREDICTIONS``.  The
+rule chain reports a metadata layer per outcome (``verdict_class`` is
+exactly one of ``DEAD`` / ``NEEDS_ANALYSIS`` / ``INCONCLUSIVE`` /
+``SURVIVES``, with ``informative`` False only for ``DEGENERATE_FEED``
+/ ``CONSTANT_PREDICTIONS`` / ``INCONCLUSIVE``); the unified matrix
+still reads only the token: any rule kill verdict kills the hypothesis
+whatever its class.  Undecided
 is not death on either chain: a rule ``INCONCLUSIVE`` (a walk-forward
 configuration the data cannot carry, ATR-06) and the ML ``UNDERPOWERED``
 (the declustered event floor is not met) both map to ``INCONCLUSIVE`` --
@@ -223,7 +232,8 @@ def run_full_kill_chain(
 ) -> dict[str, Any]:
     """Run both kill chains on one hypothesis; aggregate one verdict.
 
-    The rule chain (7 adversarial stages, 12 verdicts) always runs on
+    The rule chain (7 adversarial stages plus the stage-0
+    degenerate-feed pre-flight, 17 verdicts) always runs on
     ``rule_data``; the ML chain (walk-forward gates) runs only when
     ``ml_dataset`` is given.  The wrapper adds no gates and makes no
     choice between the chains: ``rule`` and ``ml`` carry the engine

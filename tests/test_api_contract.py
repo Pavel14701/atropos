@@ -492,6 +492,11 @@ EXPECTED_KEY_SETS: dict[str, frozenset[str]] = {
             # shrinkage-NaN INCONCLUSIVE); do not remove without
             # syncing ensemble_pipeline stage-4 detection
             "verdict_reason",
+            # preds_std — std of the union OOS predictions; the
+            # stage-4 CONSTANT_PREDICTIONS gate (non-finite or
+            # < 1e-12) reads it; do not remove without syncing
+            # ensemble_pipeline stage-4 mapping
+            "preds_std",
             "n_folds",
             "in_sample_t",
             "folds",

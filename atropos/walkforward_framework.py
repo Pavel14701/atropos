@@ -59,10 +59,16 @@ predicts the next slice, and stacks the out-of-sample PnL:
 
 Returned dict: ``{wf_t, wf_direction_consistency, wf_shrink_ratio,
 verdict, verdict_reason, n_folds, in_sample_t, folds, warnings, mode,
-purge_gap, n_pnl_unique, overlap_factor}``.  ``in_sample_t`` is a
-LOOKAHEAD-DIAGNOSTIC: computed by refitting on the FULL sample -
-in-sample by construction; used only as the ``wf_shrink_ratio``
-denominator, never for verdicts.
+purge_gap, n_pnl_unique, overlap_factor, preds_std}``.
+``in_sample_t`` is a LOOKAHEAD-DIAGNOSTIC: computed by refitting on
+the FULL sample - in-sample by construction; used only as the
+``wf_shrink_ratio`` denominator, never for verdicts.
+``preds_std`` is the std of the union OOS predictions: the
+degeneracy read-out consumed by the ensemble pipeline's stage-4
+CONSTANT_PREDICTIONS gate (non-finite or below 1e-12 means the model
+emitted (numerically) a single prediction), and NaN in the
+fewer-than-two-unique-predictions INCONCLUSIVE return where no
+statistic is defined.
 
 Usage::
 
@@ -316,9 +322,9 @@ def walkforward(  # noqa: PLR0912, PLR0915  # one branch per stage
     dict with ``wf_t`` (out-of-sample t-stat over the union of test
     rows), ``wf_direction_consistency``, ``wf_shrink_ratio`` (``wf_t``
     divided by the in-sample t), ``verdict``, ``verdict_reason`` (None
-    for tier verdicts; the OVERFIT_DEATH or shrinkage-NaN marker
-    otherwise - downstream consumers detect a death from this field
-    without recomputing), ``n_folds``,
+    for tier verdicts; the OVERFIT_DEATH, insufficient-predictions or
+    shrinkage-NaN marker otherwise - downstream consumers detect a
+    death from this field without recomputing), ``n_folds``,
     ``in_sample_t`` (LOOKAHEAD-DIAGNOSTIC: computed by refitting on
     the FULL sample - in-sample by construction; used only as the
     ``wf_shrink_ratio`` denominator, never for verdicts), ``folds``
@@ -326,11 +332,19 @@ def walkforward(  # noqa: PLR0912, PLR0915  # one branch per stage
     EXCLUSIVE end of the train slice - the first row NOT in train - and
     the test slice spans ``[test_start, test_end)``), ``warnings``
     (list of strings), ``mode``, ``purge_gap``, ``n_pnl_unique`` (test
-    rows counted once) and ``overlap_factor`` (``test_window / step``;
+    rows counted once), ``overlap_factor`` (``test_window / step``;
     a naive overlapping stack would count every row up to this many
-    times and inflate ``wf_t`` by up to ``sqrt(overlap_factor)``).
+    times and inflate ``wf_t`` by up to ``sqrt(overlap_factor)``) and
+    ``preds_std`` (std of the union OOS predictions - the degeneracy
+    read-out the ensemble pipeline's stage-4 CONSTANT_PREDICTIONS gate
+    consumes; NaN when fewer than two unique predictions exist).
 
-    Verdict, in order: (1) overfit gate - a finite shrink ratio
+    Verdict, in order: (0) fewer than two unique OOS predictions in
+    the union -> INCONCLUSIVE with ``verdict_reason`` "insufficient
+    walk-forward predictions (N unique) — the walk-forward is
+    degenerate, not the signal": a sign rule over a single prediction
+    carries no statistic, so the run is undecided, never a tier;
+    (1) overfit gate - a finite shrink ratio
     STRICTLY above ``shrink_cap`` -> FAIL with ``verdict_reason``
     starting ``OVERFIT_DEATH`` (FRAMEWORK.md stage-6 kill criterion
     "shrinkage > 2x -> OVERFIT-DEATH"); (2) a NaN shrink ratio
@@ -458,10 +472,49 @@ def walkforward(  # noqa: PLR0912, PLR0915  # one branch per stage
     if not fold_rows:
         raise ValueError("no walk-forward folds produced")
 
+    wf_warnings: list[str] = []
+    if step > test_window:
+        wf_warnings.append(
+            "step > test_window: folds skip periods between tests"
+        )
+    if step < test_window:
+        wf_warnings.append(
+            "step < test_window: test slices overlap - statistics use "
+            "the union of test rows (n_pnl_unique), each row counted "
+            "once, so the overlap cannot inflate wf_t"
+        )
+
     preds_unique = np.concatenate(union_preds)
     real_unique = np.concatenate(union_real)
+    n_pnl_unique = int(preds_unique.size)
+    if preds_unique.size < 2:
+        # fewer than two distinct OOS predictions cannot give a sign
+        # rule any statistic (std undefined / zero): the walk-forward
+        # is degenerate - undecided, never a tier (the pipeline's
+        # stage-4 CONSTANT_PREDICTIONS gate must not fire here, so
+        # this return carries a non-finite preds_std AND an
+        # INCONCLUSIVE verdict the orchestrator surfaces unchanged)
+        return {
+            "wf_t": float("nan"),
+            "wf_direction_consistency": float("nan"),
+            "wf_shrink_ratio": float("nan"),
+            "verdict": "INCONCLUSIVE",
+            "verdict_reason": (
+                "insufficient walk-forward predictions "
+                f"({preds_unique.size} unique) — the walk-forward is "
+                "degenerate, not the signal"
+            ),
+            "n_folds": len(fold_rows),
+            "in_sample_t": float("nan"),
+            "folds": pd.DataFrame(fold_rows),
+            "warnings": wf_warnings,
+            "mode": "expanding",
+            "purge_gap": int(purge_gap),
+            "n_pnl_unique": n_pnl_unique,
+            "overlap_factor": float(test_window / step),
+            "preds_std": float("nan"),
+        }
     pnl_unique = np.sign(preds_unique) * real_unique
-    n_pnl_unique = int(pnl_unique.size)
     sd_unique = float(np.std(pnl_unique, ddof=1))
     wf_t = (
         float(np.mean(pnl_unique) / sd_unique * np.sqrt(n_pnl_unique))
@@ -514,17 +567,13 @@ def walkforward(  # noqa: PLR0912, PLR0915  # one branch per stage
     else:
         verdict = "FAIL"
 
-    wf_warnings: list[str] = []
-    if step > test_window:
-        wf_warnings.append(
-            "step > test_window: folds skip periods between tests"
-        )
-    if step < test_window:
-        wf_warnings.append(
-            "step < test_window: test slices overlap - statistics use "
-            "the union of test rows (n_pnl_unique), each row counted "
-            "once, so the overlap cannot inflate wf_t"
-        )
+    # degeneracy read-out of the union predictions: guarded (NaN when
+    # the union is somehow empty - the >= 2 branch above makes this
+    # unreachable, kept defensive); consumed by the ensemble pipeline's
+    # stage-4 CONSTANT_PREDICTIONS gate (non-finite or < 1e-12)
+    preds_std = (
+        float(np.std(preds_unique)) if preds_unique.size > 0 else float("nan")
+    )
 
     folds_df = pd.DataFrame(fold_rows)
     return {
@@ -543,6 +592,7 @@ def walkforward(  # noqa: PLR0912, PLR0915  # one branch per stage
         "purge_gap": int(purge_gap),
         "n_pnl_unique": n_pnl_unique,
         "overlap_factor": float(test_window / step),
+        "preds_std": preds_std,
     }
 
 
