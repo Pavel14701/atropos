@@ -3,14 +3,20 @@
 Honest inventory of everything the test suite does not prove, and why.
 None of these are silent: each is pinned in the suite (skips are documented
 in code, xfails are `strict=True`, so an unexpected change breaks the build)
-and each names what would resolve it. Last verified: 2779 passed /
+and each names what would resolve it.
+
+Structure: **behavioral facts** (§4) + **by design, not closeable**
+(§1a-d, §2, §7) + **backlog with triggers** (§3, §5a, §5b, §6, §8).
+Known issues in the strict sense — an open code bug — none; everything
+here is a documented property, a deliberate choice, or a tracked gap
+with its release condition. Last verified: 2781 passed /
 18 skipped / 2 xfailed.
 
 ## 1. Eighteen skipped tests — four documented groups
 
 ### 1a. Four skips — chaos-matrix deduplication (rule side)
 
-Status: skipped (documented, by design).
+Status: skipped (documented, by design — not closeable).
 
 Cause: the chaos matrices in `tests/test_chaos.py` skip 4 corruption
 combos (`overflow_1e308` for `block_bootstrap_ci`,
@@ -24,7 +30,7 @@ dedicated test is ever removed, its matrix skip must go with it.
 
 ### 1b. Eleven skips — chaos-matrix deduplication (ML side)
 
-Status: skipped (documented, by design).
+Status: skipped (documented, by design — not closeable).
 
 Cause: the same deduplication pattern on the walk-forward primitives.
 `tests/test_chaos.py` (`_ML_SKIP`) skips 11 corrupted-input combos of
@@ -44,7 +50,8 @@ Unblocks: nothing — deliberate deduplication, same contract as 1a.
 
 ### 1c. One skip — knn cannot beat the linear comparator structurally
 
-Status: skipped (documented, with the structural reason in code).
+Status: skipped (documented, with the structural reason in code —
+by design, not closeable).
 
 Cause: `tests/test_ml_training.py`
 (`test_registry_model_beats_logit_on_planted_nonlinearity[knn]`).
@@ -62,7 +69,8 @@ validity, full engine path) still cover knn end to end.
 
 ### 1d. Two skips — lambdarank oracle without the optional extra
 
-Status: skipped (environment-dependent, by design).
+Status: skipped (environment-dependent, by design — not closeable;
+closes itself when the optional extra is installed).
 
 Cause: `tests/test_ranking.py` gates the two lightgbm-backed
 lambdarank tests (`rank_with_lambdarank` determinism/validity and
@@ -80,7 +88,8 @@ is back to sixteen skips.
 ## 2. xfail — fast-only synthetic edge dies on 2/10 sweep seeds
 
 Status: `xfail(strict=True)`, `tests/test_pipeline_sweep.py`
-(`test_genuine_edge_survives_on_every_sweep_seed`, `@slow`).
+(`test_genuine_edge_survives_on_every_sweep_seed`, `@slow`) — by
+design, not closeable: the xfail IS the honest record.
 
 Cause: the FAST edge class (raw AR(0.5) driver) is killed by the
 robustness battery on sweep seeds 2 and 7. The battery is RIGHT: the
@@ -121,16 +130,16 @@ that fail stage 3 never reach stage 4. The shrink gate's OVERFIT
 mapping is pinned at stage 4 via the canned-monkeypatch pattern
 (see `tests/test_ensemble_pipeline.py::test_overfit_shrinkage_kills_as_dead_at_stage_four`).
 
-Unblocks: a genuinely honest series world whose walk-forward dies
-while everything before it passes — then pin it with a regular
+Trigger to close: a genuinely honest series world whose walk-forward
+dies while everything before it passes — then pin it with a regular
 (not xfail) test and promote it into the demo matrix. The
 cross-sectional `CS_NO_EDGE` path already covers the "no OOS edge"
 family on panels.
 
-## 4. ML engine known limitations (documented, not defects)
+## 4. ML engine behavioral facts (not issues)
 
-Status: factual properties of the ML stack, each documented in the
-factory or config it belongs to.
+Status: factual properties, each pinned in the factory or config it
+belongs to — documented behavior, not defects.
 
 - **knn under the beats-logit gate** — see 1c: compressed scores
   saturate the EV-argmax threshold; the engine still reports knn's
@@ -169,33 +178,40 @@ scheduled, NOT forgotten:
   `robustness_shift` ±0.20 by default, INCONCLUSIVE below the event
   floor) stays off by default so the four-gate contract is unchanged;
   an ML edge fragile to its own threshold passes unless the caller
-  enables the check. Watch: flip the default after a calibration
-  pass on real data.
+  enables the check. Trigger to close: a calibration pass on real
+  data flips the default to `True`.
 - **ML forward gate** — a `SURVIVES` verdict is still in-sample + OOF;
-  no 52-week live-track check exists for ML PnL. Resolution: route ML
-  strategy returns through `track_record.live_verdict` (~2 days).
-- **ML prereg enforcement** — `ml_training` accepts a run without a
-  prereg hash (a `RuntimeWarning` fires and the verdict is reported as
-  unanchored); the rule-based chain documents prereg-before-pipeline
-  but ML does not hard-fail. Watch: make the hash mandatory once the
-  workflow tooling always generates one (`spec_hash`).
+  no 52-week live-track check exists for ML PnL. Trigger to close:
+  ML strategy returns routed through `track_record.live_verdict`
+  (~2 days, scoped).
+- **ML prereg enforcement (opt-in shipped)** — CLOSED at the opt-in
+  level: `strict_prereg_hash=True` + absent hash raises `ValueError`
+  before any model fits; the default stays `False` (RuntimeWarning +
+  completed run) for backward compat — pinned by
+  `tests/test_ml_training.py::test_strict_prereg_hash_config_gate`.
+  Trigger to close (fully): the default flips to `True` once the
+  workflow tooling always emits `spec_hash`.
 - **ML calibration @slow** — DSR p-values under pure null are not
   uniform for the ML stream: the KS contract test exists and is pinned
   as a strict xfail (`tests/test_calibration.py::
   test_ml_engine_deflated_sharpe_pvalues_ks_uniform_under_null`, 98
   finite null-world p-values, KS p ~= 0.001, rejection rate ~0.08 —
-  under the 10% bound but skewed low). Resolution: fix the DSR
+  under the 10% bound but skewed low). Trigger to close: fix the DSR
   standardization on short zero-padded daily streams; the strict xfail
   then XPASSes and forces itself out of the suite.
 
 - **Mutation testing** — waiting for external users before the suite
-  grows another layer.
+  grows another layer. Trigger to close: first external adoption.
 - **Two-level performance budgets** — per-module and whole-suite
-  budgets instead of the current single level.
-- **Real-data golden tests** — need a frozen data snapshot; the current
-  golden tests are synthetic-only.
+  budgets instead of the current single level. Trigger to close:
+  suite growth makes the single-level budgets flaky.
+- **Real-data golden tests** — the current golden tests are
+  synthetic-only. Trigger to close: a frozen CSV snapshot +
+  version-pinned pandas/numpy (or an explicit tolerance
+  specification) + golden metrics pinned.
 - **Cross-version matrix CI** — conflicts with the single pinned
-  `uv.lock`; needs a separate resolution strategy first.
+  `uv.lock`. Trigger to close: a separate lockfile resolution
+  strategy.
 
 ### 5b. Backtest-layer watch-items (tracked)
 
@@ -209,19 +225,17 @@ documented where the hazard lives.
   a metric difference; the raw-report idiom stays documented in
   `docs/how-to/07-choose-a-ranker.md` for callers who need the full
   lists.
-- **`embargo_until` is not enforced in `paired_bootstrap_diff`** — the
-  field is carried on `CandidateGroup` but the paired bootstrap
-  resamples whatever per-group values the caller hands it; a caller
-  that ignores the embargo when building those values can leak adjacent
-  groups into both arms. The docstring warns explicitly (enforcement
-  belongs to the fold scheduler that produced the values;
-  `compare_rankers_on_intersection` inherits the same rule for its
-  arms). Opt-in enforcement now exists: `paired_bootstrap_diff(...,
-  enforce_embargo=True)` drops embargo-violating pairs when
-  `current_fold`, `group_ids` and `embargo_until_by_group` are
-  supplied (default off, so the caller-owned contract above is
-  unchanged). Watch: a possible future `assert`/`RuntimeWarning` when
-  arms carry mismatched or unset embargo windows.
+- **`embargo_until` enforcement in `paired_bootstrap_diff`** — CLOSED
+  (louder than the old watch wording asked for): `enforce_embargo=True`
+  with incomplete metadata (`current_fold` / `group_ids` /
+  `embargo_until_by_group`) raises a loud `ValueError`
+  (`atropos/ranking.py`, "needs current_fold, group_ids and
+  embargo_until_by_group") — pinned at
+  `tests/test_ranking.py::test_paired_bootstrap_*` (the
+  `match="needs current_fold"` raise pin). The default-off path keeps
+  the caller-owned contract unchanged (metadata without the flag is a
+  dead configuration and also raises). No warning layer was added on
+  top of the existing raise — a warning would have been a downgrade.
 
 ## 6. Walk-forward label overlap is an accepted (uncalibrated) risk
 
@@ -248,14 +262,14 @@ ratio (degenerate baseline t) reads INCONCLUSIVE with an explicit
 reason, never a silent pass; if it occurs on valid data more often
 than expected — investigate as a bug, not an accepted risk.
 
-Unblocks: a P2 wave implementing the Newey-West correction
+Trigger to close: a P2 wave implementing the Newey-West correction
 (lags = horizon − 1) of `wf_t`, calibrated on the null at horizon in
 {1, 5, 20}, with horizon=1 bit-for-bit identical to the current
-statistic.
+statistic — then the guard is lifted.
 
 ## 7. `cost_death_test` is a standalone API, not a pipeline stage
 
-Status: deliberate design; not wired into
+Status: deliberate design, not closeable — not wired into
 `atropos.ensemble_pipeline.run_full_pipeline` (pinned by tests in
 `tests/test_cost_model.py`, exported from `atropos.cost_model`, demoed
 via `run_all_examples`).
@@ -278,7 +292,9 @@ do not wire `cost_death_test` into the pipeline as a stage.
 
 ## 8. Three 7-stage protocols exist (docs vs code drift)
 
-Status: documented drift; the CODE is canonical; a full docs sync is
+Status: documented drift, ANNOTATED — the CODE is canonical; all 12
+agent skills now carry the header "Code canonical. Map:
+FRAMEWORK.md:69-81. Deviations: KNOWN-ISSUES §8"; a full docs sync is
 a future P2 wave.
 
 Cause: three seven-stage protocols are in circulation: (a) the
@@ -294,6 +310,6 @@ researcher protocol; the obsolete expanding-window ban inside the
 skills is historical — current doctrine is the code plus
 FRAMEWORK.md:221-233 ("Why expanding, not rolling").
 
-Unblocks: a P2 wave that syncs skill and FRAMEWORK.md stage
-numbering/wording to the code (or annotates each document with its
-deviation), plus a contract test pinning the FRAMEWORK.md:69-81 map.
+Trigger to close: a P2 wave that syncs skill and FRAMEWORK.md stage
+numbering/wording to the code, plus a contract test pinning the
+FRAMEWORK.md:69-81 map.

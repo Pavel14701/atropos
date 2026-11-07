@@ -70,7 +70,22 @@ commit messages.
   demo); docs claims synced (12 skills, 16 `__all__` entries, honest
   "Most modules" demo claim); KNOWN-ISSUES §6/§7/§8 added; test
   counters match reality.
-- Test suite: 2675 → 2779 passed, 18 skipped, 2 xfailed — every
+- Push-gate hardening: a stale `xfail(strict)` claim in KNOWN-ISSUES
+  §3 (the marker no longer existed, masked by the xfail total) was
+  caught by an external review and rewritten as a tracked gap — the
+  whole inventory then went through a grep-based claim sweep
+  (counters, xfail claims, absolute claims, how-to transcripts, all
+  12 skills annotated with the canonical map) and a closure pass:
+  every backlog item carries an explicit `Trigger to close:`; §5b
+  closes via the already-louder `enforce_embargo` ValueError; §5a
+  prereg closes at the opt-in level (`strict_prereg_hash`); §4
+  reframed as behavioral facts; known issues in the strict sense: none.
+- CI split: `pytest -m "not slow"` is the default path; the @slow
+  bucket (calibration battery + the ~140s module-demo meta-test) runs
+  as its own retryable step — coverage preserved, default path fast.
+  The cli argparse exclusion gained a behavioral pin (bare
+  `python -m atropos.cli` must exit 2).
+- Test suite: 2675 → 2781 passed, 18 skipped, 2 xfailed — every
   registry defect fixed above is pinned; ATR-09 and ATR-13 are
   explicitly "partially closed + accepted risk" (KNOWN-ISSUES §6/§8),
   not silently claimed done.
