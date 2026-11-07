@@ -240,9 +240,12 @@ bootstrap doing its job: a 0.02 head-to-head difference on 78 groups
 is not a finding. The arms here are per-group floats of the SAME
 groups (NaN pairs are dropped, rows resampled jointly); the caller owns
 the group set being comparable — `embargo_until` is carried on
-`CandidateGroup` but NOT enforced inside the bootstrap (pinned in the
-docstring; `atropos.ranking.compare_rankers_on_intersection` makes
-the intersection the default path in one call).
+`CandidateGroup` but NOT enforced inside the bootstrap by default
+(pinned in the docstring; `atropos.ranking.compare_rankers_on_intersection`
+makes the intersection the default path in one call). Opt-in
+enforcement exists: `paired_bootstrap_diff(..., enforce_embargo=True)`
+drops embargo-violating pairs when the fold metadata is supplied and
+warns when the flag is set without it (KNOWN-ISSUES §5b).
 
 ## Step 5. When to reach for the lambdarank oracle
 

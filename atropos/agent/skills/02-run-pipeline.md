@@ -6,6 +6,7 @@ version: 0.1.0
 ---
 
 # SKILL 02: RUN PIPELINE — one run, one verdict
+> Code canonical. Map: FRAMEWORK.md:69-81 ("Implementation map"). Deviations: KNOWN-ISSUES §8.
 
 > Core skill of the Atropos agent. Public API:
 > `atropos.ensemble_pipeline.run_full_pipeline(data: dict,

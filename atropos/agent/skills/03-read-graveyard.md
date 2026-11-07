@@ -6,6 +6,7 @@ version: 0.1.0
 ---
 
 # SKILL 03: READ GRAVEYARD — the graveyard before thinking
+> Code canonical. Map: FRAMEWORK.md:69-81 ("Implementation map"). Deviations: KNOWN-ISSUES §8.
 
 > Core skill of the Atropos agent. The graveyard check comes FIRST,
   before the prereg: a hypothesis that dies at the graveyard costs 0

@@ -8,6 +8,7 @@ version: 1.0.0
 
 > Note: log/registrar excerpts below quote the closed donor corpus (not shipped). The workspace layout itself is yours: scaffold with `atropos init` (files are generated, never overwritten).
 # SKILL 4: INCREMENTAL TEST — the decisive test (Stage 4 of 7, THE DECISIVE KILLER)
+> Code canonical. Map: FRAMEWORK.md:69-81 ("Implementation map"). Deviations: KNOWN-ISSUES §8.
 
 > Self-contained protocol: the agent needs only this file + data.
 > Taxonomy: FRAMEWORK.md (repo root) §3 LAW 2, §4 (INCREMENTAL-DEATH);

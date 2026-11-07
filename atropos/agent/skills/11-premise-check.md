@@ -6,6 +6,7 @@ version: 1.0.0
 ---
 
 # SKILL 1: PREMISE CHECK — the premise check protocol (Stage 1 of 7)
+> Code canonical. Map: FRAMEWORK.md:69-81 ("Implementation map"). Deviations: KNOWN-ISSUES §8.
 
 > Self-contained protocol: the agent needs only this file + data.
 > Death taxonomy: FRAMEWORK.md (repo root) §4; tombstones live in

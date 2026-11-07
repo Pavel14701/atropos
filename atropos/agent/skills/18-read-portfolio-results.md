@@ -6,6 +6,7 @@ version: 0.1.0
 ---
 
 # SKILL 18: READ PORTFOLIO RESULTS — the multi-slot book and its gates
+> Code canonical. Map: FRAMEWORK.md:69-81 ("Implementation map"). Deviations: KNOWN-ISSUES §8.
 
 > Portfolio-level readout of a tradable candidate. Public API:
 > `atropos.portfolio`: `run_portfolio_replay(signals_df, prices, *,

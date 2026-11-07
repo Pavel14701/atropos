@@ -6,6 +6,7 @@ version: 0.1.0
 ---
 
 # SKILL 04: RUN ML KILL PROTOCOL — the walk-forward ML chain
+> Code canonical. Map: FRAMEWORK.md:69-81 ("Implementation map"). Deviations: KNOWN-ISSUES §8.
 
 > Core skill of the Atropos agent. Public API:
 > `atropos.ml_training.run_ml_kill_protocol(features, target,

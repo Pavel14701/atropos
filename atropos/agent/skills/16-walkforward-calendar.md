@@ -6,6 +6,7 @@ version: 1.0.0
 ---
 
 # SKILL 6: WALK-FORWARD + CALENDAR CONTROL (Stages 6-7 of 7, the final ones)
+> Code canonical. Map: FRAMEWORK.md:69-81 ("Implementation map"). Deviations: KNOWN-ISSUES §8.
 
 > Self-contained protocol: the agent needs only this file + data.
 > Taxonomy: FRAMEWORK.md (repo root) §2 stages 6-7, §3 LAW 5;

@@ -6,6 +6,7 @@ version: 0.1.0
 ---
 
 # SKILL 01: PREREGISTER — freeze the hypothesis before data
+> Code canonical. Map: FRAMEWORK.md:69-81 ("Implementation map"). Deviations: KNOWN-ISSUES §8.
 
 > Core skill of the Atropos agent. Public API:
 > `atropos.prereg_generator.generate_prereg(params: dict) -> str` and

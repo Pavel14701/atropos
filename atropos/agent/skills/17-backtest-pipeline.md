@@ -6,6 +6,7 @@ version: 0.1.0
 ---
 
 # SKILL 17: BACKTEST PIPELINE — simulate → rank → admit → metrics
+> Code canonical. Map: FRAMEWORK.md:69-81 ("Implementation map"). Deviations: KNOWN-ISSUES §8.
 
 > Tradability test of a SURVIVING candidate. The executable golden
 > path is `docs/examples/backtest_pipeline.py`: copy the order, don't
