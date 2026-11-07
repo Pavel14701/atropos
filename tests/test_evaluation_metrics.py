@@ -9,6 +9,7 @@ including the deflated Sharpe penalty for multiple trials, the
 from __future__ import annotations
 
 import math
+import warnings
 from collections.abc import Callable
 
 import numpy as np
@@ -107,6 +108,24 @@ def test_sharpe_ratio_seed_determinism_and_flat_returns() -> None:
     assert math.isnan(flat["sr"])
     assert flat["ci_method"] == "insufficient_data"
     assert math.isnan(flat["sr_ci"][0])
+
+
+def test_sharpe_ratio_single_return_is_nan_without_warnings() -> None:
+    """n=1 yields the honest NaN and never runs ddof=1 std.
+
+    Regression: ``np.std(..., ddof=1)`` executed BEFORE the sample
+    size guard, so a single-return input emitted
+    ``RuntimeWarning: Degrees of freedom <= 0 for slice`` on every
+    call and only coincidentally returned NaN.  Old behaviour: this
+    exact call raised the warning-as-error below.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = sharpe_ratio([0.01])
+    assert out["n"] == 1
+    assert math.isnan(out["sr"])
+    assert math.isnan(out["sr_per_period"])
+    assert out["ci_method"] == "insufficient_data"
 
 
 def test_block_bootstrap_numbers_unchanged_after_refactor() -> None:

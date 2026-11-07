@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from atropos.cross_sectional import (
+    _align_panels,
     _date_quantiles,
     cross_sectional_ic,
     cs_monotonicity,
@@ -446,6 +447,32 @@ def test_verdict_thresholds_are_validated() -> None:
     assert -1.0 <= boundary["spearman"] <= 1.0 or np.isnan(
         boundary["spearman"]
     )
+
+
+def test_align_panels_rejects_scrambled_plain_index() -> None:
+    """A scrambled non-DatetimeIndex raises instead of reordering.
+
+    Regression: the aligner sorted only DatetimeIndex inputs and
+    reindexed plain indexes in the order GIVEN, so a scrambled file
+    silently produced order-dependent turnover (420 vs 504 on the
+    committed demo panel, depending on file row order).  Old
+    behaviour: the exact call below ran without error and returned
+    misaligned frames.
+    """
+    values = np.arange(24, dtype=float).reshape(6, 4)
+    order = [3, 0, 4, 1, 5, 2]
+    signal = pd.DataFrame(values, index=pd.Index(order))
+    returns = pd.DataFrame(values + 1.0, index=pd.Index(order))
+    with pytest.raises(ValueError, match="sorted ascending"):
+        _align_panels(signal, returns, 2)
+    # a monotonic plain index still aligns (no dates needed)
+    signal_ok = pd.DataFrame(values, index=pd.Index(sorted(order)))
+    returns_ok = pd.DataFrame(values + 1.0, index=pd.Index(sorted(order)))
+    signal_frame, returns_frame, valid_positions, _ = _align_panels(
+        signal_ok, returns_ok, 2
+    )
+    assert len(signal_frame) == len(returns_frame) == 6
+    assert valid_positions == [0, 1, 2, 3, 4, 5]
 
 
 def test_demo_run_all_examples_smoke(

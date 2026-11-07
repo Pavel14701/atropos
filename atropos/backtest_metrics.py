@@ -68,7 +68,12 @@ def trade_curve_stats(r_net: Any) -> dict[str, float]:
       R equity curve, in R units (input MUST be chronological for the
       drawdown to be meaningful; unlike
       :func:`atropos.evaluation_metrics.max_drawdown` this is additive
-      R drawdown, not a multiplicative equity fraction);
+      R drawdown, not a multiplicative equity fraction).  Peak
+      convention: the running peak STARTS AT THE FIRST TRADE (no 0.0
+      baseline), so an opening loss is not a drawdown here --
+      deliberately distinct from the engine's event equity
+      (``atropos.backtesting._realized_events``), which prepends a
+      0.0 baseline and counts an opening loss; both are test-pinned;
     * ``profit_factor`` -- gross wins / gross losses, delegated to
       :func:`atropos.evaluation_metrics.profit_factor` (single home:
       ``inf`` when losses are absent, NaN when there is no PnL at all).

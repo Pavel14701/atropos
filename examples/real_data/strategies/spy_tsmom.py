@@ -5,7 +5,12 @@ at each month-end compute the 12-month total-return momentum SKIPPING
 the most recent month, ``mom_12_1 = P[m-1] / P[m-13] - 1`` on monthly
 bars; go long the NEXT month when ``mom_12_1 > 0`` and stay flat
 otherwise.  Each entry holds a fixed 21-trading-day horizon (one
-month), so consecutive events never overlap.  The skip-1-month
+month), so consecutive events OVERLAP slightly (~1-2 bars, measured
+on the committed sample): the monthly entry cadence (~21 trading
+days) does not clear the 21-bar hold before the next entry fires.
+The event overlap is handled honestly downstream -- the protocol's
+horizon-aware purge/embargo (not event independence) is what keeps
+the evaluation leakage-free.  The skip-1-month
 construction puts at least three weeks between the newest price in
 the formation window and the entry -- the no-lookahead lag is built
 into the signal, not bolted on.

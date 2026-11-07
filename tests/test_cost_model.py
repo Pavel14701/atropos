@@ -12,6 +12,7 @@ import math
 import numpy as np
 import pytest
 from atropos.cost_model import (
+    _net_returns_clean,
     annual_turnover,
     apply_proportional_costs,
     breakeven_cost_bps,
@@ -280,6 +281,31 @@ def test_clean_pair_rejects_non_1d_inputs() -> None:
         [0.01]
     )
     assert apply_proportional_costs(0.01, 1.0, 10.0) == pytest.approx([0.01])
+
+
+def test_net_returns_clean_overflow_alternative_full_length() -> None:
+    """Overflowing opposite-sign positions yield the true drag, not a crash.
+
+    Regression: the overflow alternative was built with a bare
+    ``pos[:-1]`` expression (length n-1) and passed to np.where against
+    ``drag`` (length n), so any overflowing opposite-sign position pair
+    crashed with a broadcast ValueError instead of yielding the
+    documented representable drag. Old behaviour: this exact input
+    raised ValueError; the fixed code returns finite values whose
+    overflow rows equal ``rate*(|a|+|b|)`` bit-for-bit.
+    """
+    gross = np.zeros(4)
+    pos = np.array([0.0, 1e308, -1e308, 1e308])
+    with np.errstate(over="ignore"):
+        net = _net_returns_clean(gross, pos, 1.0)
+    assert np.isfinite(net).all()
+    rate = 1.0 / 1e4
+    # t=1: |1e308 - 0| is representable, so the plain rate*tvr path holds
+    assert net[1] == -(rate * np.abs(pos[1]))
+    # t=2 / t=3 overflow rows: |a - b| == |a| + |b| exactly, so the
+    # distributed-rate alternative is the TRUE drag, bit-for-bit
+    assert net[2] == -(rate * np.abs(pos[1]) + rate * np.abs(pos[2]))
+    assert net[3] == -(rate * np.abs(pos[2]) + rate * np.abs(pos[3]))
 
 
 def test_demo_run_all_examples_smoke(

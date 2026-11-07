@@ -533,6 +533,10 @@ def rank_within_groups(
         ... )
         >>> report["n_scored"], report["n_skipped"]
         (2, 0)
+        >>> report["selected"]
+        [8, 11]
+        >>> rank_within_groups(report["groups"], top_s=1)["selected"]
+        ['8', '11']
 
     Cross-ranker comparability note: ``n_skipped`` counts SKIPPED
     groups of THIS run only (too few rows / single-class).  When
@@ -540,10 +544,6 @@ def rank_within_groups(
     INTERSECTION of ``scored_group_ids`` so unequal skip sets cannot
     fake a difference -- :func:`compare_rankers_on_intersection`
     implements exactly this.
-        >>> report["selected"]
-        [8, 11]
-        >>> rank_within_groups(report["groups"], top_s=1)["selected"]
-        ['8', '11']
     """
     top_s = validate_int("top_s", top_s)
     embargo_groups = validate_int("embargo_groups", embargo_groups, minimum=0)

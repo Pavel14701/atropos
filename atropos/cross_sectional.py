@@ -70,14 +70,18 @@ def _align_panels(
     Returns:
         ``(signal_frame, returns_frame, valid_positions, pair_mask)``:
         the two panels reindexed to the common dates/assets
-        (DatetimeIndex is sorted ascending defensively), the integer
+        (a DatetimeIndex is sorted ascending defensively; a plain
+        index must already be sorted), the integer
         row positions that pass the ``min_assets`` filter, and the
         ``(n_dates, n_assets)`` boolean mask of assets with both a
         finite signal and a finite forward return.
 
     Raises:
         ValueError: if an input is not a DataFrame, has non-unique
-            date/asset labels, or ``min_assets`` < 1.
+            date/asset labels, ``min_assets`` < 1, or the common
+            index is a non-DatetimeIndex that is not sorted ascending
+            (without dates the order cannot be recovered, and a
+            scrambled reindex would make turnover order-dependent).
 
     Example::
 
@@ -97,7 +101,18 @@ def _align_panels(
             )
     common_index = signal_panel.index.intersection(returns_panel.index)
     if isinstance(common_index, pd.DatetimeIndex):
+        # wall-clock dates: sort defensively (intersection preserves
+        # the left operand's order, which a scrambled file could break)
         common_index = common_index.sort_values()
+    elif not common_index.is_monotonic_increasing:
+        # plain positional/label index: reindexing a scrambled index
+        # would silently reorder rows and corrupt turnover, so refuse
+        # loudly instead of guessing an order that was never given
+        raise ValueError(
+            "non-DatetimeIndex panels must be sorted ascending: "
+            "got a scrambled index with no date information to "
+            "recover the order from"
+        )
     common_columns = signal_panel.columns.intersection(returns_panel.columns)
     signal_frame = signal_panel.reindex(
         index=common_index, columns=common_columns

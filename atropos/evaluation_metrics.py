@@ -128,7 +128,10 @@ def sharpe_ratio(
     rets = clean_1d(returns)
     n_obs = int(rets.size)
     excess = rets - float(rf) / float(periods)
-    stdev = float(np.std(excess, ddof=1))
+    # ddof=1 needs >= 2 observations: std on a single return would emit
+    # a RuntimeWarning and read NaN anyway -- short-circuit to the
+    # honest NaN BEFORE np.std is touched
+    stdev = float("nan") if n_obs < 2 else float(np.std(excess, ddof=1))
     sr_pp = float(np.mean(excess) / stdev) if stdev > 0 else float("nan")
     sr_ann = (
         sr_pp * float(np.sqrt(periods))

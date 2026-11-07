@@ -1308,6 +1308,40 @@ def test_maker_entry_equals_market_at_zero_delta_full_fee() -> None:
     assert maker == pytest.approx(market, rel=1e-12)
 
 
+def test_maker_entry_sim_limit_touched_at_entry_bar_fills() -> None:
+    """A limit touched exactly ON ``entry_idx`` fills on that bar.
+
+    Doc pin for the ``maker_entry_sim`` fill-bar contract: the fill
+    scan STARTS at ``entry_idx`` (the documented earliest fill bar),
+    so a limit touched on the entry bar fills there. The old
+    (contradicted) docstring declared ``entry_idx`` the decision bar
+    with the fill on a later bar; under that reading this exact
+    scenario is a missed trade (0.0) instead of the fill at the entry
+    bar.
+    """
+    opens, highs, lows, closes = _zone_world()
+    # limit = 100.0 - 0.5 * 1.0 = 99.5 == lows[2]: touched exactly on
+    # the entry bar. wait_bars=1 makes the scan a single bar, so any
+    # fill can only come from bar 2 == entry_idx itself.
+    filled = maker_entry_sim(
+        opens,
+        highs,
+        lows,
+        closes,
+        2,
+        "long",
+        99.0,
+        102.0,
+        100.0,
+        1.0,
+        delta_atr=0.5,
+        wait_bars=1,
+    )
+    # same trade as the docstring's scan-from-0 example: fill booked at
+    # bar 2, target hit at bar 10
+    assert filled == pytest.approx(4.4428)
+
+
 def test_maker_sim_rejects_negative_maker_frac() -> None:
     """A negative maker fee fraction is a contract breach."""
     opens, highs, lows, closes = _zone_world()

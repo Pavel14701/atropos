@@ -152,12 +152,13 @@ def _net_returns_clean(
     if overflow.any():
         # opposite-sign extreme positions: |a - b| > float64 max, but
         # there |a - b| == |a| + |b| exactly, so distributing the rate
-        # before the sum keeps the TRUE drag representable
-        drag = np.where(
-            overflow,
-            cost_rate * np.abs(pos[:-1]) + cost_rate * np.abs(pos[1:]),
-            drag,
-        )
+        # before the sum keeps the TRUE drag representable; the
+        # alternative is built at FULL length (a 0.0 head) because
+        # np.where broadcasts against ``drag`` -- a bare ``pos[:-1]``
+        # expression is one element short and raises ValueError
+        alt = np.zeros_like(drag)
+        alt[1:] = cost_rate * np.abs(pos[:-1]) + cost_rate * np.abs(pos[1:])
+        drag = np.where(overflow, alt, drag)
     return gross - drag
 
 

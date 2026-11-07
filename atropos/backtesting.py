@@ -325,9 +325,11 @@ def _exit_scan(
     * an entry bar opening beyond the stop is an immediate market
       scratch (never a win in gap-distance units).
 
-    ``maker_frac=None`` charges the taker entry fee ``2 * comm``; a
-    fraction charges the reduced maker fee ``comm * (1 + frac)``.  On
-    the maker path ``r_opt`` is undefined and reported as NaN.
+    ``maker_frac=None`` charges the full taker round trip
+    ``2 * comm``; a fraction charges the round trip with the maker
+    entry fee as part of the round-trip total: ``comm * (1 + frac)``
+    (maker entry, taker exit).  On the maker path ``r_opt`` is
+    undefined and reported as NaN.
     """
     if maker_frac is None:
         cost_r = (2 * cost.comm * fill + cost.gen_slip * fill) / denom
@@ -441,6 +443,11 @@ def simulate_signal(  # noqa: PLR0917  (donor OHLC-world signature)
       falls back to that actual distance.
     * No exit inside the hold window, or ``risk <= 0``: both R values
       are NaN and ``exit_idx`` is ``-1``.
+    * An unresolved trade (``exit_idx == -1``) books neither P&L nor
+      cost: the bundled round-trip ``cost_r`` is charged only on a
+      resolved exit (the entry-bar gap-through scratch above DOES
+      charge the full round trip - the stop fired, so the trade
+      happened).
 
     Args:
         opens: 1-D finite open prices.
@@ -618,8 +625,9 @@ def maker_sim(  # noqa: PLR0917  (donor OHLC-world signature)
     caller established the fill, e.g. via :func:`maker_entry_sim`).
     Mechanics mirror the taker sim with two execution differences:
 
-    * the entry fee is ``comm * (1 + maker_frac)`` instead of
-      ``2 * comm`` (maker entry, taker exit);
+    * the round-trip fee total is ``comm * (1 + maker_frac)`` instead
+      of ``2 * comm`` (the maker entry fee as part of the round-trip
+      total; taker exit);
     * the outcome is computed from the ACTUAL fill price, so a better
       entry WIDENS the stop distance: each win is smaller in R but
       stop-outs become rarer.
@@ -724,8 +732,12 @@ def maker_entry_sim(  # noqa: PLR0917  (donor OHLC-world signature)
     """Maker-or-skip entry: place a limit into the zone, skip if missed.
 
     The limit is placed ``delta_atr * ATR`` INTO the zone from the
-    market-fill reference price (``fill_price``, typically the
-    next-bar open).  The fill is deterministic in the price path: the
+    market-fill reference price ``fill_price`` (typically
+    ``opens[entry_idx]``).  The fill scan STARTS on ``entry_idx``
+    itself: a limit touched on the entry bar fills on that very bar
+    (the earliest possible fill; a caller deciding on an earlier bar
+    passes the LATER bar as ``entry_idx``).  The fill is
+    deterministic in the price path: the
     order fills on the FIRST bar (within ``wait_bars``) whose range
     trades through the limit; a missed fill means a missed trade and
     contributes exactly 0 (maker-or-skip).  A limit closer than
@@ -741,12 +753,15 @@ def maker_entry_sim(  # noqa: PLR0917  (donor OHLC-world signature)
         highs: 1-D finite high prices, same length as ``opens``.
         lows: 1-D finite low prices, same length as ``opens``.
         closes: 1-D finite close prices, same length as ``opens``.
-        entry_idx: signal decision bar; the limit may fill from this
-            bar onward.
+        entry_idx: the bar the fill is booked on.  The fill scan
+            STARTS on this bar (a limit touched here fills HERE), so
+            callers deciding on an earlier bar must pass the fill bar,
+            not the decision bar.
         side: ``"long"`` or ``"short"``.
         stop_price: stop-loss price level.
         target_price: take-profit price level.
-        fill_price: market-fill reference price (the next-bar open).
+        fill_price: market-fill reference price, normally
+            ``opens[entry_idx]``.
         atr_value: ATR in price units (scales the limit distance).
         delta_atr: limit distance into the zone, in ATR units; must
             be >= 0.
@@ -1477,6 +1492,11 @@ def _realized_events(
 
     Returns ``{"equity", "drawdown", "final_equity"}`` with an honest
     all-zero scaffold when nothing was entered.
+
+    Peak convention: a 0.0 baseline is PREPENDED to the equity curve,
+    so an opening loss registers as drawdown -- deliberately distinct
+    from ``atropos.backtest_metrics.trade_curve_stats``, whose peak
+    starts at the first trade (both conventions are test-pinned).
     """
     replaced_ids = {id(item) for item in replaced}
     events: list[tuple[float, float]] = []
