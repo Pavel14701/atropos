@@ -357,7 +357,13 @@ set is new. Additionally, `CS_NO_EDGE` maps to the DEAD verdict class
 only when the config target is `"xs"`; the default target `"ts"`
 treats the XS stage as a sanity check and reports NEEDS_ANALYSIS —
 backward-incompatible for callers reading `verdict_class`, documented
-in CHANGELOG 1.2.1.
+in CHANGELOG 1.2.1. Sweep-history note: the pre-fix classifier read
+the pure-noise seed-7 world as DEAD/class DEAD (a v7 pre-decision
+that assumed a no-active-days baseline — incorrect: that world's
+baseline mean is positive-but-insignificant), so the seed-7 noise pin
+now reads ROBUSTNESS_DEATH / NEEDS_ANALYSIS per the corrected
+classifier; the same split applies to any battery OVERALL DEAD with a
+positive baseline.
 
 Unblocks: nothing — this section is the standing reading guide for
 pre-taxonomy tombstones, not a defect.
