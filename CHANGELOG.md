@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — independent-audit fix waves (review + defect registry)
+## 1.2.0 — independent-audit fix waves (review + defect registry)
 
 Every fix below is pinned by a test that fails on the pre-fix code
 (mutation-verified); repro outputs are recorded in the respective

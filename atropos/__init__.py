@@ -33,7 +33,7 @@ atropos.<module>`` for the synthetic demo bundled with each module
 (for example ``python -m atropos.ensemble_pipeline``).
 """
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 from atropos.backtest_metrics import (
     per_trade_sharpe,
