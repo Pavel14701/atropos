@@ -50,6 +50,19 @@ source of record: `Desktop/atropos_transfer/journal_verdicts.json`
   artifacts
 - prereg_hash c183527a; killed_by_stage 1
 
+## Feed 4 — A:agg (2407 obs, external harness run — NOT re-run on
+## the new classifier)
+
+### A:agg — verdict: NO_OOS_EDGE (class NEEDS_ANALYSIS) — UNCHANGED
+
+- battery PASS 5/7 at stage 3, killed at stage 6 (NO_OOS_EDGE);
+  baseline +0.052
+- unchanged, not re-run on the new classifier: stage 3 PASSED, so
+  the battery OVERALL-DEAD split does not apply to this run (the
+  split only re-classifies battery-OVERALL-DEAD outcomes)
+- next_step: the entry-level edge lacks an OOS explanation through
+  the tested features — feature/mechanism question, separate work
+
 ## Feed 2 — C'' trade-level (3398 OB-retest trades, 12 symbols)
 
 ### C''-trade-level — verdict: REPACKAGING (class NEEDS_ANALYSIS)
@@ -80,6 +93,16 @@ NEEDS_ANALYSIS = the gate was informative but did not prove absence
 — the entry names the next step. SURVIVES = could not be killed,
 not proof of truth. Per-token meanings: GLOSSARY.md; the five-facts
 rule: FRAMEWORK.md §4.
+
+Baseline-numbers note (probe vs pipeline): the pre-fix discussion
+quoted A +0.0083 and C'' −0.0058 — those were raw-532-row probes;
+the pipeline runs the battery on the aligned 502-row series (30-row
+mom30 warmup dropped), measuring A +0.0156 and C'' −0.0114.
+Verified by direct run: same battery, same threshold, different
+observation windows. Classification unchanged on both (A positive →
+ROBUSTNESS_DEATH; C'' negative → proven-absence DEAD); the
+classifier fix did not touch the baseline-mean computation (it only
+reads the row).
 
 Sweep note (seed-7, noise world): the v7 pre-decision ("battery
 OVERALL DEAD → DEAD/class DEAD") assumed a no-active-days baseline;
