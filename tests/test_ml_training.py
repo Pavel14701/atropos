@@ -1835,6 +1835,34 @@ def test_prereg_hash_echoed_without_warning() -> None:
     assert report["config"]["prereg_hash"] == "b2c3d4e5"
 
 
+def test_strict_prereg_hash_config_gate() -> None:
+    """strict_prereg_hash=True refuses an unanchored run LOUDLY.
+
+    Opt-in anchor contract (KNOWN-ISSUES §5a): ``True`` + absent
+    prereg_hash (None; empty string is rejected by the base
+    validation) raises ValueError before any model is fit — the
+    default-False path keeps the RuntimeWarning + completed run
+    (backward compat, asserted in the second block); a supplied hash
+    passes the strict gate warning-free.
+    """
+    dataset = _planted_dataset()
+    # strict + no hash: loud refusal, not a warning
+    with pytest.raises(ValueError, match="strict_prereg_hash=True"):
+        _run(dataset, config={"strict_prereg_hash": True})
+    # non-strict default: the historical warning + completed run
+    with pytest.warns(RuntimeWarning, match="no prereg_hash in config"):
+        report = _run(dataset)
+    assert report["prereg_hash"] is None
+    # strict + supplied hash: passes the gate warning-free
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        strict_report = _run(
+            dataset,
+            config={"strict_prereg_hash": True, "prereg_hash": "b2c3d4e5"},
+        )
+    assert strict_report["prereg_hash"] == "b2c3d4e5"
+
+
 # ---------------------------------------------------------------------------
 # P3 close-out: deployment bridge ml_forward_check
 # ---------------------------------------------------------------------------

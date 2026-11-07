@@ -48,11 +48,16 @@ constants of this module.
 The kill verdict is anchored or it is not: a run whose config carries
 no ``prereg_hash`` issues a :class:`RuntimeWarning` (the verdict is
 then unanchored to a frozen preregistration) while the hash itself is
-echoed into the report when supplied.  After deployment,
-:func:`ml_forward_check` bridges the walk-forward report and the live
-taken-book track to :func:`atropos.track_record.live_verdict` -- a
-helper, not a gate: forward tracking happens after deployment, never
-inside the walk-forward.
+echoed into the report when supplied.  Callers whose tooling always
+emits the hash can flip ``strict_prereg_hash=True``: absence (None or
+empty string) then raises a loud :class:`ValueError` instead of
+warning -- opt-in, because the default must keep existing callers
+working (the default flip is tracked in KNOWN-ISSUES §5a).  After
+deployment, :func:`ml_forward_check` bridges the walk-forward report
+and the live taken-book track to
+:func:`atropos.track_record.live_verdict` -- a helper, not a gate:
+forward tracking happens after deployment, never inside the
+walk-forward.
 
 The model fleet is open: :data:`MODEL_REGISTRY` ships eight bundled
 factories spanning complementary bias axes -- linear (``logit``),
@@ -181,6 +186,11 @@ DEFAULT_TRAINING_CONFIG: dict[str, Any] = {
     # run time -- an unanchored kill verdict -- and the value, when
     # given, is echoed into the report
     "prereg_hash": None,
+    # opt-in loud anchor: True + absent prereg_hash (None or empty
+    # string) raises instead of warning; default False keeps existing
+    # callers working -- the tooling does not always emit spec_hash
+    # yet (flip tracked in KNOWN-ISSUES §5a)
+    "strict_prereg_hash": False,
     # defaults originating from a production walk-forward protocol;
     # cost_rt is consumed by the CALLER when building exec returns
     # (exec = fwd - cost), profit_bar is the EV floor of cost_line
@@ -1477,6 +1487,20 @@ def _validate_config(cfg: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(
             "prereg_hash must be None or a non-empty string, got "
             f"{prereg_hash!r}"
+        )
+    if not isinstance(cfg["strict_prereg_hash"], bool):
+        raise ValueError(
+            "strict_prereg_hash must be a bool, got "
+            f"{cfg['strict_prereg_hash']!r}"
+        )
+    if cfg["strict_prereg_hash"] and not prereg_hash:
+        # absence means None or empty string; the empty-string case is
+        # already rejected above, so this fires for None -- the loud
+        # opt-in form of the unanchored-verdict warning
+        raise ValueError(
+            "strict_prereg_hash=True requires a non-empty prereg_hash "
+            "in the config: an unanchored kill verdict is refused, "
+            "not warned about"
         )
     _validate_grid(cfg)
     _validate_checks(cfg)
