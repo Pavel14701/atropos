@@ -22,6 +22,11 @@ version: 0.1.0
    otherwise trailing sums), `hypothesis` (description). Panel mode:
    `panel_signal` / `panel_returns` (DataFrame: dates x assets) enable
    stage 7; panel inputs alone (stages 1-6 SKIPPED).
+   **Feed granularity must match the strategy's decision
+   granularity**: aggregating a sub-daily strategy (e.g. a 15m
+   OB-retest leg) to daily booked R is NOT a time-frame test — it is
+   signal loss. Feed the strategy's native decision stream (per-trade
+   rows, or the raw TF bars).
 2. **Config on top of defaults.** `config` is merged over
    `DEFAULT_CONFIG`; notable keys: `cost.cost_bps` (one-way cost in
    bps, subtracted at stage 5), `model` (`"ols"` | `"knn"` |

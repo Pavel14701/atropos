@@ -5,12 +5,32 @@ different feed representation is a different run with a different
 verdict (FRAMEWORK.md §4). Read every entry below as
 "<leg> on <feed>", never as "<leg> is dead/alive".
 
+**Feed-granularity rule** (added after the C''-daily design error,
+see the VOID entry below): the feed granularity must match the
+strategy's decision granularity. Aggregating a sub-daily strategy to
+daily booked R is not a time-frame test — it is signal loss: the
+daily aggregate collapses the leg to "how much was earned", and the
+why (zone entry, direction, zone size, retest delay) is gone.
+
 Prereg frames: skill-driven runs frozen before data touch
 (spec_hash 79f8c57f / e9998eb7 / c183527a, daily feed sha
 b5078612e27735...); trade-level and predictor-form runs anchored to
 their frozen feed files (prereg_hash in each entry). Structured
 source of record: `Desktop/atropos_transfer/journal_verdicts.json`
 (outside this repo) + `atropos_transfer/skillrun/` reports.
+
+**Verdict summary (valid runs only):**
+
+| Leg × feed | Verdict | Class |
+|---|---|---|
+| A-daily (booked R, 502 obs) | ROBUSTNESS_DEATH | NEEDS_ANALYSIS |
+| **C''-trade-level (3398 trades)** | **REPACKAGING** | NEEDS_ANALYSIS |
+| E-daily (booked R, 502 obs) | ARTIFACT | NEEDS_ANALYSIS |
+| E-predictor (30946 asset-days) | RISK | NEEDS_ANALYSIS |
+| A:agg (2407 obs, external) | NO_OOS_EDGE | NEEDS_ANALYSIS |
+
+VOID — not a verdict: C''-daily (daily aggregate of a 15m
+OB-retest leg; see the VOID entry below).
 
 ## Feed 1 — daily booked-R (502 obs: signal = net exposure sign,
 ## returns = daily booked R net of frozen fees)
@@ -31,15 +51,29 @@ source of record: `Desktop/atropos_transfer/journal_verdicts.json`
   ("proven no-edge") — that read was the v8 glue defect, corrected
   by the OVERALL-DEAD split
 
-### C''-daily — verdict: DEAD (class DEAD — proven no-edge)
+### C''-daily — VOID (design error, not a verdict)
 
-- battery baseline mean **−0.0114R/day** over 266 active days —
-  catastrophically unprofitable; 5/7 attacks failed
-- interpretation: "battery baseline is catastrophically unprofitable
-  ... proven no-edge on this feed"
-- next_step: stop — rebuild the rule or fix the feed before
-  re-testing
-- prereg_hash e9998eb7; killed_by_stage 3
+Status: **VOID — the feed is invalid for this leg by construction.**
+The daily aggregate is not a time-frame test of C'': collapsing a
+15m OB-retest leg to one number per day ("how much was earned")
+destroys the signal — the zone entry, direction, zone size and
+retest delay are gone. The run measured "daily booked-R P&L of C''
+read as a momentum signal", which is not a test of C''. The run's
+mechanical output (battery OVERALL DEAD, baseline mean −0.0114R/day
+over 266 active days, 5/7 attacks failed) is recorded here as a
+design-error record, NOT as a verdict on the leg.
+
+Cause: one dump format for all legs (`days / signal / returns`).
+Valid for A (a trend leg lives for days); circular for E; and for
+C'' a complete signal loss. Nobody stopped at "this feed is invalid
+for C'' by construction".
+
+The ONLY valid C'' verdict is trade-level: REPACKAGING / class
+NEEDS_ANALYSIS (Feed 2 below).
+
+Unblocks: nothing to fix in the pipeline — the lesson is the
+feed-granularity rule (header above, skill 02). Any future C''
+evaluation is trade-level only.
 
 ### E-daily — verdict: ARTIFACT (class NEEDS_ANALYSIS)
 
@@ -63,7 +97,8 @@ source of record: `Desktop/atropos_transfer/journal_verdicts.json`
 - next_step: the entry-level edge lacks an OOS explanation through
   the tested features — feature/mechanism question, separate work
 
-## Feed 2 — C'' trade-level (3398 OB-retest trades, 12 symbols)
+## Feed 2 — C'' trade-level (3398 OB-retest trades, 12 symbols) —
+## THE valid C'' feed
 
 ### C''-trade-level — verdict: REPACKAGING (class NEEDS_ANALYSIS)
 
