@@ -21,9 +21,11 @@ import pandas as pd
 import pytest
 from atropos.feature_scan import (
     FeatureAnalysisReport,
+    auto_rule_generation,
     bucket_scan,
     correlation_cluster,
     feature_analysis,
+    feature_importance,
     interaction_scan,
     missingness_scan,
     rule_fit,
@@ -945,4 +947,361 @@ def test_feature_analysis_schema() -> None:
     assert report["importance"] is None
     assert report["rule_generation"] is None
     assert report["rules"] is None
-    assert any("A3" in note for note in report["notes"])
+    assert any("exploratory blocks" in note for note in report["notes"])
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint A3 -- auto tools (EXPLORATORY, never STRONG)
+# ---------------------------------------------------------------------------
+def test_discovery_exploratory_status() -> None:
+    """Discovery output is a hypothesis list, never a cell (test 15).
+
+    World: one planted candidate + one null.  Pins: the planted
+    candidate is discovered (t clears the 2-family Bonferroni gate),
+    each entry carries EXACTLY the frozen schema keys (no cell /
+    status field a mutation could upgrade to STRONG), and the report
+    note carries the doctrine line.  Mutation fact: adding a
+    "cell": "STRONG" field to discovery entries -- or merging
+    discovered candidates into the orchestrator classification --
+    breaks the schema-keys / classification-keys asserts.
+    """
+    planted, null, noise = _draws(42, 3)
+    outcome_values = 1.5 * planted + noise
+    idx = pd.RangeIndex(_N_ROWS)
+    report = feature_analysis(
+        pd.Series(outcome_values, index=idx),
+        {"declared": pd.Series(planted, index=idx)},
+        {},
+        discovery_pool={
+            "pool_planted": pd.Series(planted, index=idx),
+            "pool_null": pd.Series(null, index=idx),
+        },
+        discovery_min_abs_spearman=0.0,
+        n_perm_orth=25,
+        n_perm_bucket=25,
+        min_bucket_n=0,
+        label="discovery-status",
+    )
+    assert report["discovery"] is not None
+    assert report["discovery"]["n_candidates"] == 2
+    discovered_names = [
+        entry["feature"] for entry in report["discovery"]["discovered"]
+    ]
+    assert discovered_names == ["pool_planted"]
+    for entry in report["discovery"]["discovered"]:
+        assert frozenset(entry) == {
+            "feature",
+            "t_stat",
+            "monotone",
+            "p_bonferroni",
+        }
+    assert "prereg + run_full_pipeline" in report["discovery"]["note"]
+    # discovery never merges into the classification
+    assert sorted(report["classification"]) == ["declared"]
+
+
+def test_discovery_returns_all_not_top1() -> None:
+    """Every clearing candidate is listed, not just the best (16).
+
+    World: three planted candidates of decreasing strength, all
+    above the 3-family gate.  Pins: ``discovered`` holds all three
+    (order: pool insertion).  Mutation fact: truncating to the top-1
+    (a "best feature" shortcut the spec forbids) drops two entries
+    and fails the length assert.
+    """
+    strong, medium, weak, noise = _draws(42, 4)
+    outcome_values = 1.5 * strong + 1.0 * medium + 0.8 * weak + noise
+    idx = pd.RangeIndex(_N_ROWS)
+    report = feature_analysis(
+        pd.Series(outcome_values, index=idx),
+        {"declared": pd.Series(strong, index=idx)},
+        {},
+        discovery_pool={
+            "cand_strong": pd.Series(strong, index=idx),
+            "cand_medium": pd.Series(medium, index=idx),
+            "cand_weak": pd.Series(weak, index=idx),
+        },
+        discovery_min_abs_spearman=0.0,
+        n_perm_orth=25,
+        n_perm_bucket=25,
+        min_bucket_n=0,
+        label="discovery-all",
+    )
+    assert report["discovery"] is not None
+    names = [entry["feature"] for entry in report["discovery"]["discovered"]]
+    assert names == ["cand_strong", "cand_medium", "cand_weak"]
+    assert report["discovery"]["all_below_threshold"] is False
+
+
+def test_discovery_bonferroni_n_candidates() -> None:
+    """The Bonferroni family is the TESTED count (test 17).
+
+    World: 20 candidates (19 null + one planted at HC0 t = 2.89).
+    The 20-family gate is norm.isf(0.05/20/2) = 3.02 -> the planted
+    candidate is NOT discovered (all_below_threshold True); the same
+    t clears the 8-family gate (2.73) and the 5-family gate (2.58),
+    so any mutation that derives the family from a smaller count --
+    a miscounted pool, a partial filter, a hard-coded number --
+    discovers it and fails the assert.  (This is the discovery-side
+    twin of test_bonferroni_multiple.)
+    """
+    planted = _draws(42, 1)[0]
+    pool_draws = _draws(43, 19)
+    noise = _draws(46, 1)[0]
+    outcome_values = 0.095 * planted + noise
+    idx = pd.RangeIndex(_N_ROWS)
+    report = feature_analysis(
+        pd.Series(outcome_values, index=idx),
+        {"declared": pd.Series(planted, index=idx)},
+        {},
+        discovery_pool={
+            **{
+                f"cand_{position:02d}": pd.Series(
+                    pool_draws[position], index=idx
+                )
+                for position in range(19)
+            },
+            "cand_planted": pd.Series(planted, index=idx),
+        },
+        discovery_min_abs_spearman=0.0,
+        n_perm_orth=25,
+        n_perm_bucket=25,
+        min_bucket_n=0,
+        label="discovery-bonferroni",
+    )
+    assert report["discovery"] is not None
+    assert report["discovery"]["n_candidates"] == 20
+    assert 3.0 < report["discovery"]["t_gate"] < 3.1
+    assert report["discovery"]["all_below_threshold"] is True
+    assert report["discovery"]["discovered"] == []
+
+
+def test_importance_linear_coef() -> None:
+    """The strong coefficient wins the importance (test 18).
+
+    World: outcome = 2*f1 + 0.2*f2 + noise.  Pins: the linear model
+    permutation importance of f1 sits well above f2's, and every
+    entry carries the frozen keys (mean/std/ci bracket).  Mutation
+    fact: swapping the importance arms (or the standardized-coef
+    extraction) flips the ordering and fails the test.
+    """
+    feat_a, feat_b, noise = _draws(42, 3)
+    outcome_values = 2.0 * feat_a + 0.2 * feat_b + noise
+    idx = pd.RangeIndex(_N_ROWS)
+    report = feature_importance(
+        pd.Series(outcome_values, index=idx),
+        {
+            "f1": pd.Series(feat_a, index=idx),
+            "f2": pd.Series(feat_b, index=idx),
+        },
+        model="linear",
+        n_permutations=30,
+        seed=42,
+        label="importance-linear",
+    )
+    assert report["model"] == "linear"
+    assert sorted(report["features"]) == ["f1", "f2"]
+    for entry in report["features"].values():
+        assert frozenset(entry) == {
+            "importance_mean",
+            "importance_std",
+            "ci_lo",
+            "ci_hi",
+        }
+    assert (
+        report["features"]["f1"]["importance_mean"]
+        > 3.0 * report["features"]["f2"]["importance_mean"]
+    )
+
+
+def test_importance_not_used_in_classification() -> None:
+    """High importance never rescues a PROXY (test 19).
+
+    World: twin = control + small noise beside a planted real
+    feature; the linear importance model (no controls) assigns the
+    twin a real share of R2 because it proxies the control, yet the
+    orthogonal gate classifies it PROXY.  Pins: importance_mean of
+    twin is positive while the cell stays PROXY/discard, and the
+    importance report carries the diagnostic-only note.  Mutation
+    fact: a classification that consults importance (rescuing PROXY
+    to STRONG on high importance) fails the cell assert.
+    """
+    real, _unused_null, control, noise_one = _draws(42, 4)
+    noise_two = _draws(45, 1)[0]
+    outcome_values = 0.5 * real + 0.4 * control + noise_one
+    idx = pd.RangeIndex(_N_ROWS)
+    twin_values = control + 0.2 * noise_two
+    report = feature_analysis(
+        pd.Series(outcome_values, index=idx),
+        {
+            "real": pd.Series(real, index=idx),
+            "twin": pd.Series(twin_values, index=idx),
+        },
+        {"c1": pd.Series(control, index=idx)},
+        importance_model="linear",
+        importance_n_permutations=20,
+        n_perm_orth=25,
+        n_perm_bucket=25,
+        min_bucket_n=0,
+        label="importance-not-cell",
+    )
+    assert report["importance"] is not None
+    twin_importance = report["importance"]["features"]["twin"]
+    assert twin_importance["importance_mean"] > 0.0
+    assert report["classification"]["twin"] == "PROXY"
+    assert report["recommended_actions"]["twin"] == "discard"
+    assert any(
+        "diagnostic only" in note for note in report["importance"]["notes"]
+    )
+
+
+def test_generation_on_train_only() -> None:
+    """A train-only reward fails on test: warning + no best (20).
+
+    World: the grid rule (feat < t for t in [0.4, 0.5, 0.6]) is
+    rewarded on the train split and PENALIZED on the test split, so
+    every candidate that wins on train fails on test.  Pins:
+    overfit_warning True, best_valid_rule None, every candidate
+    ordered by delta_train (generation used train only) with a
+    positive train delta and a non-positive test delta.  Mutation
+    fact: a generation that peeks at the test split for its grid
+    search (sorting by delta_test) produces a non-train ordering and
+    a valid candidate -- both asserts fail.
+    """
+    feat = _uniform(42)
+    noise_train = _draws(43, 1)[0]
+    split = np.arange(_N_ROWS) < 500
+    outcome_values = (
+        1.0 * (feat < 0.5) * split - 1.0 * (feat < 0.5) * ~split + noise_train
+    )
+    idx = pd.RangeIndex(_N_ROWS)
+    report = auto_rule_generation(
+        pd.Series(outcome_values, index=idx),
+        {"feat": pd.Series(feat, index=idx)},
+        {"low": {"template": "feat < {t1}", "grids": [[0.4, 0.5, 0.6]]}},
+        min_n_train_kept=30,
+        train_idx=np.arange(500),
+        test_idx=np.arange(500, _N_ROWS),
+        label="generation-train-only",
+    )
+    assert report["candidates"] != []
+    deltas_train = [
+        candidate["delta_train"] for candidate in report["candidates"]
+    ]
+    assert deltas_train == sorted(deltas_train, reverse=True)
+    assert all(delta > 0.0 for delta in deltas_train)
+    assert all(
+        candidate["delta_test"] <= 0.0 for candidate in report["candidates"]
+    )
+    assert report["best_valid_rule"] is None
+    assert report["overfit_warning"] is True
+
+
+def test_valid_rule_passes_both_splits() -> None:
+    """A real rule wins on train AND test (test 21).
+
+    World: two disjoint reward regions with a DELIBERATE train/test
+    ordering conflict -- rule_a (feat_a < 0.3) earns 1.0 on train
+    but only 0.1 on test, rule_b (feat_b > 0.7) earns 0.9 on train
+    and 0.8 on test.  Both are valid (both deltas positive on both
+    splits), but the best-by-train and best-by-test names differ BY
+    CONSTRUCTION.  Pins: best_valid_rule == the max delta_test name
+    (rule_b), overfit_warning False.  Mutation fact: a best-rule
+    filter reading delta_train picks rule_a and fails the assert.
+    """
+    feat_a = _uniform(42)
+    feat_b = _uniform(43)
+    noise = _draws(44, 1)[0]
+    split = np.arange(_N_ROWS) < 500
+    rule_a = feat_a < 0.3
+    rule_b = feat_b > 0.7
+    outcome_values = (
+        2.0 * rule_a * split
+        + 0.1 * rule_a * ~split
+        + 0.9 * rule_b * split
+        + 0.8 * rule_b * ~split
+        + 0.15 * noise
+    )
+    idx = pd.RangeIndex(_N_ROWS)
+    report = auto_rule_generation(
+        pd.Series(outcome_values, index=idx),
+        {
+            "feat_a": pd.Series(feat_a, index=idx),
+            "feat_b": pd.Series(feat_b, index=idx),
+        },
+        {
+            "spec_a": {"template": "feat_a < {t1}", "grids": [[0.3]]},
+            "spec_b": {"template": "feat_b > {t1}", "grids": [[0.7]]},
+        },
+        min_n_train_kept=30,
+        train_idx=np.arange(500),
+        test_idx=np.arange(500, _N_ROWS),
+        label="generation-valid",
+    )
+    assert sorted(report["valid_rules"]) == [
+        "spec_a:(0.3,)",
+        "spec_b:(0.7,)",
+    ]
+    assert report["best_valid_rule"] == "spec_b:(0.7,)"
+    assert report["overfit_warning"] is False
+    by_name = {
+        candidate["name"]: candidate for candidate in report["candidates"]
+    }
+    assert (
+        by_name["spec_a:(0.3,)"]["delta_train"]
+        > by_name["spec_b:(0.7,)"]["delta_train"]
+    )
+    assert (
+        by_name["spec_b:(0.7,)"]["delta_test"]
+        > by_name["spec_a:(0.3,)"]["delta_test"]
+    )
+
+
+def test_overfit_warning() -> None:
+    """Five train winners, all failing on test -> warning (test 22).
+
+    World: a two-clause template (feat < {t1} & feat_b > {t2}) with
+    a 3x2 grid; the train split rewards one corner, the test split
+    penalizes every combo.  top_k=5 keeps five train winners.  Pins:
+    exactly 5 candidates face the test split, none is valid,
+    overfit_warning True.  Mutation fact: an unbounded candidate
+    list (all 6 combos judged) breaks the length assert; a warning
+    that fires only when candidates is empty fails the flag assert.
+    """
+    feat = _uniform(42)
+    feat_b = _uniform(43)
+    noise = _draws(44, 1)[0]
+    split = np.arange(_N_ROWS) < 500
+    outcome_values = (
+        1.0 * ((feat < 0.4) & (feat_b > 0.6)) * split
+        - 1.0 * ((feat < 0.4) & (feat_b > 0.6)) * ~split
+        + noise
+    )
+    idx = pd.RangeIndex(_N_ROWS)
+    report = auto_rule_generation(
+        pd.Series(outcome_values, index=idx),
+        {
+            "feat": pd.Series(feat, index=idx),
+            "feat_b": pd.Series(feat_b, index=idx),
+        },
+        {
+            "corner": {
+                "template": "feat < {t1} & feat_b > {t2}",
+                "grids": [[0.3, 0.4, 0.5], [0.5, 0.7]],
+            }
+        },
+        top_k=5,
+        min_n_train_kept=30,
+        train_idx=np.arange(500),
+        test_idx=np.arange(500, _N_ROWS),
+        label="generation-overfit",
+    )
+    assert len(report["candidates"]) == 5
+    assert len(report["templates"]) == 1
+    assert report["templates"]["corner"] == "feat < {t1} & feat_b > {t2}"
+    assert all(
+        candidate["status"] != "valid" for candidate in report["candidates"]
+    )
+    assert report["valid_rules"] == []
+    assert report["best_valid_rule"] is None
+    assert report["overfit_warning"] is True

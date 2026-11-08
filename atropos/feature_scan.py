@@ -32,6 +32,16 @@ The functions, in pipeline order:
 * :func:`threshold_scan` -- a threshold sweep over a parsed (never
   evaluated) rule template, with the plateau-vs-edge reading that
   separates a wide ridge from a pick-one-number spike.
+* :func:`auto_discovery` -- Bonferroni-gated sweep over an explicit
+  candidate pool; the output is a hypothesis list, EXPLORATORY by
+  construction, never a classification.
+* :func:`feature_importance` -- permutation importance for one
+  linear/tree model; a diagnostic that feeds no cell and rescues no
+  PROXY.
+* :func:`auto_rule_generation` -- the caller fixes the rule SHAPE,
+  the tool grid-searches values on TRAIN only, and the untouched
+  test split judges the winners; all-fail-on-test reads
+  ``overfit_warning``.
 
 The orchestrator :func:`feature_analysis` chains the scans in the
 order above and classifies every representative feature into one
@@ -56,19 +66,22 @@ Recommended actions: ``build_rule`` (STRONG),
 ``investigate_interaction`` (SHAPE_UNKNOWN), ``discard``
 (PROXY/NOISE), ``manual_review_required`` (EXPLORATORY).
 
-Checkpoint note: this file lands in three verified checkpoints --
+Checkpoint note: this file landed in three verified checkpoints --
 A1 (the five defensive/analysis functions + the orchestrator
-skeleton), A2 (``regime_scan`` + ``threshold_scan``, this state),
-A3 (``auto_discovery``, ``feature_importance``,
-``auto_rule_generation`` -- all EXPLORATORY by construction).  The
-report schema below is FROZEN at A1: the checkpoint-A3 keys exist
-from the start and stay ``None`` until their functions land.
+skeleton), A2 (``regime_scan`` + ``threshold_scan``), A3
+(``auto_discovery``, ``feature_importance``, ``auto_rule_generation``
+-- all EXPLORATORY by construction, this state).  The report schema
+was FROZEN at A1: every key above exists from the first commit.
+If a future wave wants auto-discovery -> prereg path, that is a
+separate protocol change, not a tool feature.
 
 Run ``python -m atropos.feature_scan`` for a synthetic demo.
 """
 
 from __future__ import annotations
 
+import re
+from itertools import product
 from typing import Any, TypedDict
 
 import numpy as np
@@ -77,6 +90,9 @@ from scipy import stats
 from scipy.cluster import hierarchy
 from scipy.spatial.distance import squareform
 from scipy.stats import norm
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.inspection import permutation_importance
+from sklearn.linear_model import LinearRegression
 
 from atropos._utils import align_inputs, frameify, ols_hc0, validate_int
 from atropos.orthogonal import OrthogonalReport, orthogonal_check
@@ -104,9 +120,12 @@ __all__ = [
     "RuleFitReport",
     "ThresholdPoint",
     "ThresholdScanReport",
+    "auto_discovery",
+    "auto_rule_generation",
     "bucket_scan",
     "correlation_cluster",
     "feature_analysis",
+    "feature_importance",
     "interaction_scan",
     "missingness_scan",
     "regime_scan",
@@ -150,6 +169,14 @@ _PLATEAU_SHARE = 0.7
 
 _EDGE_SHARE = 0.3
 """Edge delta (vs the sweep max) below which the sweep reads edge."""
+
+_MAX_COMBOS = 200
+"""Grid-search cap for auto_rule_generation (exploration hygiene)."""
+
+_DISCOVERY_NOTE = (
+    "exploratory -- validation requires prereg + run_full_pipeline"
+)
+"""The one-line doctrine every discovery report must carry."""
 
 _ALLOWED_OPS = ("<", "<=", ">", ">=")
 """The only comparison operators a rule template may use."""
@@ -2061,6 +2088,689 @@ def threshold_scan(
 
 
 # ---------------------------------------------------------------------------
+# 8. auto_discovery (checkpoint A3; EXPLORATORY by construction)
+# ---------------------------------------------------------------------------
+def auto_discovery(
+    outcome: Any,
+    candidate_pool: dict[str, Any],
+    controls: dict[str, Any],
+    *,
+    max_features: int = 20,
+    min_abs_spearman: float = 0.15,
+    orthogonal_threshold: float | None = None,
+    label: str = "unnamed",
+) -> DiscoveryReport:
+    """Sweep a candidate pool for effects; the output is a HYPOTHESIS list.
+
+    Every candidate that clears the Bonferroni t-gate (derived from
+    the number of TESTED candidates: ``alpha / n_tested`` two-sided
+    normal quantile) and a light spearman pre-filter is listed with
+    its t, its monotone flag and its Bonferroni-adjusted p.  The
+    report is EXPLORATORY by construction: it never assigns cells,
+    never names a best feature, and its doctrine note requires
+    preregistration + the full pipeline before any candidate can be
+    believed.  Candidates whose |spearman| against the outcome is
+    below ``min_abs_spearman`` are not tested (and shrink the
+    Bonferroni family accordingly, with a note).
+
+    Args:
+        outcome: response series.
+        candidate_pool: EXPLICIT mapping candidate name -> single
+            column (an auto-scrape of a frame is deliberately not
+            supported; the caller owns the pool).
+        controls: mapping control name -> single column (same rules).
+        max_features: pool-size cap (exploration hygiene); a larger
+            pool raises.
+        min_abs_spearman: pre-filter floor on |spearman| vs the
+            outcome; 0 disables the filter.
+        orthogonal_threshold: explicit |t| gate; ``None`` derives the
+            Bonferroni gate from ``alpha / n_tested``.
+        label: free-text tag stored under ``report["label"]``.
+
+    Returns:
+        :class:`DiscoveryReport` with ``note`` fixed to
+        :data:`_DISCOVERY_NOTE`.
+
+    Raises:
+        ValueError: if the pool exceeds ``max_features``, is empty,
+            ``min_abs_spearman`` is negative, a control collides with
+            a candidate name, or an input is not a single column.
+
+    Example::
+
+        >>> import numpy as np
+        >>> import pandas as pd
+        >>> rng = np.random.default_rng(42)
+        >>> idx = pd.RangeIndex(500)
+        >>> planted = pd.Series(rng.standard_normal(500), index=idx)
+        >>> null = pd.Series(rng.standard_normal(500), index=idx)
+        >>> out = pd.Series(1.5 * planted + rng.standard_normal(500),
+        ...                 index=idx)
+        >>> report = auto_discovery(
+        ...     out, {"planted": planted, "null": null}, {},
+        ...     max_features=5, min_abs_spearman=0.0,
+        ... )
+        >>> [entry["feature"] for entry in report["discovered"]]
+        ['planted']
+        >>> report["all_below_threshold"]
+        False
+    """
+    if not candidate_pool:
+        raise ValueError("candidate_pool must not be empty")
+    if len(candidate_pool) > max_features:
+        raise ValueError(
+            f"candidate pool size {len(candidate_pool)} exceeds"
+            f" max_features ({max_features}); the caller must shrink"
+            " the pool explicitly"
+        )
+    if min_abs_spearman < 0.0 or not np.isfinite(min_abs_spearman):
+        raise ValueError(
+            f"min_abs_spearman must be a finite float >= 0, got"
+            f" {min_abs_spearman!r}"
+        )
+    candidate_names = list(candidate_pool)
+    control_names = list(controls)
+    overlap = sorted(set(candidate_names) & set(control_names))
+    if overlap:
+        raise ValueError(f"candidate and control names collide: {overlap}")
+    outcome_series = _to_series(outcome, "outcome")
+    control_series = [
+        _to_series(controls[name], name) for name in control_names
+    ]
+    notes: list[str] = []
+    tested: dict[str, pd.Series] = {}
+    for name in candidate_names:
+        candidate_series = _to_series(candidate_pool[name], name)
+        aligned_out, aligned_feat = align_inputs(
+            outcome_series, candidate_series
+        )
+        rho, rho_p = _spearman_pair(aligned_feat, aligned_out)
+        if (
+            min_abs_spearman > 0.0
+            and np.isfinite(rho)
+            and abs(rho) < min_abs_spearman
+        ):
+            notes.append(
+                f"{name}: below the spearman floor"
+                f" (|rho| = {abs(rho):.3f} < {min_abs_spearman}); not"
+                " tested (shrinks the Bonferroni family)"
+            )
+            continue
+        tested[name] = candidate_series
+    n_tested = len(tested)
+    if n_tested == 0:
+        return DiscoveryReport(
+            label=label,
+            n_candidates=0,
+            t_gate=float("nan"),
+            discovered=[],
+            all_below_threshold=True,
+            note=_DISCOVERY_NOTE,
+            notes=[
+                *notes,
+                "every candidate fell below the spearman floor",
+            ],
+        )
+    if orthogonal_threshold is None:
+        t_gate = float(norm.isf(_ALPHA / n_tested / 2.0))
+        notes.append(
+            f"Bonferroni t-gate from alpha/{n_tested}: |t| >= {t_gate:.3f}"
+        )
+    else:
+        if not np.isfinite(orthogonal_threshold) or (
+            orthogonal_threshold <= 0
+        ):
+            raise ValueError(
+                "orthogonal_threshold must be a positive finite float,"
+                f" got {orthogonal_threshold!r}"
+            )
+        t_gate = float(orthogonal_threshold)
+    discovered: list[DiscoveryEntry] = []
+    for name, candidate_series in tested.items():
+        aligned = align_inputs(
+            outcome_series, candidate_series, *control_series
+        )
+        aligned_out = aligned[0]
+        aligned_feat = aligned[1]
+        design = np.column_stack([np.ones(aligned_out.size), *aligned[1:]])
+        fit = ols_hc0(aligned_out, design)
+        t_stat = float(fit["t"][1])
+        rho, rho_p = _spearman_pair(aligned_feat, aligned_out)
+        monotone = bool(
+            np.isfinite(rho) and np.isfinite(rho_p) and rho_p <= _SPEAR_P_GATE
+        )
+        if np.isfinite(t_stat) and abs(t_stat) >= t_gate:
+            p_two_sided = (
+                2.0 * float(stats.t.sf(abs(t_stat), fit["df"]))
+                if np.isfinite(t_stat)
+                else 1.0
+            )
+            discovered.append(
+                DiscoveryEntry(
+                    feature=name,
+                    t_stat=t_stat,
+                    monotone=monotone,
+                    p_bonferroni=float(min(1.0, p_two_sided * n_tested)),
+                )
+            )
+    return DiscoveryReport(
+        label=label,
+        n_candidates=n_tested,
+        t_gate=t_gate,
+        discovered=discovered,
+        all_below_threshold=len(discovered) == 0,
+        note=_DISCOVERY_NOTE,
+        notes=notes,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 9. feature_importance (checkpoint A3; diagnostics only)
+# ---------------------------------------------------------------------------
+def feature_importance(
+    outcome: Any,
+    features: dict[str, Any],
+    *,
+    model: str = "linear",
+    n_permutations: int = 100,
+    seed: int = 42,
+    label: str = "unnamed",
+) -> ImportanceReport:
+    """Permutation importance of each feature for ONE fitted model.
+
+    ``model="linear"`` fits OLS on standardized features;
+    ``model="tree"`` fits a seeded RandomForest (200 trees, depth 4).
+    Importance = sklearn permutation importance against R2 with
+    ``n_repeats=n_permutations``; ``ci_lo`` / ``ci_hi`` are
+    ``mean +/- 1.96 * std`` of the permutation repeats.  This is a
+    DIAGNOSTIC: it feeds no classification cell, names no top
+    feature, and a high importance never rescues a PROXY verdict.
+
+    Args:
+        outcome: response series.
+        features: mapping feature name -> single column.
+        model: ``"linear"`` or ``"tree"``.
+        n_permutations: permutation repeats; at least 1.
+        seed: non-negative seed for the permutation draws (and the
+            forest's random_state).
+        label: free-text tag stored under ``report["label"]``.
+
+    Returns:
+        :class:`ImportanceReport` with one entry per feature.
+
+    Raises:
+        ValueError: if ``model`` is unknown, ``n_permutations`` < 1,
+            ``seed`` is negative, ``features`` is empty, or fewer
+            rows than features + 1 survive alignment.
+
+    Example::
+
+        >>> import numpy as np
+        >>> import pandas as pd
+        >>> rng = np.random.default_rng(42)
+        >>> idx = pd.RangeIndex(400)
+        >>> feat_a = pd.Series(rng.standard_normal(400), index=idx)
+        >>> feat_b = pd.Series(rng.standard_normal(400), index=idx)
+        >>> out = pd.Series(2.0 * feat_a + rng.standard_normal(400),
+        ...                 index=idx)
+        >>> report = feature_importance(
+        ...     out, {"a": feat_a, "b": feat_b}, n_permutations=20
+        ... )
+        >>> report["features"]["a"]["importance_mean"] > (
+        ...     report["features"]["b"]["importance_mean"]
+        ... )
+        True
+    """
+    if model not in ("linear", "tree"):
+        raise ValueError(f"model must be 'linear' or 'tree', got {model!r}")
+    validate_int("n_permutations", n_permutations)
+    validate_int("seed", seed, minimum=0)
+    if not features:
+        raise ValueError("features dict must not be empty")
+    names = list(features)
+    aligned = align_inputs(
+        _to_series(outcome, "outcome"),
+        *(_to_series(features[name], name) for name in names),
+    )
+    outcome_values = aligned[0]
+    design = np.column_stack(aligned[1:])
+    n_rows = int(outcome_values.size)
+    if n_rows <= len(names) + 1:
+        raise ValueError(
+            f"too few rows ({n_rows}) for {len(names)} features;"
+            " importance is undefined"
+        )
+    notes: list[str] = []
+    means = design.mean(axis=0)
+    stds = design.std(axis=0)
+    stds[stds == 0.0] = 1.0
+    design_std = (design - means) / stds
+    if model == "linear":
+        fitted = LinearRegression().fit(design_std, outcome_values)
+    else:
+        fitted = RandomForestRegressor(
+            n_estimators=200, max_depth=4, random_state=seed, n_jobs=1
+        ).fit(design_std, outcome_values)
+    result = permutation_importance(
+        fitted,
+        design_std,
+        outcome_values,
+        n_repeats=n_permutations,
+        random_state=seed,
+        scoring="r2",
+    )
+    entries: dict[str, ImportanceEntry] = {}
+    for position, name in enumerate(names):
+        mean_value = float(result.importances_mean[position])
+        std_value = float(result.importances_std[position])
+        entries[name] = ImportanceEntry(
+            importance_mean=mean_value,
+            importance_std=std_value,
+            ci_lo=mean_value - 1.96 * std_value,
+            ci_hi=mean_value + 1.96 * std_value,
+        )
+    notes.append(
+        "diagnostic only: importance feeds no classification cell"
+        " (see the module docstring)"
+    )
+    return ImportanceReport(
+        label=label,
+        model=model,
+        n_permutations=n_permutations,
+        features=entries,
+        notes=notes,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 10. auto_rule_generation (checkpoint A3; EXPLORATORY by construction)
+# ---------------------------------------------------------------------------
+def _parse_multi_rule_template(
+    rule_template: str,
+    feature_names: list[str],
+    max_depth: int,
+) -> list[tuple[str, Any, str]]:
+    """Parse an AND-of-comparisons template, clause by clause.
+
+    Returns one ``(placeholder, op_func, feature_name)`` triple per
+    clause (template order).  Every clause must read
+    ``"<feature> <op> {tN}"`` with its own placeholder; unknown
+    features, unknown operators, duplicate placeholders and depths
+    beyond ``max_depth`` all raise ValueError.  Templates are
+    parsed, never ``eval``-ed.
+    """
+    clauses = [clause.strip() for clause in rule_template.split("&")]
+    if not clauses or any(not clause for clause in clauses):
+        raise ValueError(
+            f"rule template must be non-empty AND-clauses: {rule_template!r}"
+        )
+    if len(clauses) > max_depth:
+        raise ValueError(
+            f"rule template has {len(clauses)} clauses, above the"
+            f" max_depth {max_depth}"
+        )
+    placeholders: list[str] = []
+    parsed: list[tuple[str, Any, str]] = []
+    for clause in clauses:
+        tokens = clause.split()
+        if len(tokens) != 3:
+            raise ValueError(
+                f"clause {clause!r} must read '<feature> <op> {{tN}}'"
+            )
+        feature_token, op, placeholder_token = tokens
+        if op not in _ALLOWED_OPS:
+            raise ValueError(
+                f"clause {clause!r}: operator must be one of"
+                f" {list(_ALLOWED_OPS)}, got {op!r}"
+            )
+        if feature_token not in feature_names:
+            raise ValueError(
+                f"clause {clause!r}: feature {feature_token!r} is not"
+                " a declared feature"
+            )
+        match = re.fullmatch(r"\{(t\d*)\}", placeholder_token)
+        if match is None:
+            raise ValueError(
+                f"clause {clause!r}: placeholder must look like"
+                " {{tN}}, got"
+                f" {placeholder_token!r}"
+            )
+        placeholder = match.group(1)
+        if placeholder in placeholders:
+            raise ValueError(
+                f"rule template reuses placeholder {placeholder!r};"
+                " each clause needs its own"
+            )
+        placeholders.append(placeholder)
+        parsed.append((placeholder, _OP_FUNCS[op], feature_token))
+    return parsed
+
+
+def auto_rule_generation(
+    outcome: Any,
+    features: dict[str, Any],
+    rule_specs: dict[str, dict[str, Any]],
+    *,
+    max_depth: int = 2,
+    top_k: int = 5,
+    min_n_train_kept: int = 100,
+    train_idx: Any,
+    test_idx: Any,
+    label: str = "unnamed",
+) -> AutoRuleReport:
+    """Grid-search rule VALUES on train; the test split judges them.
+
+    The caller fixes the rule SHAPE (an AND-of-comparisons template
+    like ``"feat_a < {t1} & feat_b <= {t2}"`` plus one grid per
+    clause); the tool enumerates value combinations ON THE TRAIN
+    SPLIT ONLY, keeps the ``top_k`` by ``delta_train``, and only then
+    looks at the untouched test split.  Candidates whose
+    ``delta_test`` is positive land in ``valid_rules``;
+    ``overfit_warning`` fires when every kept candidate fails on
+    test.  EXPLORATORY by construction: generation without a frozen
+    downstream preregistration is exactly the winner's curse the
+    framework exists to kill.
+
+    Args:
+        outcome: response series WITHOUT NaN.
+        features: mapping feature name -> single column (every
+            template feature must be declared here).
+        rule_specs: ``{spec_name: {template: str, grids:
+            [[values], ...]}}``; ``len(grids)`` must equal the
+            template's clause count.
+        max_depth: clause-count cap (at least 1).
+        top_k: how many train winners face the test split; at
+            least 1.
+        min_n_train_kept: minimum kept rows on train for ``valid``.
+        train_idx: positional train split.
+        test_idx: positional test split (must not overlap).
+        label: free-text tag stored under ``report["label"]``.
+
+    Returns:
+        :class:`AutoRuleReport` with ``candidates`` ordered by
+        ``delta_train`` (best first).
+
+    Raises:
+        ValueError: on template deviations (see
+            :func:`_parse_multi_rule_template`), a grid count or
+            combo count mismatch, an over-cap grid product
+            (:data:`_MAX_COMBOS`), NaN outcome, or bad splits.
+
+    Example::
+
+        >>> import numpy as np
+        >>> import pandas as pd
+        >>> rng = np.random.default_rng(42)
+        >>> rows = np.arange(600)
+        >>> feat = pd.Series(rng.uniform(0, 1, 600), index=rows)
+        >>> out = pd.Series(
+        ...     np.where(feat < 0.5, 1.0, 0.0)
+        ...     + 0.1 * rng.standard_normal(600), index=rows
+        ... )
+        >>> report = auto_rule_generation(
+        ...     out, {"feat": feat},
+        ...     {"low": {"template": "feat < {t1}",
+        ...              "grids": [[0.4, 0.5, 0.6]]}},
+        ...     min_n_train_kept=30,
+        ...     train_idx=np.arange(400), test_idx=np.arange(400, 600),
+        ... )
+        >>> report["best_valid_rule"] is not None
+        True
+        >>> report["overfit_warning"]
+        False
+    """
+    if not rule_specs:
+        raise ValueError("rule_specs must not be empty")
+    validate_int("max_depth", max_depth, minimum=1)
+    validate_int("top_k", top_k, minimum=1)
+    validate_int("min_n_train_kept", min_n_train_kept, minimum=1)
+    feature_names = list(features)
+    notes: list[str] = []
+    outcome_series = _to_series(outcome, "outcome")
+    if bool(outcome_series.isna().any()):
+        raise ValueError(
+            "outcome contains NaN; align and drop rows before"
+            " auto_rule_generation"
+        )
+    outcome_values = outcome_series.to_numpy(dtype=float)
+    train_positions = np.asarray(train_idx, dtype=int).reshape(-1)
+    test_positions = np.asarray(test_idx, dtype=int).reshape(-1)
+    if train_positions.size == 0 or test_positions.size == 0:
+        raise ValueError("train_idx and test_idx must both be non-empty")
+    if set(train_positions.tolist()) & set(test_positions.tolist()):
+        raise ValueError("train_idx and test_idx overlap")
+    total = outcome_values.size
+    for tag, positions in (
+        ("train_idx", train_positions),
+        ("test_idx", test_positions),
+    ):
+        if positions.min() < 0 or positions.max() >= total:
+            raise ValueError(
+                f"{tag} out of range for outcome of {total} rows"
+            )
+    feature_columns = {
+        name: _to_series(features[name], name).to_numpy(dtype=float)
+        for name in feature_names
+    }
+    train_out = outcome_values[train_positions]
+    train_rows = train_out.size
+    evaluated: list[tuple[AutoRuleCandidate, str, tuple[float, ...]]] = []
+    templates: dict[str, str] = {}
+    for spec_name, spec in rule_specs.items():
+        template, parsed, grid_lists = _validate_rule_spec(
+            spec_name, spec, feature_names, max_depth
+        )
+        templates[spec_name] = template
+        evaluated.extend(
+            _train_combo_entry(
+                spec_name,
+                template,
+                parsed,
+                combo,
+                feature_columns=feature_columns,
+                train_positions=train_positions,
+                train_out=train_out,
+                train_rows=train_rows,
+            )
+            for combo in product(*grid_lists)
+        )
+    finite = [
+        entry for entry in evaluated if np.isfinite(entry[0]["delta_train"])
+    ]
+    if not finite:
+        return AutoRuleReport(
+            label=label,
+            templates=templates,
+            candidates=[],
+            valid_rules=[],
+            best_valid_rule=None,
+            overfit_warning=True,
+            notes=[
+                *notes,
+                "every grid combo left one train side empty",
+            ],
+        )
+    finite.sort(key=lambda entry: entry[0]["delta_train"], reverse=True)
+    top_entries = finite[:top_k]
+    top_candidates = [entry[0] for entry in top_entries]
+    _judge_test_entries(
+        top_entries,
+        templates,
+        feature_columns,
+        feature_names,
+        max_depth,
+        outcome_values=outcome_values,
+        test_positions=test_positions,
+        min_n_train_kept=min_n_train_kept,
+    )
+    valid_names = [
+        candidate["name"]
+        for candidate in top_candidates
+        if candidate["status"] == "valid"
+    ]
+    best_valid: str | None = None
+    if valid_names:
+        by_name = {
+            candidate["name"]: candidate for candidate in top_candidates
+        }
+        best_valid = max(
+            valid_names, key=lambda name: by_name[name]["delta_test"]
+        )
+    overfit_warning = all(
+        candidate["status"] != "valid" for candidate in top_candidates
+    )
+    return AutoRuleReport(
+        label=label,
+        templates=templates,
+        candidates=top_candidates,
+        valid_rules=valid_names,
+        best_valid_rule=best_valid,
+        overfit_warning=overfit_warning,
+        notes=notes,
+    )
+
+
+def _validate_rule_spec(
+    spec_name: str,
+    spec: Any,
+    feature_names: list[str],
+    max_depth: int,
+) -> tuple[str, list[tuple[str, Any, str]], list[list[float]]]:
+    """Validate one rule spec: shape, grids, and the combo cap.
+
+    Returns the template, its parsed clauses and the float grids;
+    every deviation (missing keys, clause/grid mismatch, an empty
+    grid, a product over :data:`_MAX_COMBOS`) raises ValueError.
+    """
+    if (
+        not isinstance(spec, dict)
+        or "template" not in spec
+        or ("grids" not in spec)
+    ):
+        raise ValueError(
+            f"rule spec {spec_name!r} must carry 'template' and 'grids'"
+        )
+    template = str(spec["template"])
+    grids = spec["grids"]
+    parsed = _parse_multi_rule_template(template, feature_names, max_depth)
+    if len(grids) != len(parsed):
+        raise ValueError(
+            f"rule spec {spec_name!r}: {len(parsed)} clauses but"
+            f" {len(grids)} grids"
+        )
+    grid_lists = [[float(value) for value in grid] for grid in grids]
+    if any(not grid for grid in grid_lists):
+        raise ValueError(
+            f"rule spec {spec_name!r}: every grid must be non-empty"
+        )
+    combo_count = 1
+    for grid in grid_lists:
+        combo_count *= len(grid)
+    if combo_count > _MAX_COMBOS:
+        raise ValueError(
+            f"rule spec {spec_name!r}: grid product {combo_count}"
+            f" exceeds the cap {_MAX_COMBOS}; shrink the grids"
+        )
+    return template, parsed, grid_lists
+
+
+def _train_combo_entry(
+    spec_name: str,
+    template: str,
+    parsed: list[tuple[str, Any, str]],
+    combo: tuple[float, ...],
+    *,
+    feature_columns: dict[str, np.ndarray],
+    train_positions: np.ndarray,
+    train_out: np.ndarray,
+    train_rows: int,
+) -> tuple[AutoRuleCandidate, str, tuple[float, ...]]:
+    """Build one grid combo's TRAIN-side candidate (generation only).
+
+    The mask is evaluated on the train rows exclusively; the test
+    fields stay empty (``delta_test`` NaN, status ``pending``) until
+    the top-k judging pass.
+    """
+    mask = np.ones(train_rows, dtype=bool)
+    for value, (_placeholder, op_func, feature_token) in zip(
+        combo, parsed, strict=True
+    ):
+        mask &= op_func(
+            feature_columns[feature_token][train_positions], value
+        )
+    kept = train_out[mask]
+    dropped = train_out[~mask]
+    delta_train = (
+        float(np.mean(kept) - np.mean(dropped))
+        if kept.size and dropped.size
+        else float("nan")
+    )
+    render = {
+        parsed[position][0]: combo[position]
+        for position in range(len(parsed))
+    }
+    candidate = AutoRuleCandidate(
+        name=f"{spec_name}:{combo}",
+        rule_str=template.format(**render),
+        n_train_kept=int(kept.size),
+        n_test_kept=0,
+        delta_train=delta_train,
+        delta_test=float("nan"),
+        status="pending",
+    )
+    return candidate, spec_name, combo
+
+
+def _judge_test_entries(
+    top_entries: list[tuple[AutoRuleCandidate, str, tuple[float, ...]]],
+    templates: dict[str, str],
+    feature_columns: dict[str, np.ndarray],
+    feature_names: list[str],
+    max_depth: int,
+    *,
+    outcome_values: np.ndarray,
+    test_positions: np.ndarray,
+    min_n_train_kept: int,
+) -> None:
+    """Face the top train winners with the untouched test split.
+
+    Mutates each candidate in place: fills ``n_test_kept`` /
+    ``delta_test`` and applies the status ladder (n guard first,
+    then both-deltas-positive = valid, anything else = unstable).
+    """
+    total = outcome_values.size
+    for candidate, spec_name, combo in top_entries:
+        parsed = _parse_multi_rule_template(
+            templates[spec_name], feature_names, max_depth
+        )
+        mask = np.ones(total, dtype=bool)
+        for value, (_placeholder, op_func, feature_token) in zip(
+            combo, parsed, strict=True
+        ):
+            mask &= op_func(feature_columns[feature_token], value)
+        kept = outcome_values[test_positions][mask[test_positions]]
+        dropped = outcome_values[test_positions][~mask[test_positions]]
+        delta_test = (
+            float(np.mean(kept) - np.mean(dropped))
+            if kept.size and dropped.size
+            else float("nan")
+        )
+        candidate["n_test_kept"] = int(kept.size)
+        candidate["delta_test"] = delta_test
+        if (
+            not np.isfinite(delta_test)
+            or candidate["n_train_kept"] < min_n_train_kept
+            or kept.size == 0
+            or dropped.size == 0
+        ):
+            candidate["status"] = "insufficient_n"
+        elif delta_test > 0.0 and candidate["delta_train"] > 0.0:
+            candidate["status"] = "valid"
+        else:
+            candidate["status"] = "unstable"
+
+
+# ---------------------------------------------------------------------------
 # orchestrator
 # ---------------------------------------------------------------------------
 def _run_interactions(
@@ -2143,6 +2853,69 @@ def _run_threshold_sweeps(
             label=name,
         )
     return reports
+
+
+def _run_exploratory_blocks(
+    outcome: Any,
+    features: dict[str, Any],
+    controls: dict[str, Any],
+    *,
+    discovery_pool: dict[str, Any] | None,
+    discovery_min_abs_spearman: float,
+    importance_model: str | None,
+    importance_n_permutations: int,
+    rule_generation_specs: dict[str, dict[str, Any]] | None,
+    rule_generation_top_k: int,
+    train_idx: Any | None,
+    test_idx: Any | None,
+    seed: int,
+    label: str,
+) -> tuple[
+    DiscoveryReport | None, ImportanceReport | None, AutoRuleReport | None
+]:
+    """Run the three EXPLORATORY blocks when (and only when) requested.
+
+    Discovery and importance need no split; rule generation requires
+    BOTH split indices (generation is train-only, judging is
+    test-only).  The outputs never touch the classification.
+    """
+    discovery = None
+    if discovery_pool is not None:
+        discovery = auto_discovery(
+            outcome,
+            discovery_pool,
+            controls,
+            min_abs_spearman=discovery_min_abs_spearman,
+            label=label,
+        )
+    importance = None
+    if importance_model is not None:
+        importance = feature_importance(
+            outcome,
+            features,
+            model=importance_model,
+            n_permutations=importance_n_permutations,
+            seed=seed,
+            label=label,
+        )
+    rule_generation = None
+    if rule_generation_specs is not None:
+        if train_idx is None or test_idx is None:
+            raise ValueError(
+                "rule_generation_specs requires BOTH train_idx and"
+                " test_idx (generation is train-only, judging is"
+                " test-only)"
+            )
+        rule_generation = auto_rule_generation(
+            outcome,
+            features,
+            rule_generation_specs,
+            top_k=rule_generation_top_k,
+            train_idx=train_idx,
+            test_idx=test_idx,
+            label=label,
+        )
+    return discovery, importance, rule_generation
 
 
 def _classify_features(
@@ -2277,6 +3050,12 @@ def feature_analysis(
     threshold_specs: dict[str, list[float]] | None = None,
     threshold_template: str | None = None,
     min_n_kept: int = 100,
+    discovery_pool: dict[str, Any] | None = None,
+    discovery_min_abs_spearman: float = 0.15,
+    importance_model: str | None = None,
+    importance_n_permutations: int = 100,
+    rule_generation_specs: dict[str, dict[str, Any]] | None = None,
+    rule_generation_top_k: int = 5,
     seed: int = 42,
     label: str = "unnamed",
 ) -> FeatureAnalysisReport:
@@ -2341,6 +3120,21 @@ def feature_analysis(
             and ``{t}`` placeholders (default ``"{feature} < {t}"``).
         min_n_kept: minimum kept rows per split for a ``valid``
             threshold point.
+        discovery_pool: optional explicit candidate dict for
+            :func:`auto_discovery` -- EXPLORATORY output, never
+            merged into the classification.
+        discovery_min_abs_spearman: spearman pre-filter floor for
+            the discovery pool.
+        importance_model: optional ``"linear"`` / ``"tree"`` for
+            :func:`feature_importance` -- diagnostic only, feeds no
+            cell.
+        importance_n_permutations: permutation repeats for the
+            importance runs.
+        rule_generation_specs: optional ``{name: {template, grids}}``
+            for :func:`auto_rule_generation`; requires the frozen
+            split.  EXPLORATORY output.
+        rule_generation_top_k: how many train winners face the test
+            split.
         seed: non-negative seed threaded into every seeded step.
         label: free-text tag stored under ``report["label"]``.
 
@@ -2470,14 +3264,30 @@ def feature_analysis(
         test_idx=test_idx,
         min_n_kept=min_n_kept,
     )
+    discovery, importance, rule_generation = _run_exploratory_blocks(
+        outcome,
+        features,
+        controls,
+        discovery_pool=discovery_pool,
+        discovery_min_abs_spearman=discovery_min_abs_spearman,
+        importance_model=importance_model,
+        importance_n_permutations=importance_n_permutations,
+        rule_generation_specs=rule_generation_specs,
+        rule_generation_top_k=rule_generation_top_k,
+        train_idx=train_idx,
+        test_idx=test_idx,
+        seed=seed,
+        label=label,
+    )
 
     classification, actions, skipped = _classify_features(
         orth, buckets, clustering, list(rep_features), regime, notes=notes
     )
-    notes.append(
-        "checkpoint-A3 blocks (discovery, importance, rule generation)"
-        " not requested; keys stay None"
-    )
+    if discovery is None and importance is None and (rule_generation is None):
+        notes.append(
+            "exploratory blocks (discovery, importance, rule"
+            " generation) not requested; keys stay None"
+        )
     return FeatureAnalysisReport(
         label=label,
         seed=seed,
@@ -2491,9 +3301,9 @@ def feature_analysis(
         rules=rules,
         regime=regime,
         threshold=threshold_reports,
-        discovery=None,
-        importance=None,
-        rule_generation=None,
+        discovery=discovery,
+        importance=importance,
+        rule_generation=rule_generation,
         skipped_features=skipped,
         classification=classification,
         recommended_actions=actions,
@@ -2504,29 +3314,12 @@ def feature_analysis(
 # ---------------------------------------------------------------------------
 # demo
 # ---------------------------------------------------------------------------
-def run_all_examples() -> None:
-    """Demo: one planted world through the whole A1 chain, asserted.
-
-    Every printed verdict is asserted, so a regression crashes the
-    demo instead of printing a wrong number quietly.
-    """
-    n_rows = 800
-    rng = np.random.default_rng(42)
-    real = rng.standard_normal(n_rows)
-    null = rng.standard_normal(n_rows)
-    control = rng.standard_normal(n_rows)
-    outcome_values = 0.5 * real + 0.4 * control + rng.standard_normal(n_rows)
-    idx = pd.RangeIndex(n_rows)
-    outcome = pd.Series(outcome_values, index=idx)
-    features = {
-        "alpha_real": pd.Series(real, index=idx),
-        "beta_null": pd.Series(null, index=idx),
-    }
-    controls = {"gamma_mom": pd.Series(control, index=idx)}
-
-    print("=" * 72)
-    print("feature_scan demo: planted world (alpha real, beta null)")
-    print("=" * 72)
+def _demo_orchestrator(
+    outcome: pd.Series,
+    features: dict[str, pd.Series],
+    controls: dict[str, pd.Series],
+) -> None:
+    """Demo block: the orchestrator classification on the planted world."""
     report = feature_analysis(
         outcome,
         features,
@@ -2549,11 +3342,13 @@ def run_all_examples() -> None:
     assert report["classification"]["beta_null"] == _CELL_PROXY
     assert report["recommended_actions"]["alpha_real"] == _ACTION_PREREG
     assert report["rules"] is None and report["regime"] is None
-
     missing = report["missingness"]
     assert sorted(missing["features"]) == ["alpha_real", "beta_null"]
     assert missing["features"]["alpha_real"]["warn"] is False
 
+
+def _demo_bucket(outcome: pd.Series, features: dict[str, pd.Series]) -> None:
+    """Demo block: the bucket profile + Q1/Q2 split."""
     bucket_report = bucket_scan(
         outcome,
         {"alpha_real": features["alpha_real"]},
@@ -2574,6 +3369,11 @@ def run_all_examples() -> None:
     assert profile["q_split"]["net_r_signal"] is True
     assert bucket_report["norm_r_is_outcome"] is True
 
+
+def _demo_interaction(
+    outcome: pd.Series, features: dict[str, pd.Series]
+) -> None:
+    """Demo block: the additive world reads no interaction."""
     interaction = interaction_scan(
         outcome,
         features["alpha_real"],
@@ -2589,6 +3389,9 @@ def run_all_examples() -> None:
     assert interaction["status"] == "OK"
     assert interaction["interaction_present"] is False
 
+
+def _demo_rule_fit(outcome: pd.Series, real: np.ndarray, n_rows: int) -> None:
+    """Demo block: a planted rule reads valid with a positive test delta."""
     rule_mask = (real > 0.0).astype(bool)
     rule_report = rule_fit(
         outcome,
@@ -2607,11 +3410,15 @@ def run_all_examples() -> None:
     assert rule_report["rules"]["sign_rule"]["status"] == _STATUS_VALID
     assert rule_report["best_valid_rule"] == "sign_rule"
 
-    nan_outcome = outcome.copy()
+
+def _demo_missingness(
+    outcome: pd.Series, features: dict[str, pd.Series]
+) -> None:
+    """Demo block: outcome-linked NaN warns, random NaN stays silent."""
     nan_feature = features["beta_null"].copy()
-    nan_feature[nan_outcome > 1.0] = np.nan
+    nan_feature[outcome > 1.0] = np.nan
     missing_shift = missingness_scan(
-        nan_outcome, {"flagged": nan_feature}, {}, nan_threshold=0.05
+        outcome, {"flagged": nan_feature}, {}, nan_threshold=0.05
     )
     print(
         "missingness (outcome-linked NaN): warn=",
@@ -2620,6 +3427,117 @@ def run_all_examples() -> None:
         missing_shift["features"]["flagged"]["nan_outcome_differs"],
     )
     assert missing_shift["features"]["flagged"]["warn"] is True
+
+
+def _demo_discovery(
+    outcome: pd.Series, features: dict[str, pd.Series]
+) -> None:
+    """Demo block: the planted pool yields one EXPLORATORY hypothesis."""
+    discovery = auto_discovery(
+        outcome,
+        {
+            "alpha_real": features["alpha_real"],
+            "beta_null": features["beta_null"],
+        },
+        {},
+        min_abs_spearman=0.0,
+        label="discovery demo",
+    )
+    print(
+        "discovery (planted pool):",
+        [entry["feature"] for entry in discovery["discovered"]],
+        "| all_below:",
+        discovery["all_below_threshold"],
+    )
+    assert discovery["n_candidates"] == 2
+    assert [entry["feature"] for entry in discovery["discovered"]] == [
+        "alpha_real"
+    ]
+    assert "prereg + run_full_pipeline" in discovery["note"]
+
+
+def _demo_importance(
+    outcome: pd.Series, features: dict[str, pd.Series]
+) -> None:
+    """Demo block: the planted feature dominates permutation importance."""
+    importance = feature_importance(
+        outcome,
+        features,
+        model="linear",
+        n_permutations=20,
+        seed=42,
+    )
+    print(
+        "importance (linear): alpha_real =",
+        round(importance["features"]["alpha_real"]["importance_mean"], 4),
+        "beta_null =",
+        round(importance["features"]["beta_null"]["importance_mean"], 4),
+    )
+    assert (
+        importance["features"]["alpha_real"]["importance_mean"]
+        > importance["features"]["beta_null"]["importance_mean"]
+    )
+
+
+def _demo_rule_generation(
+    outcome: pd.Series, features: dict[str, pd.Series], n_rows: int
+) -> None:
+    """Demo block: grid-searched rule shape validates on test."""
+    rule_gen = auto_rule_generation(
+        outcome,
+        features,
+        {
+            "sign_rule": {
+                "template": "alpha_real > {t1}",
+                "grids": [[0.0, 0.3]],
+            }
+        },
+        min_n_train_kept=50,
+        train_idx=np.arange(0, 500),
+        test_idx=np.arange(500, n_rows),
+    )
+    print(
+        "rule generation: best =",
+        rule_gen["best_valid_rule"],
+        "| overfit_warning:",
+        rule_gen["overfit_warning"],
+    )
+    assert rule_gen["best_valid_rule"] is not None
+    assert rule_gen["overfit_warning"] is False
+
+
+def run_all_examples() -> None:
+    """Demo: one planted world through the whole chain, asserted.
+
+    Every printed verdict is asserted (in the per-block helpers), so
+    a regression crashes the demo instead of printing a wrong number
+    quietly.
+    """
+    n_rows = 800
+    rng = np.random.default_rng(42)
+    real = rng.standard_normal(n_rows)
+    null = rng.standard_normal(n_rows)
+    control = rng.standard_normal(n_rows)
+    outcome_values = 0.5 * real + 0.4 * control + rng.standard_normal(n_rows)
+    idx = pd.RangeIndex(n_rows)
+    outcome = pd.Series(outcome_values, index=idx)
+    features = {
+        "alpha_real": pd.Series(real, index=idx),
+        "beta_null": pd.Series(null, index=idx),
+    }
+    controls = {"gamma_mom": pd.Series(control, index=idx)}
+
+    print("=" * 72)
+    print("feature_scan demo: planted world (alpha real, beta null)")
+    print("=" * 72)
+    _demo_orchestrator(outcome, features, controls)
+    _demo_bucket(outcome, features)
+    _demo_interaction(outcome, features)
+    _demo_rule_fit(outcome, real, n_rows)
+    _demo_missingness(outcome, features)
+    _demo_discovery(outcome, features)
+    _demo_importance(outcome, features)
+    _demo_rule_generation(outcome, features, n_rows)
 
 
 if __name__ == "__main__":
