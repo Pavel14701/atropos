@@ -95,6 +95,7 @@ from sklearn.inspection import permutation_importance
 from sklearn.linear_model import LinearRegression
 
 from atropos._utils import align_inputs, frameify, ols_hc0, validate_int
+from atropos.data_contract import MaterializedData
 from atropos.orthogonal import OrthogonalReport, orthogonal_check
 
 __all__ = [
@@ -3026,10 +3027,79 @@ def _monotone_cell(
     return _CELL_SHAPE, _ACTION_INTERACT
 
 
+def _resolve_inputs(
+    outcome: MaterializedData | pd.Series,
+    features: dict[str, Any] | pd.DataFrame | None,
+    controls: dict[str, Any] | pd.DataFrame | None,
+    notes: list[str],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Resolve the outcome union into plain name -> column maps.
+
+    A :class:`~atropos.data_contract.MaterializedData` bundle is the
+    contract path: its manifest is VALIDATED here (failed lookahead
+    checks or a failed validation battery are fatal; a missing
+    manifest is a loud warning recorded in ``notes``) and its frames
+    supply every column -- ``features``/``controls`` must then be
+    ``None``.  The legacy path keeps the bare-Series semantics.
+    """
+    if isinstance(outcome, MaterializedData):
+        if features is not None or controls is not None:
+            raise ValueError(
+                "outcome is a MaterializedData: features/controls"
+                " come from the bundle itself and must be None"
+            )
+        manifest = outcome.manifest
+        if manifest is None:
+            notes.append(
+                "unverified data, contract guarantees not applied"
+                " (manifest is None)"
+            )
+        else:
+            failed_lookahead = sorted(
+                name
+                for name, ok in manifest["lookahead_checks"].items()
+                if not ok
+            )
+            if failed_lookahead:
+                raise ValueError(
+                    "MaterializedData lookahead check FAILED for"
+                    f" {failed_lookahead}; refusing analysis"
+                )
+            if not manifest["validation"]["passed"]:
+                raise ValueError(
+                    "MaterializedData validation failed:"
+                    " " + "; ".join(manifest["validation"]["fatal"])
+                )
+        feature_frame = outcome.features
+        control_frame = outcome.controls
+        features_map = {
+            name: feature_frame[name] for name in feature_frame.columns
+        }
+        controls_map = {
+            name: control_frame[name] for name in control_frame.columns
+        }
+        return features_map, controls_map
+    features_arg = features if features is not None else {}
+    controls_arg = controls if controls is not None else {}
+    if isinstance(features_arg, pd.DataFrame):
+        features_map = {
+            name: features_arg[name] for name in features_arg.columns
+        }
+    else:
+        features_map = dict(features_arg)
+    if isinstance(controls_arg, pd.DataFrame):
+        controls_map = {
+            name: controls_arg[name] for name in controls_arg.columns
+        }
+    else:
+        controls_map = dict(controls_arg)
+    return features_map, controls_map
+
+
 def feature_analysis(
-    outcome: Any,
-    features: dict[str, Any],
-    controls: dict[str, Any],
+    outcome: MaterializedData | pd.Series,
+    features: dict[str, Any] | pd.DataFrame | None = None,
+    controls: dict[str, Any] | pd.DataFrame | None = None,
     *,
     nan_threshold: float = 0.05,
     cluster_threshold: float = 0.8,
@@ -3086,9 +3156,17 @@ def feature_analysis(
     A3 and read ``None`` until then.
 
     Args:
-        outcome: response series.
-        features: mapping feature name -> single column.
-        controls: mapping control name -> single column.
+        outcome: a :class:`~atropos.data_contract.MaterializedData`
+            bundle (the contract path -- its manifest is VALIDATED:
+            a failed lookahead check or a failed validation battery
+            is fatal, a missing manifest is a loud warning in the
+            report notes) or the response series (legacy path).
+        features: mapping feature name -> single column, or a
+            DataFrame; ``None`` when ``outcome`` is a
+            MaterializedData (the bundle carries the columns).
+        controls: mapping control name -> single column, or a
+            DataFrame; ``None`` when ``outcome`` is a
+            MaterializedData.
         nan_threshold: missingness warn gate; in the open (0, 1).
         cluster_threshold: cluster cut level of |pearson|.
         representatives: optional explicit member -> representative
@@ -3145,7 +3223,10 @@ def feature_analysis(
     Raises:
         ValueError: if gate fractions are outside (0, 1), a pair name
             is not a declared feature, ``candidate_rules`` is given
-            without both split indices, or any sub-scan raises.
+            without both split indices, ``outcome`` is a
+            MaterializedData whose manifest fails (lookahead check or
+            validation battery), ``features``/``controls`` are passed
+            alongside a MaterializedData, or any sub-scan raises.
 
     Example::
 
@@ -3169,6 +3250,12 @@ def feature_analysis(
     _validate_fraction("cluster_threshold", cluster_threshold)
     validate_int("seed", seed, minimum=0)
     notes: list[str] = []
+    feature_map, control_map = _resolve_inputs(
+        outcome, features, controls, notes
+    )
+    outcome_series = (
+        outcome.outcome if isinstance(outcome, MaterializedData) else outcome
+    )
     if candidate_rules is not None and (
         train_idx is None or test_idx is None
     ):
@@ -3176,20 +3263,24 @@ def feature_analysis(
             "candidate_rules requires BOTH train_idx and test_idx"
             " (rule_fit has no default split)"
         )
-    feature_names = list(features)
+    feature_names = list(feature_map)
 
     missing = missingness_scan(
-        outcome, features, controls, nan_threshold=nan_threshold, label=label
+        outcome_series,
+        feature_map,
+        control_map,
+        nan_threshold=nan_threshold,
+        label=label,
     )
     clustering = correlation_cluster(
-        features,
-        outcome,
+        feature_map,
+        outcome_series,
         threshold=cluster_threshold,
         representatives=representatives,
         label=label,
     )
     rep_features = {
-        name: features[name]
+        name: feature_map[name]
         for name in feature_names
         if clustering["representatives"].get(name) == name
     }
@@ -3209,9 +3300,9 @@ def feature_analysis(
             )
         orth_gate = float(orthogonal_threshold)
     orth = orthogonal_check(
-        outcome,
+        outcome_series,
         rep_features,
-        controls,
+        control_map,
         label=label,
         n_perm=n_perm_orth,
         seed=seed,
@@ -3225,8 +3316,8 @@ def feature_analysis(
         if name in bucket_targets
     }
     buckets = bucket_scan(
-        outcome,
-        {name: features[name] for name in bucket_targets},
+        outcome_series,
+        {name: feature_map[name] for name in bucket_targets},
         n_buckets=n_buckets,
         bucket_edges=bucket_edges_kept or None,
         min_bucket_n=min_bucket_n,
@@ -3236,12 +3327,12 @@ def feature_analysis(
         label=label,
     )
     interactions = _run_interactions(
-        outcome, features, interaction_pairs, min_cell_n
+        outcome_series, feature_map, interaction_pairs, min_cell_n
     )
     rules = None
     if candidate_rules is not None:
         rules = rule_fit(
-            outcome,
+            outcome_series,
             candidate_rules,
             train_idx=train_idx,
             test_idx=test_idx,
@@ -3250,15 +3341,15 @@ def feature_analysis(
     regime = None
     if regime_indicator is not None:
         regime = regime_scan(
-            outcome,
-            {name: features[name] for name in bucket_targets},
+            outcome_series,
+            {name: feature_map[name] for name in bucket_targets},
             regime_indicator,
             min_regime_n=min_regime_n,
             label=label,
         )
     threshold_reports = _run_threshold_sweeps(
-        outcome,
-        features,
+        outcome_series,
+        feature_map,
         threshold_specs,
         threshold_template,
         train_idx=train_idx,
@@ -3266,9 +3357,9 @@ def feature_analysis(
         min_n_kept=min_n_kept,
     )
     discovery, importance, rule_generation = _run_exploratory_blocks(
-        outcome,
-        features,
-        controls,
+        outcome_series,
+        feature_map,
+        control_map,
         discovery_pool=discovery_pool,
         discovery_min_abs_spearman=discovery_min_abs_spearman,
         importance_model=importance_model,

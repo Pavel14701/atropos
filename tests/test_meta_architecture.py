@@ -24,6 +24,7 @@ ASSERTING_DEMO_MODULES = [
     "bootstrap_ci",
     "cost_model",
     "cross_sectional",
+    "data_contract",
     "ensemble_pipeline",
     "evaluation_metrics",
     "feature_scan",
