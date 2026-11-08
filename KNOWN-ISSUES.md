@@ -10,7 +10,7 @@ Structure: **behavioral facts** (§4) + **by design, not closeable**
 §10) + **migration note, permanent** (§9).
 Known issues in the strict sense — an open code bug — none; everything
 here is a documented property, a deliberate choice, or a tracked gap
-with its release condition. Last verified: 2781 passed /
+with its release condition. Last verified: 2812 passed /
 18 skipped / 2 xfailed.
 
 ## 1. Eighteen skipped tests — four documented groups

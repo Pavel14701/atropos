@@ -25,14 +25,20 @@
   tombstones by `killed_by_stage`: 3 = robustness battery (now
   `ROBUSTNESS_DEATH` / `PLACEBO_VIOLATION`), 4 + an OVERFIT marker =
   `OVERFIT_DEATH` (KNOWN-ISSUES §9).
-- Test suite: 2781 → 2794 passed, 18 skipped, 2 xfailed — every new
-  verdict mapping is pinned (mutation-verified by the orchestrator).
+- Test suite: 2781 → 2794 → **2812 passed**, 18 skipped, 2 xfailed —
+  every new verdict mapping is pinned (mutation-verified by the
+  orchestrator); the orthogonal module adds 16 tests (9 planted +
+  2 parametrized degenerate + 3 constant-preds parametrized +
+  threshold boundary + schema freeze both kinds).
 - Battery OVERALL "DEAD" split by the baseline row (post-2794 fix):
   baseline FAIL with no active days or mean ≤ 0 → proven-absence
   `DEAD`; a positive-but-insignificant baseline taken down by the
   attacks → `ROBUSTNESS_DEATH` / NEEDS_ANALYSIS with the baseline
   stat in the interpretation (the glue read "proven no-edge" for a
   book with 71-266 active days).
+- Orthogonal feature check on C''-trade: zone_width_atr (t −9.33)
+  and retest_delay (t −9.92) highly significant beyond momentum —
+  the OB zone-selection geometry carries real information.
 
 ## 1.2.0 — independent-audit fix waves (review + defect registry)
 
