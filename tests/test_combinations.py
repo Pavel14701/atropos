@@ -7,7 +7,7 @@ generated.  Each row = (combination, exit mechanism, sizing).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -97,6 +97,12 @@ def _md() -> MaterializedData:
     )
 
 
+_SIZING_MODES: dict[str, Literal["fixed", "risk_per_trade"]] = {
+    "fixed": "fixed",
+    "risk_per_trade": "risk_per_trade",
+}
+
+
 def _leg_for(combination: str, mechanism: str, sizing: str) -> LegSpec:
     """A long leg configured for one matrix row.
 
@@ -115,7 +121,7 @@ def _leg_for(combination: str, mechanism: str, sizing: str) -> LegSpec:
         entry=EntrySpec(Compare("mom", ">", 0.0)),
         exit=exits,
         instrument=InstrumentRef("field", {"field": "close"}),
-        sizing=SizingSpec(mode=sizing, param=1.0),
+        sizing=SizingSpec(mode=_SIZING_MODES[sizing], param=1.0),
         features_used=("mom", "atr", "close"),
         rationale=(
             f"cross-mode matrix row: {combination}/{mechanism}/{sizing}"

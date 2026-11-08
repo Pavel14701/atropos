@@ -115,10 +115,10 @@ def test_lookahead_offset_shifts_and_verifies() -> None:
     # sees label Jan 11; offset -1d -> decision Jan 10 already sees it
     boundary = pd.Timestamp("2024-01-11", tz="UTC")
     earlier = pd.Timestamp("2024-01-10", tz="UTC")
-    assert float(base.features.loc[boundary, "mom"]) == 7.0
-    assert float(base.features.loc[earlier, "mom"]) == 1.0
-    assert float(shifted.features.loc[earlier, "mom"]) == 7.0
-    assert float(shifted.features.loc[boundary, "mom"]) == 1.0
+    assert base.features.loc[boundary, "mom"] == 7.0
+    assert base.features.loc[earlier, "mom"] == 1.0
+    assert shifted.features.loc[earlier, "mom"] == 7.0
+    assert shifted.features.loc[boundary, "mom"] == 1.0
 
 
 def test_lag_applied_after_asof() -> None:
