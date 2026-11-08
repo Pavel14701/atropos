@@ -26,6 +26,12 @@ The functions, in pipeline order:
 * :func:`rule_fit` -- train/test evaluation of caller-built rules
   (masks): delta kept-vs-dropped on both splits, honest
   ``valid / insufficient_n / unstable`` statuses.
+* :func:`regime_scan` -- per-regime feature profiles against a
+  PREREGISTERED indicator: an unfrozen indicator reads
+  ``REGIME_UNVERIFIED`` and can never upgrade a cell to STRONG.
+* :func:`threshold_scan` -- a threshold sweep over a parsed (never
+  evaluated) rule template, with the plateau-vs-edge reading that
+  separates a wide ridge from a pick-one-number spike.
 
 The orchestrator :func:`feature_analysis` chains the scans in the
 order above and classifies every representative feature into one
@@ -51,11 +57,11 @@ Recommended actions: ``build_rule`` (STRONG),
 (PROXY/NOISE), ``manual_review_required`` (EXPLORATORY).
 
 Checkpoint note: this file lands in three verified checkpoints --
-A1 (this state: the five functions above + the orchestrator skeleton
-through rule_fit + classification), A2 (``regime_scan`` +
-``threshold_scan``), A3 (``auto_discovery``, ``feature_importance``,
+A1 (the five defensive/analysis functions + the orchestrator
+skeleton), A2 (``regime_scan`` + ``threshold_scan``, this state),
+A3 (``auto_discovery``, ``feature_importance``,
 ``auto_rule_generation`` -- all EXPLORATORY by construction).  The
-report schema below is FROZEN at A1: the checkpoint-A2/A3 keys exist
+report schema below is FROZEN at A1: the checkpoint-A3 keys exist
 from the start and stay ``None`` until their functions land.
 
 Run ``python -m atropos.feature_scan`` for a synthetic demo.
@@ -103,7 +109,9 @@ __all__ = [
     "feature_analysis",
     "interaction_scan",
     "missingness_scan",
+    "regime_scan",
     "rule_fit",
+    "threshold_scan",
 ]
 
 
@@ -134,10 +142,24 @@ _SPEAR_P_GATE = 0.05
 _N_BOOT = 1000
 """Bootstrap draws per bucket CI (chunked, memory-bounded)."""
 
-_T_STRONG_DEFAULT = 2.5
-"""Fallback |t| gate when a caller passes ``orthogonal_threshold``."""
+_MAX_THRESHOLDS = 7
+"""Prereg cap on a threshold sweep length (the pick-a-number guard)."""
 
-_MAX_CLUSTER_THRESHOLD = 1.0 - 1e-9
+_PLATEAU_SHARE = 0.7
+"""Edge delta (vs the sweep max) that reads as plateau, not spike."""
+
+_EDGE_SHARE = 0.3
+"""Edge delta (vs the sweep max) below which the sweep reads edge."""
+
+_ALLOWED_OPS = ("<", "<=", ">", ">=")
+"""The only comparison operators a rule template may use."""
+
+_OP_FUNCS = {
+    "<": np.less,
+    "<=": np.less_equal,
+    ">": np.greater,
+    ">=": np.greater_equal,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -536,13 +558,22 @@ def _validate_fraction(name: str, value: float) -> float:
 
 def _to_series(values: Any, name: str) -> pd.Series:
     """One named float Series view of any 1-D pandas/numpy input."""
+    return _to_raw_series(values, name).astype(float)
+
+
+def _to_raw_series(values: Any, name: str) -> pd.Series:
+    """One named Series view of any 1-D input, dtype preserved.
+
+    Regime labels may be strings ("trend"/"chop") -- only the scans'
+    numeric inputs go through the float cast in :func:`_to_series`.
+    """
     frame = frameify(values, name)
     if frame.shape[1] != 1:
         raise ValueError(
             f"input {name!r} must be a single column, got"
             f" {frame.shape[1]} columns"
         )
-    series = frame.iloc[:, 0].astype(float)
+    series = frame.iloc[:, 0]
     series.name = name
     return series
 
@@ -1641,23 +1672,500 @@ def _rule_entry(
 
 
 # ---------------------------------------------------------------------------
+# 6. regime_scan (checkpoint A2)
+# ---------------------------------------------------------------------------
+def regime_scan(
+    outcome: Any,
+    features: dict[str, Any],
+    regime_indicator: dict[str, Any],
+    *,
+    min_regime_n: int = 100,
+    label: str = "unnamed",
+) -> RegimeScanReport:
+    """Is a feature's effect regime-stable, or does the sign flip?
+
+    Splits the aligned sample by the caller's regime indicator (a
+    dict carrying ``name``, ``definition``, ``prereg_hash`` and the
+    ``values`` Series) and profiles every feature inside every regime
+    value: n, row-level Spearman, and the monotone verdict.  The
+    indicator MUST be preregistered (``prereg_hash``): an unfrozen
+    indicator reads ``REGIME_UNVERIFIED`` -- cells are computed but
+    can never upgrade a classification to STRONG.  Regimes with fewer
+    than ``min_regime_n`` rows are excluded from the sign comparison
+    with a note.
+
+    Args:
+        outcome: response series.
+        features: mapping feature name -> single column.
+        regime_indicator: ``{name, definition, prereg_hash, values}``;
+            ``values`` is the regime Series (labels may be numeric or
+            string), index-aligned with the outcome.
+        min_regime_n: minimum rows for a regime to qualify for the
+            sign comparison; at least 1.
+        label: free-text tag stored under ``report["label"]``.
+
+    Returns:
+        :class:`RegimeScanReport`; ``same_sign[feature]`` is the
+        pairwise sign test over qualifying regimes, ``strongest_regime``
+        / ``weakest_regime`` name the regimes by |spearman|.
+
+    Raises:
+        ValueError: if the indicator dict misses a key, has an empty
+            name/definition, ``min_regime_n`` < 1, or an input is not
+            a single column.
+
+    Example::
+
+        >>> import numpy as np
+        >>> import pandas as pd
+        >>> rng = np.random.default_rng(42)
+        >>> idx = pd.RangeIndex(400)
+        >>> feat = pd.Series(rng.standard_normal(400), index=idx)
+        >>> out = pd.Series(2.0 * feat + rng.standard_normal(400),
+        ...                 index=idx)
+        >>> regime = pd.Series(np.where(rng.random(400) < 0.5, 0, 1),
+        ...                    index=idx)
+        >>> report = regime_scan(
+        ...     out, {"feat": feat},
+        ...     {"name": "coin", "definition": "independent coin",
+        ...      "prereg_hash": "hash", "values": regime},
+        ...     min_regime_n=50,
+        ... )
+        >>> report["same_sign"]["feat"]
+        True
+    """
+    for key in ("name", "definition", "prereg_hash", "values"):
+        if key not in regime_indicator:
+            raise ValueError(
+                f"regime_indicator must carry {key!r}; got keys"
+                f" {sorted(regime_indicator)}"
+            )
+    if not regime_indicator["name"] or not regime_indicator["definition"]:
+        raise ValueError(
+            "regime_indicator name and definition must be non-empty"
+        )
+    validate_int("min_regime_n", min_regime_n, minimum=1)
+    prereg_hash = regime_indicator["prereg_hash"]
+    notes: list[str] = []
+    if prereg_hash:
+        status = "OK"
+    else:
+        status = "REGIME_UNVERIFIED"
+        notes.append(
+            "regime indicator carries no prereg_hash: status"
+            " REGIME_UNVERIFIED -- cells can never upgrade a"
+            " classification to STRONG"
+        )
+    outcome_series = _to_series(outcome, "outcome")
+    values_series = _to_raw_series(regime_indicator["values"], "regime_value")
+    entries: dict[str, dict[str, RegimeEntry]] = {}
+    same_sign: dict[str, bool] = {}
+    strongest_regime: dict[str, str] = {}
+    weakest_regime: dict[str, str] = {}
+    for name, feature_value in features.items():
+        feature_series = _to_series(feature_value, name)
+        frame = pd.concat(
+            [outcome_series, feature_series, values_series],
+            axis=1,
+            join="inner",
+        ).dropna()
+        aligned_out = frame["outcome"].to_numpy(dtype=float)
+        aligned_feat = frame[name].to_numpy(dtype=float)
+        labels = frame["regime_value"].to_numpy()
+        feature_entries: dict[str, RegimeEntry] = {}
+        for label_value in sorted(set(labels.tolist()), key=str):
+            mask = labels == label_value
+            slice_rho, slice_p = _spearman_pair(
+                aligned_feat[mask], aligned_out[mask]
+            )
+            feature_entries[str(label_value)] = RegimeEntry(
+                n=int(mask.sum()),
+                spearman=slice_rho,
+                spearman_p=slice_p,
+                monotone=bool(
+                    np.isfinite(slice_rho)
+                    and np.isfinite(slice_p)
+                    and slice_p <= _SPEAR_P_GATE
+                ),
+            )
+        qualifying = [
+            regime_key
+            for regime_key, entry in feature_entries.items()
+            if entry["n"] >= min_regime_n
+        ]
+        excluded = [
+            regime_key
+            for regime_key, entry in feature_entries.items()
+            if entry["n"] < min_regime_n
+        ]
+        if excluded:
+            notes.append(
+                f"{name}: regimes excluded from the sign comparison"
+                f" (below min_regime_n = {min_regime_n}): {excluded}"
+            )
+        if len(qualifying) < 2:
+            notes.append(
+                f"{name}: fewer than 2 qualifying regimes; same_sign"
+                " reads False (not testable, not a flip)"
+            )
+            same_sign[name] = False
+            strongest_regime[name] = ""
+            weakest_regime[name] = ""
+        else:
+            rhos = {
+                regime_key: feature_entries[regime_key]["spearman"]
+                for regime_key in qualifying
+            }
+            signs = {
+                np.sign(value)
+                for value in rhos.values()
+                if np.isfinite(value)
+            }
+            same_sign[name] = bool(len(signs) == 1 and signs)
+            strongest_regime[name] = max(
+                qualifying, key=lambda key: abs(rhos[key])
+            )
+            weakest_regime[name] = min(
+                qualifying, key=lambda key: abs(rhos[key])
+            )
+        entries[name] = feature_entries
+    return RegimeScanReport(
+        label=label,
+        regime_name=str(regime_indicator["name"]),
+        regime_definition=str(regime_indicator["definition"]),
+        prereg_hash=prereg_hash if prereg_hash else None,
+        status=status,
+        min_regime_n=min_regime_n,
+        features=entries,
+        same_sign=same_sign,
+        strongest_regime=strongest_regime,
+        weakest_regime=weakest_regime,
+        notes=notes,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 7. threshold_scan (checkpoint A2)
+# ---------------------------------------------------------------------------
+def _parse_rule_template(
+    rule_template: str, feature_name: str
+) -> tuple[str, Any]:
+    """Parse ``"<feature> <op> {t}"`` without ever evaluating a string.
+
+    Returns the comparison operator's numpy function and the rule's
+    feature token.  Every deviation (missing ``{t}``, unknown
+    operator, feature token mismatch) raises ValueError -- a template
+    is parsed, never ``eval``-ed.
+    """
+    if "{t}" not in rule_template:
+        raise ValueError(
+            f"rule_template must contain the {{t}} placeholder:"
+            f" {rule_template!r}"
+        )
+    prefix_tokens = rule_template.partition("{t}")[0].split()
+    if len(prefix_tokens) < 2:
+        raise ValueError(
+            "rule_template must read '<feature> <op> {t}':"
+            f" {rule_template!r}"
+        )
+    op = prefix_tokens[-1]
+    feature_token = prefix_tokens[-2]
+    if op not in _ALLOWED_OPS:
+        raise ValueError(
+            f"rule_template operator must be one of {list(_ALLOWED_OPS)},"
+            f" got {op!r}"
+        )
+    if feature_token != feature_name:
+        raise ValueError(
+            f"rule_template names feature {feature_token!r} but the"
+            f" supplied feature is {feature_name!r}"
+        )
+    return op, _OP_FUNCS[op]
+
+
+def threshold_scan(
+    outcome: Any,
+    feature: Any,
+    rule_template: str,
+    threshold_values: list[float],
+    *,
+    feature_name: str,
+    train_idx: Any,
+    test_idx: Any,
+    min_n_kept: int = 100,
+    label: str = "unnamed",
+) -> ThresholdScanReport:
+    """Sweep one threshold over a fixed rule shape, train then test.
+
+    The template pins the shape (``"<feature> <op> {t}"``, parsed,
+    never evaluated); each threshold builds the rule mask on the
+    aligned sample and reuses the :func:`rule_fit` ladder
+    (``min_n_kept`` floors both splits).  The sweep-level reading:
+    ``plateau_detected`` when both edge deltas hold
+    :data:`_PLATEAU_SHARE` of the best ``delta_test`` (a wide ridge,
+    safe to ship), ``edge_detected`` when an edge falls below
+    :data:`_EDGE_SHARE` of it (a spike -- the pick-one-number
+    overfit signature), and ``optimal_range`` the contiguous
+    >= share run around the argmax.
+
+    Args:
+        outcome: response series WITHOUT NaN (aligned with feature).
+        feature: the feature column the template compares against.
+        rule_template: format string ``"<feature> <op> {t}"``.
+        threshold_values: the preregistered thresholds; at most
+            :data:`_MAX_THRESHOLDS`, at least 2.
+        feature_name: the feature's declared name (validated against
+            the template's feature token).
+        train_idx: positional train split.
+        test_idx: positional test split (must not overlap train).
+        min_n_kept: minimum kept rows per split for ``valid``.
+        label: free-text tag stored under ``report["label"]``.
+
+    Returns:
+        :class:`ThresholdScanReport` with one point per threshold.
+
+    Raises:
+        ValueError: on template deviations (see
+            :func:`_parse_rule_template`), a sweep outside
+            [2, _MAX_THRESHOLDS], NaN outcome, or bad splits (the
+            :func:`rule_fit` guards).
+
+    Example::
+
+        >>> import numpy as np
+        >>> import pandas as pd
+        >>> rng = np.random.default_rng(42)
+        >>> rows = np.arange(600)
+        >>> feat = pd.Series(rng.uniform(0, 1, 600), index=rows)
+        >>> out = pd.Series(
+        ...     np.where(feat < 0.5, 1.0, 0.0)
+        ...     + 0.1 * rng.standard_normal(600), index=rows
+        ... )
+        >>> report = threshold_scan(
+        ...     out, feat, "feat < {t}", [0.3, 0.4, 0.5, 0.6, 0.7],
+        ...     feature_name="feat",
+        ...     train_idx=np.arange(400), test_idx=np.arange(400, 600),
+        ...     min_n_kept=30,
+        ... )
+        >>> report["plateau_detected"], report["edge_detected"]
+        (True, False)
+    """
+    op, op_func = _parse_rule_template(rule_template, feature_name)
+    if len(threshold_values) > _MAX_THRESHOLDS:
+        raise ValueError(
+            f"threshold sweep length {len(threshold_values)} exceeds"
+            f" the prereg cap {_MAX_THRESHOLDS}; freeze fewer values"
+        )
+    if len(threshold_values) < 2:
+        raise ValueError(
+            "threshold sweep needs at least 2 values to read plateau/edge"
+        )
+    validate_int("min_n_kept", min_n_kept, minimum=1)
+    notes: list[str] = []
+    outcome_series = _to_series(outcome, "outcome")
+    feature_series = _to_series(feature, feature_name)
+    frame = pd.concat(
+        [outcome_series, feature_series], axis=1, join="inner"
+    ).dropna()
+    aligned_out = frame["outcome"].to_numpy(dtype=float)
+    aligned_feat = frame[feature_name].to_numpy(dtype=float)
+    train_positions = np.asarray(train_idx, dtype=int).reshape(-1)
+    test_positions = np.asarray(test_idx, dtype=int).reshape(-1)
+    points: list[ThresholdPoint] = []
+    for value in threshold_values:
+        mask = op_func(aligned_feat, float(value))
+        rule_str = rule_template.format(t=repr(float(value)))
+        entry = _rule_entry(
+            rule_str,
+            mask,
+            aligned_out,
+            train_positions,
+            test_positions,
+            min_n_train=min_n_kept,
+            min_n_test=min_n_kept,
+            notes=notes,
+        )
+        points.append(
+            ThresholdPoint(
+                threshold=float(value),
+                rule_str=rule_str,
+                n_train_kept=entry["n_train_kept"],
+                n_test_kept=entry["n_test_kept"],
+                delta_train=entry["delta_train"],
+                delta_test=entry["delta_test"],
+                status=entry["status"],
+            )
+        )
+    finite_deltas = [
+        point["delta_test"]
+        for point in points
+        if np.isfinite(point["delta_test"])
+    ]
+    plateau = False
+    edge = False
+    optimal_range: list[float] | None = None
+    if len(finite_deltas) < 2:
+        notes.append(
+            "fewer than 2 points have a finite delta_test;"
+            " plateau/edge read False (not testable)"
+        )
+    else:
+        max_delta = max(finite_deltas)
+        if max_delta <= 0:
+            notes.append(
+                "no positive delta_test on the sweep; plateau/edge"
+                " read False (the rule shape itself fails on test)"
+            )
+        else:
+            first_delta = finite_deltas[0]
+            last_delta = finite_deltas[-1]
+            plateau = bool(
+                first_delta >= _PLATEAU_SHARE * max_delta
+                and last_delta >= _PLATEAU_SHARE * max_delta
+            )
+            edge = bool(
+                first_delta < _EDGE_SHARE * max_delta
+                or last_delta < _EDGE_SHARE * max_delta
+            )
+            best_pos = finite_deltas.index(max_delta)
+            low_pos = best_pos
+            while (
+                low_pos > 0
+                and finite_deltas[low_pos - 1] >= _PLATEAU_SHARE * max_delta
+            ):
+                low_pos -= 1
+            high_pos = best_pos
+            while (
+                high_pos < len(finite_deltas) - 1
+                and finite_deltas[high_pos + 1] >= _PLATEAU_SHARE * max_delta
+            ):
+                high_pos += 1
+            finite_points = [
+                point for point in points if np.isfinite(point["delta_test"])
+            ]
+            optimal_range = [
+                finite_points[low_pos]["threshold"],
+                finite_points[high_pos]["threshold"],
+            ]
+    return ThresholdScanReport(
+        label=label,
+        feature=feature_name,
+        op=op,
+        rule_template=rule_template,
+        points=points,
+        plateau_detected=plateau,
+        edge_detected=edge,
+        optimal_range=optimal_range,
+        notes=notes,
+    )
+
+
+# ---------------------------------------------------------------------------
 # orchestrator
 # ---------------------------------------------------------------------------
+def _run_interactions(
+    outcome: Any,
+    features: dict[str, Any],
+    interaction_pairs: list[tuple[str, str]] | None,
+    min_cell_n: int,
+) -> dict[str, InteractionScanReport]:
+    """Run every requested pair through :func:`interaction_scan`.
+
+    Both pair names must be declared features and must differ; the
+    report key is ``"nameAxnameB"``.
+    """
+    interactions: dict[str, InteractionScanReport] = {}
+    for first_name, second_name in interaction_pairs or []:
+        if first_name not in features or second_name not in features:
+            raise ValueError(
+                f"interaction pair ({first_name!r}, {second_name!r}):"
+                " both names must be declared features"
+            )
+        if first_name == second_name:
+            raise ValueError(
+                f"interaction pair ({first_name!r}, {second_name!r}):"
+                " a feature cannot interact with itself"
+            )
+        pair_key = f"{first_name}x{second_name}"
+        interactions[pair_key] = interaction_scan(
+            outcome,
+            features[first_name],
+            features[second_name],
+            min_cell_n=min_cell_n,
+            name_a=first_name,
+            name_b=second_name,
+            label=pair_key,
+        )
+    return interactions
+
+
+def _run_threshold_sweeps(
+    outcome: Any,
+    features: dict[str, Any],
+    threshold_specs: dict[str, list[float]] | None,
+    threshold_template: str | None,
+    *,
+    train_idx: Any | None,
+    test_idx: Any | None,
+    min_n_kept: int,
+) -> dict[str, ThresholdScanReport] | None:
+    """Run every spec'd feature through :func:`threshold_scan`.
+
+    The template's ``{feature}`` token is substituted textually (the
+    ``{t}`` placeholder stays for the sweep); ``None`` specs return
+    ``None``; specs without a frozen split raise.
+    """
+    if threshold_specs is None:
+        return None
+    if train_idx is None or test_idx is None:
+        raise ValueError(
+            "threshold_specs requires BOTH train_idx and test_idx"
+            " (the sweep deltas are train/test deltas)"
+        )
+    template_format = threshold_template or "{feature} < {t}"
+    reports: dict[str, ThresholdScanReport] = {}
+    for name, values in threshold_specs.items():
+        if name not in features:
+            raise ValueError(
+                f"threshold_specs names {name!r}, which is not a"
+                " declared feature"
+            )
+        sweep_template = template_format.replace("{feature}", name)
+        reports[name] = threshold_scan(
+            outcome,
+            features[name],
+            sweep_template,
+            values,
+            feature_name=name,
+            train_idx=train_idx,
+            test_idx=test_idx,
+            min_n_kept=min_n_kept,
+            label=name,
+        )
+    return reports
+
+
 def _classify_features(
     orth: OrthogonalReport,
     buckets: BucketScanReport,
     clustering: ClusterReport,
     rep_names: list[str],
+    regime: RegimeScanReport | None,
+    *,
     notes: list[str],
 ) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
     """Cells, actions and skip reasons for the representative features.
 
     Ladder: not testable -> NOISE; orthogonal fail (gate or
-    collinearity screen) -> PROXY; pass + monotone ->
-    STRONG_UNVERIFIED (checkpoint A2 upgrades this cell through the
-    regime gate); pass + non-monotone -> SHAPE_UNKNOWN.  Cluster
-    members are pointed at their representative in ``skipped_features``
-    and get no independent cell.
+    collinearity screen) -> PROXY; pass + non-monotone ->
+    SHAPE_UNKNOWN; pass + monotone goes through the regime gate -- a
+    VERIFIED indicator (status ``OK``, two-plus qualifying regimes)
+    splits monotone features into STRONG (monotone in every
+    qualifying regime) vs REGIME_DEPENDENT (monotone in some); any
+    weaker regime setup (absent, UNVERIFIED, under-powered) keeps the
+    cell STRONG_UNVERIFIED.  Cluster members are pointed at their
+    representative in ``skipped_features`` and get no independent
+    cell.
     """
     classification: dict[str, str] = {}
     actions: dict[str, str] = {}
@@ -1680,8 +2188,9 @@ def _classify_features(
             classification[name] = _CELL_SHAPE
             actions[name] = _ACTION_INTERACT
         elif buckets["features"][name]["monotone"]:
-            classification[name] = _CELL_UNVERIFIED
-            actions[name] = _ACTION_PREREG
+            classification[name], actions[name] = _monotone_cell(
+                name, regime, notes
+            )
         else:
             classification[name] = _CELL_SHAPE
             actions[name] = _ACTION_INTERACT
@@ -1693,6 +2202,54 @@ def _classify_features(
         " are pointed at their representative in skipped_features"
     )
     return classification, actions, skipped
+
+
+def _monotone_cell(
+    name: str,
+    regime: RegimeScanReport | None,
+    notes: list[str],
+) -> tuple[str, str]:
+    """Regime-gated cell for one orthogonally-detected monotone feature.
+
+    STRONG demands a VERIFIED indicator (prereg_hash -> status OK)
+    with at least two qualifying regimes in which the feature is
+    monotone; monotone-in-some reads REGIME_DEPENDENT; monotone-in-
+    none (a global effect no single regime carries) falls back to
+    SHAPE_UNKNOWN for interaction investigation; everything weaker
+    stays STRONG_UNVERIFIED.
+    """
+    if regime is None:
+        return _CELL_UNVERIFIED, _ACTION_PREREG
+    if regime["status"] != "OK":
+        notes.append(
+            f"{name}: regime indicator {regime['regime_name']!r} is"
+            f" {regime['status']}; cell stays STRONG_UNVERIFIED"
+        )
+        return _CELL_UNVERIFIED, _ACTION_PREREG
+    regime_flags = regime["features"].get(name, {})
+    qualifying = [
+        regime_key
+        for regime_key, entry in regime_flags.items()
+        if entry["n"] >= regime["min_regime_n"]
+    ]
+    if len(qualifying) < 2:
+        notes.append(
+            f"{name}: fewer than 2 qualifying regimes in verified"
+            f" indicator {regime['regime_name']!r}; cell stays"
+            " STRONG_UNVERIFIED"
+        )
+        return _CELL_UNVERIFIED, _ACTION_PREREG
+    flags = [regime_flags[key]["monotone"] for key in qualifying]
+    if all(flags):
+        return _CELL_STRONG, _ACTION_BUILD
+    if any(flags):
+        return _CELL_REGIME, _ACTION_REGIME_FILTER
+    notes.append(
+        f"{name}: globally monotone but monotone in no single regime;"
+        " cell falls back to SHAPE_UNKNOWN for interaction"
+        " investigation"
+    )
+    return _CELL_SHAPE, _ACTION_INTERACT
 
 
 def feature_analysis(
@@ -1715,6 +2272,11 @@ def feature_analysis(
     candidate_rules: dict[str, Any] | None = None,
     train_idx: Any | None = None,
     test_idx: Any | None = None,
+    regime_indicator: dict[str, Any] | None = None,
+    min_regime_n: int = 100,
+    threshold_specs: dict[str, list[float]] | None = None,
+    threshold_template: str | None = None,
+    min_n_kept: int = 100,
     seed: int = 42,
     label: str = "unnamed",
 ) -> FeatureAnalysisReport:
@@ -1727,16 +2289,21 @@ def feature_analysis(
     ``orthogonal_threshold`` overrides it) -> bucket scan on the
     orthogonally detected features -> interaction scans for the
     requested pairs -> rule fit when candidate rules AND a frozen
-    split are supplied -> classification -> recommended actions.
+    split are supplied -> regime scan when an indicator is supplied
+    (on the detected features) -> threshold sweeps when specs are
+    supplied (requires the frozen split) -> classification ->
+    recommended actions.
 
     Classification (per representative): not testable -> ``NOISE``;
-    orthogonal gate fail -> ``PROXY``; pass + monotone ->
-    ``STRONG_UNVERIFIED`` (no verified regime indicator in this
-    checkpoint); pass + non-monotone -> ``SHAPE_UNKNOWN``.  Cluster
-    members get no independent cell: ``skipped_features`` points them
-    at their representative.  Optional blocks (regime, threshold,
-    discovery, importance, rule generation) land in checkpoints A2/A3
-    and read ``None`` until then.
+    orthogonal gate fail -> ``PROXY``; pass + non-monotone ->
+    ``SHAPE_UNKNOWN``; pass + monotone goes through the regime gate:
+    a VERIFIED indicator (``prereg_hash``, 2+ qualifying regimes)
+    upgrades monotone-in-every-regime features to ``STRONG`` and
+    monotone-in-some to ``REGIME_DEPENDENT``; anything weaker stays
+    ``STRONG_UNVERIFIED``.  Cluster members get no independent cell:
+    ``skipped_features`` points them at their representative.  The
+    discovery/importance/rule-generation blocks land in checkpoint
+    A3 and read ``None`` until then.
 
     Args:
         outcome: response series.
@@ -1760,8 +2327,20 @@ def feature_analysis(
         min_cell_n: power floor per interaction cell.
         candidate_rules: optional rule masks for :func:`rule_fit`;
             requires ``train_idx`` AND ``test_idx``.
-        train_idx: positional train split for ``candidate_rules``.
-        test_idx: positional test split for ``candidate_rules``.
+        train_idx: positional train split for ``candidate_rules`` and
+            the threshold sweeps.
+        test_idx: positional test split (see ``train_idx``).
+        regime_indicator: optional ``{name, definition, prereg_hash,
+            values}`` dict for :func:`regime_scan` (see there); the
+            gate demands ``prereg_hash`` for a STRONG cell.
+        min_regime_n: minimum rows per regime for the sign/monotone
+            comparison.
+        threshold_specs: optional ``{feature: [thresholds]}`` sweeps
+            for :func:`threshold_scan`; requires the frozen split.
+        threshold_template: optional format string with ``{feature}``
+            and ``{t}`` placeholders (default ``"{feature} < {t}"``).
+        min_n_kept: minimum kept rows per split for a ``valid``
+            threshold point.
         seed: non-negative seed threaded into every seeded step.
         label: free-text tag stored under ``report["label"]``.
 
@@ -1795,9 +2374,9 @@ def feature_analysis(
     _validate_fraction("cluster_threshold", cluster_threshold)
     validate_int("seed", seed, minimum=0)
     notes: list[str] = []
-    if (candidate_rules is not None) != (train_idx is not None) or (
-        candidate_rules is not None
-    ) != (test_idx is not None):
+    if candidate_rules is not None and (
+        train_idx is None or test_idx is None
+    ):
         raise ValueError(
             "candidate_rules requires BOTH train_idx and test_idx"
             " (rule_fit has no default split)"
@@ -1861,28 +2440,9 @@ def feature_analysis(
         seed=seed,
         label=label,
     )
-    interactions: dict[str, InteractionScanReport] = {}
-    for first_name, second_name in interaction_pairs or []:
-        if first_name not in features or second_name not in features:
-            raise ValueError(
-                f"interaction pair ({first_name!r}, {second_name!r}):"
-                " both names must be declared features"
-            )
-        if first_name == second_name:
-            raise ValueError(
-                f"interaction pair ({first_name!r}, {second_name!r}):"
-                " a feature cannot interact with itself"
-            )
-        pair_key = f"{first_name}x{second_name}"
-        interactions[pair_key] = interaction_scan(
-            outcome,
-            features[first_name],
-            features[second_name],
-            min_cell_n=min_cell_n,
-            name_a=first_name,
-            name_b=second_name,
-            label=pair_key,
-        )
+    interactions = _run_interactions(
+        outcome, features, interaction_pairs, min_cell_n
+    )
     rules = None
     if candidate_rules is not None:
         rules = rule_fit(
@@ -1892,13 +2452,31 @@ def feature_analysis(
             test_idx=test_idx,
             label=label,
         )
+    regime = None
+    if regime_indicator is not None:
+        regime = regime_scan(
+            outcome,
+            {name: features[name] for name in bucket_targets},
+            regime_indicator,
+            min_regime_n=min_regime_n,
+            label=label,
+        )
+    threshold_reports = _run_threshold_sweeps(
+        outcome,
+        features,
+        threshold_specs,
+        threshold_template,
+        train_idx=train_idx,
+        test_idx=test_idx,
+        min_n_kept=min_n_kept,
+    )
 
     classification, actions, skipped = _classify_features(
-        orth, buckets, clustering, list(rep_features), notes
+        orth, buckets, clustering, list(rep_features), regime, notes=notes
     )
     notes.append(
-        "checkpoint-A2/A3 blocks (regime, threshold, discovery,"
-        " importance, rule generation) not requested; keys stay None"
+        "checkpoint-A3 blocks (discovery, importance, rule generation)"
+        " not requested; keys stay None"
     )
     return FeatureAnalysisReport(
         label=label,
@@ -1911,8 +2489,8 @@ def feature_analysis(
         buckets=buckets,
         interaction=interactions,
         rules=rules,
-        regime=None,
-        threshold=None,
+        regime=regime,
+        threshold=threshold_reports,
         discovery=None,
         importance=None,
         rule_generation=None,

@@ -14,6 +14,8 @@ schema freeze; A2 adds 10-14 (regime + threshold), A3 adds 15-22
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -25,6 +27,7 @@ from atropos.feature_scan import (
     interaction_scan,
     missingness_scan,
     rule_fit,
+    threshold_scan,
 )
 
 _N_ROWS = 800
@@ -573,6 +576,346 @@ def test_shape_unknown_classification() -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# Checkpoint A2 -- regime + threshold
+# ---------------------------------------------------------------------------
+def _regime_indicator(
+    values: np.ndarray,
+    *,
+    name: str = "phase",
+    definition: str = "planted phase split",
+    prereg_hash: str | None = "frozen-hash-1",
+) -> dict[str, Any]:
+    """Pack a regime indicator dict for the orchestrator."""
+    return {
+        "name": name,
+        "definition": definition,
+        "prereg_hash": prereg_hash,
+        "values": pd.Series(values, index=pd.RangeIndex(len(values))),
+    }
+
+
+def test_regime_flip_detected() -> None:
+    """A regime flip classifies REGIME_DEPENDENT (test 10).
+
+    World: the effect exists ONLY on the interleaved 'trend' rows
+    (every second row carries 3x the feature effect; the 'chop' rows
+    are pure noise).  Interleaving keeps every sample third carrying
+    the effect, so the orthogonal thirds gate passes while the
+    per-regime split still separates them.  With a verified indicator
+    the feature is globally detected + monotone, monotone in 'trend'
+    but not in 'chop' -> REGIME_DEPENDENT with the regime-filter
+    action.  Mutation fact: a classification that reads only
+    same_sign (the chop phase's tiny spearman can carry any sign) --
+    or skips the per-regime monotone flags -- upgrades this world to
+    STRONG and fails the test.
+    """
+    real, _unused_null, control, noise = _draws(42, 4)
+    phase = np.where(np.arange(_N_ROWS) % 2 == 0, "trend", "chop")
+    outcome_values = 3.0 * real * (phase == "trend") + 0.4 * control + noise
+    idx = pd.RangeIndex(_N_ROWS)
+    report = feature_analysis(
+        pd.Series(outcome_values, index=idx),
+        {"alpha": pd.Series(real, index=idx)},
+        {"c1": pd.Series(control, index=idx)},
+        regime_indicator=_regime_indicator(
+            phase,
+            definition="first half trend, second half chop",
+        ),
+        min_regime_n=100,
+        n_perm_orth=25,
+        n_perm_bucket=25,
+        min_bucket_n=0,
+        label="regime-flip",
+    )
+    assert report["regime"] is not None
+    assert report["regime"]["status"] == "OK"
+    flags = report["regime"]["features"]["alpha"]
+    assert sorted(flags) == ["chop", "trend"]
+    assert flags["trend"]["monotone"] is True
+    assert flags["chop"]["monotone"] is False
+    assert report["classification"]["alpha"] == "REGIME_DEPENDENT"
+    assert report["recommended_actions"]["alpha"] == (
+        "build_rule_with_regime_filter"
+    )
+
+
+def test_unverified_regime_not_strong() -> None:
+    """An unfrozen indicator can never upgrade to STRONG (test 11).
+
+    World: the feature works in BOTH regimes (stable), but the
+    indicator carries no prereg_hash.  Pins: regime status
+    REGIME_UNVERIFIED, the note names the hash requirement, and the
+    cell stays STRONG_UNVERIFIED even though every per-regime flag is
+    monotone.  Mutation fact: assigning STRONG on all-monotone flags
+    WITHOUT checking the indicator's status fails the first
+    classification assert.
+    """
+    real, _unused_null, control, noise = _draws(42, 4)
+    rng = np.random.default_rng(45)
+    phase = np.where(rng.random(_N_ROWS) < 0.5, 0, 1)
+    outcome_values = 2.0 * real + 0.4 * control + noise
+    idx = pd.RangeIndex(_N_ROWS)
+    report = feature_analysis(
+        pd.Series(outcome_values, index=idx),
+        {"alpha": pd.Series(real, index=idx)},
+        {"c1": pd.Series(control, index=idx)},
+        regime_indicator=_regime_indicator(
+            phase.astype(float), prereg_hash=None
+        ),
+        min_regime_n=100,
+        n_perm_orth=25,
+        n_perm_bucket=25,
+        min_bucket_n=0,
+        label="unverified-regime",
+    )
+    assert report["regime"] is not None
+    assert report["regime"]["status"] == "REGIME_UNVERIFIED"
+    assert report["regime"]["prereg_hash"] is None
+    flags = report["regime"]["features"]["alpha"]
+    assert all(entry["monotone"] for entry in flags.values())
+    assert report["classification"]["alpha"] == "STRONG_UNVERIFIED"
+    assert report["recommended_actions"]["alpha"] == (
+        "prereg_regime_indicator_then_retest"
+    )
+    assert any(
+        "REGIME_UNVERIFIED" in note and "alpha" in note
+        for note in report["notes"]
+    )
+
+
+def test_regime_min_n_guard() -> None:
+    """A starved regime is excluded, not silently pooled (test 12).
+
+    World: stable effect, three regimes (300 / 400 / 100 rows), floor
+    at 150.  Pins: the third regime gets its entry (with its real n)
+    but is excluded from the sign comparison via an explicit note,
+    and the two qualifying regimes still upgrade the cell to STRONG.
+    Mutation fact: dropping the min_n guard (or the exclusion note)
+    fails the note/qualifying asserts.
+    """
+    real, _unused_null, control, noise = _draws(42, 4)
+    phase = np.where(
+        np.arange(_N_ROWS) < 300,
+        0.0,
+        np.where(np.arange(_N_ROWS) < 700, 1.0, 2.0),
+    )
+    outcome_values = 2.0 * real + 0.4 * control + noise
+    idx = pd.RangeIndex(_N_ROWS)
+    report = feature_analysis(
+        pd.Series(outcome_values, index=idx),
+        {"alpha": pd.Series(real, index=idx)},
+        {"c1": pd.Series(control, index=idx)},
+        regime_indicator=_regime_indicator(phase),
+        min_regime_n=150,
+        n_perm_orth=25,
+        n_perm_bucket=25,
+        min_bucket_n=0,
+        label="regime-min-n",
+    )
+    assert report["regime"] is not None
+    flags = report["regime"]["features"]["alpha"]
+    assert sorted(flags) == ["0.0", "1.0", "2.0"]
+    assert flags["2.0"]["n"] == 100
+    assert any(
+        "regimes excluded" in note and "'2.0'" in note
+        for note in report["regime"]["notes"]
+    )
+    assert report["classification"]["alpha"] == "STRONG"
+    assert report["recommended_actions"]["alpha"] == "build_rule"
+
+
+def test_strong_classification() -> None:
+    """Verified regime + stable effect upgrades the cell to STRONG (24).
+
+    World: the feature works in both phases of an independent coin
+    split, the indicator carries a prereg_hash.  Pins: status OK, the
+    STRONG cell, the build_rule action.  Mutation fact: downgrading
+    STRONG to STRONG_UNVERIFIED unconditionally (ignoring the verified
+    flags) -- or gating on the indicator's presence instead of its
+    status -- fails the cell/action asserts.
+    """
+    real, _unused_null, control, noise = _draws(42, 4)
+    rng = np.random.default_rng(45)
+    phase = np.where(rng.random(_N_ROWS) < 0.5, "calm", "storm")
+    outcome_values = 2.0 * real + 0.4 * control + noise
+    idx = pd.RangeIndex(_N_ROWS)
+    report = feature_analysis(
+        pd.Series(outcome_values, index=idx),
+        {"alpha": pd.Series(real, index=idx)},
+        {"c1": pd.Series(control, index=idx)},
+        regime_indicator=_regime_indicator(
+            phase, name="vol_phase", definition="independent coin flip"
+        ),
+        min_regime_n=100,
+        n_perm_orth=25,
+        n_perm_bucket=25,
+        min_bucket_n=0,
+        label="strong-world",
+    )
+    assert report["regime"] is not None
+    assert report["regime"]["status"] == "OK"
+    assert report["regime"]["regime_name"] == "vol_phase"
+    assert report["classification"]["alpha"] == "STRONG"
+    assert report["recommended_actions"]["alpha"] == "build_rule"
+
+
+def test_threshold_plateau_detected() -> None:
+    """A wide ridge reads plateau and not edge (test 13).
+
+    World: outcome rewards feat < 0.65; the sweep sits ABOVE the
+    boundary (0.7..0.9), so every threshold keeps most of the reward
+    and the deltas fall off gently -- both edges hold >= 70% of the
+    best delta_test.  Pins: plateau True, edge False, optimal_range
+    spanning the whole sweep, every point valid; the orchestrator
+    path (threshold_specs + template with {feature}/{t}) reproduces
+    the same verdict.  Mutation fact: flipping the plateau share
+    (0.7 -> 0.9) makes the last edge fall short and fails the test.
+    """
+    feat = _uniform(42)
+    _unused, noise = _draws(43, 2)
+    outcome_values = 1.0 * (feat < 0.65) + 0.1 * noise
+    idx = pd.RangeIndex(_N_ROWS)
+    report = threshold_scan(
+        pd.Series(outcome_values, index=idx),
+        pd.Series(feat, index=idx),
+        "feat < {t}",
+        [0.7, 0.75, 0.8, 0.85, 0.9],
+        feature_name="feat",
+        train_idx=np.arange(500),
+        test_idx=np.arange(500, _N_ROWS),
+        min_n_kept=30,
+        label="plateau",
+    )
+    assert report["feature"] == "feat"
+    assert report["op"] == "<"
+    assert all(point["status"] == "valid" for point in report["points"])
+    assert report["plateau_detected"] is True
+    assert report["edge_detected"] is False
+    assert report["optimal_range"] == [0.7, 0.9]
+    orchestrated = feature_analysis(
+        pd.Series(outcome_values, index=idx),
+        {"feat": pd.Series(feat, index=idx)},
+        {"c1": pd.Series(noise, index=idx)},
+        threshold_specs={"feat": [0.7, 0.8, 0.9]},
+        threshold_template="{feature} < {t}",
+        train_idx=np.arange(500),
+        test_idx=np.arange(500, _N_ROWS),
+        min_n_kept=30,
+        n_perm_orth=25,
+        n_perm_bucket=25,
+        min_bucket_n=0,
+        label="plateau-orchestrated",
+    )
+    assert orchestrated["threshold"] is not None
+    sweep = orchestrated["threshold"]["feat"]
+    assert sweep["plateau_detected"] is True
+    assert sweep["op"] == "<"
+
+
+def test_threshold_edge_detected() -> None:
+    """A single-threshold spike reads edge and not plateau (test 14).
+
+    World: the reward lives in a narrow band (0.4 < feat < 0.6) with
+    penalty zones at both tails; deltas over [0.2, 0.4, 0.6, 0.8]
+    rise monotonically to the LAST threshold (+1.0) while the first
+    edge sits at -1.0.  Pins: edge True, plateau False,
+    optimal_range collapsing to the single spike threshold.
+    Mutation fact: an edge rule that compares the MAX edge instead
+    of the FIRST -- or drops the negative-delta branch -- misses the
+    -1.0 leading edge and fails the test.
+    """
+    feat = _uniform(42)
+    _unused, noise = _draws(43, 2)
+    outcome_values = (
+        1.0 * ((feat > 0.4) & (feat < 0.6))
+        - 1.0 * (feat <= 0.2)
+        - 1.0 * (feat >= 0.8)
+        + 0.15 * noise
+    )
+    idx = pd.RangeIndex(_N_ROWS)
+    report = threshold_scan(
+        pd.Series(outcome_values, index=idx),
+        pd.Series(feat, index=idx),
+        "feat < {t}",
+        [0.2, 0.4, 0.6, 0.8],
+        feature_name="feat",
+        train_idx=np.arange(500),
+        test_idx=np.arange(500, _N_ROWS),
+        min_n_kept=30,
+        label="edge",
+    )
+    deltas = [point["delta_test"] for point in report["points"]]
+    assert deltas[-1] == max(deltas)
+    assert deltas[0] < 0.0
+    assert report["edge_detected"] is True
+    assert report["plateau_detected"] is False
+    assert report["optimal_range"] == [0.8, 0.8]
+
+
+def test_threshold_guards() -> None:
+    """Template and sweep guards fail loudly (guards for 13/14).
+
+    Pins: a template without {t}, an unknown operator, a feature
+    token mismatch, an over-cap sweep (8 > 7) and an under-length
+    sweep (1 < 2) all raise ValueError.  Mutation fact: dropping any
+    guard makes the corresponding block silently accept garbage.
+    """
+    feat = _uniform(42)
+    outcome = pd.Series(feat, index=pd.RangeIndex(_N_ROWS))
+    feature_col = pd.Series(feat, index=pd.RangeIndex(_N_ROWS))
+    with pytest.raises(ValueError, match="placeholder"):
+        threshold_scan(
+            outcome,
+            feature_col,
+            "feat <",
+            [0.3, 0.6],
+            feature_name="feat",
+            train_idx=np.arange(500),
+            test_idx=np.arange(500, _N_ROWS),
+        )
+    with pytest.raises(ValueError, match="operator must be"):
+        threshold_scan(
+            outcome,
+            feature_col,
+            "feat == {t}",
+            [0.3, 0.6],
+            feature_name="feat",
+            train_idx=np.arange(500),
+            test_idx=np.arange(500, _N_ROWS),
+        )
+    with pytest.raises(ValueError, match="names feature"):
+        threshold_scan(
+            outcome,
+            feature_col,
+            "other > {t}",
+            [0.3, 0.6],
+            feature_name="feat",
+            train_idx=np.arange(500),
+            test_idx=np.arange(500, _N_ROWS),
+        )
+    with pytest.raises(ValueError, match="prereg cap"):
+        threshold_scan(
+            outcome,
+            feature_col,
+            "feat < {t}",
+            [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
+            feature_name="feat",
+            train_idx=np.arange(500),
+            test_idx=np.arange(500, _N_ROWS),
+        )
+    with pytest.raises(ValueError, match="at least 2"):
+        threshold_scan(
+            outcome,
+            feature_col,
+            "feat < {t}",
+            [0.5],
+            feature_name="feat",
+            train_idx=np.arange(500),
+            test_idx=np.arange(500, _N_ROWS),
+        )
+
+
 def test_feature_analysis_schema() -> None:
     """The FeatureAnalysisReport key set is frozen (schema guard).
 
@@ -602,4 +945,4 @@ def test_feature_analysis_schema() -> None:
     assert report["importance"] is None
     assert report["rule_generation"] is None
     assert report["rules"] is None
-    assert any("A2/A3" in note for note in report["notes"])
+    assert any("A3" in note for note in report["notes"])
