@@ -41,6 +41,8 @@ Python 3.12; numpy/pandas/scipy/scikit-learn (lightgbm optional for the
 Fresh repo? `atropos init` generates the hypothesis workspace
 (`GRAVEYARD.md`, `hypotheses/INDEX.csv`) — existing files are never overwritten.
 
+> **Name note:** the DISTRIBUTION is `atropos-quant` (`pip install atropos-quant`), the IMPORT is `atropos` (`from atropos import ...`) -- same split as scikit-learn/sklearn or beautifulsoup4/bs4.  The CLI command is `atropos-quant` (the plain `atropos` command belongs to an unrelated bioinformatics package).
+
 ## First verdict in five minutes
 
 A "fresh" signal that is really just observed momentum plus noise —

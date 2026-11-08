@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.3.0 — distribution rename + coverage hardening (UNRELEASED)
+
+- DISTRIBUTION RENAMED: `atropos` -> `atropos-quant` (the name is
+  taken by an unrelated bioinformatics tool).  The IMPORT stays
+  `atropos` -- `from atropos import ...` is unchanged; the CLI
+  command moves to `atropos-quant` (the plain `atropos` command
+  would collide with the bioinformatics package).  Negative pin:
+  `import atropos_quant` raises ImportError, on purpose.
+- Accumulates the never-released 1.2.1 work below (verdict
+  taxonomy, data contract, legs, composition + carry) plus wave
+  v15: pytest-cov baseline (87.78% line / 85.4% branch),
+  coverage-driven error-path tests, property tests, cross-mode
+  matrix, pdoc API-regen freshness check in CI.
+
 ## 1.2.1 — verdict taxonomy
 
 - composition + carry (wave v14): Book.walk_portfolio — the

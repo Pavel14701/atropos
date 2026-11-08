@@ -253,3 +253,18 @@ is best-effort.  The misses are concentrated in validation ladders
 and the maker/backtest variants -- exactly the error paths V-2
 targets -- NOT in the verdict-critical chain (cli.py is 99%,
 cross_sectional 96%, ml_training 98%).
+
+## Distribution rename decision (wave v15 — 2026-11-08)
+
+Decision 0 (Option A): the DISTRIBUTION is renamed to
+`atropos-quant` (the name `atropos` on PyPI belongs to an unrelated
+bioinformatics tool), the IMPORT stays `atropos` -- precedents
+(scikit-learn/sklearn, pillow/PIL, beautifulsoup4/bs4) all split
+distribution from import; the import name is the daily UX, the
+distribution name is a one-time `pip install`.  The CLI command
+moves to `atropos-quant` (the plain `atropos` command would
+collide with the bioinformatics package's CLI).  A NEGATIVE PIN
+(`import atropos_quant` -> ImportError) guarantees no silent
+import rename later: adding an `atropos_quant` package requires a
+dedicated wave with a shim and a deprecation cycle.  Recorded as
+an explicit decision, not an accident.

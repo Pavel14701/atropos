@@ -1,5 +1,5 @@
 [project]
-name = "atropos"
+name = "atropos-quant"
 version = "1.2.0"
 description = "Atropos — hypothesis-killing framework: preregistration, null controls, incremental tests, robustness batteries, walk-forward and Monte Carlo verdicts."
 readme = "README.md"
@@ -25,10 +25,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Pavel14701/atropos"
-Repository = "https://github.com/Pavel14701/atropos"
-Issues = "https://github.com/Pavel14701/atropos/issues"
-Changelog = "https://github.com/Pavel14701/atropos/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/Pavel14701/atropos-quant"
+Repository = "https://github.com/Pavel14701/atropos-quant"
+Issues = "https://github.com/Pavel14701/atropos-quant/issues"
+Changelog = "https://github.com/Pavel14701/atropos-quant/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
@@ -54,7 +54,7 @@ exclude_also = [
 ]
 
 [project.scripts]
-atropos = "atropos.cli:main"
+atropos-quant = "atropos.cli:main"
 
 [project.optional-dependencies]
 ranking = [
