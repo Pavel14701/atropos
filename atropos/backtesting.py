@@ -56,6 +56,8 @@ from atropos.backtest_metrics import (
 __all__ = [
     "DEFAULT_COST",
     "CostModel",
+    "SimIntentResult",
+    "TradeIntent",
     "bucketed_sharpe",
     "maker_entry_sim",
     "maker_sim",
@@ -66,6 +68,7 @@ __all__ = [
     "rank_normalize_group",
     "run_admission_policy",
     "run_position_state_machine",
+    "simulate_intents",
     "simulate_signal",
     "trade_curve_stats",
 ]
@@ -841,6 +844,348 @@ def maker_entry_sim(  # noqa: PLR0917  (donor OHLC-world signature)
                 cost=cost,
             )
     return 0.0
+
+
+# ---------------------------------------------------------------------------
+# batch intent simulation (the Book delegation target)
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class TradeIntent:
+    """One trade to batch-simulate (input of ``simulate_intents``).
+
+    A frozen, validated description of a single hypothetical trade:
+    where it enters, which way it faces, its protective stop and
+    target, how long it may hold, and the ATR that scales the
+    stop-gap pessimism.  The Book layer (:mod:`atropos.book`, later
+    checkpoint) materializes these intents from its open positions
+    and delegates their simulation to :func:`simulate_intents`.
+
+    Args:
+        entry_idx: entry bar index (the fill bar); it must be inside
+            the passed price series, which :func:`simulate_intents`
+            checks (naming the intent position on failure).
+        side: ``+1`` for long, ``-1`` for short.
+        stop_price: stop-loss price level; must be > 0.
+        target_price: take-profit price level; must be > 0.
+        hold_bars: maximum bars to hold (time exit on the last one);
+            must be >= 1.
+        atr_value: ATR in price units at entry (scales the stop-gap
+            pessimism term); must be >= 0.
+        risk_ref: optional intended risk distance in price units for
+            the R denominator; must be > 0 when given.  ``None``
+            derives the denominator exactly like
+            :func:`simulate_signal` (the actual ``|fill - stop|``).
+
+    Raises:
+        ValueError: if ``side`` is not ``1`` / ``-1``, ``hold_bars``
+            is below 1, ``stop_price`` / ``target_price`` is <= 0,
+            ``atr_value`` is negative, or ``risk_ref`` is given and
+            <= 0.
+
+    Example::
+
+        >>> intent = TradeIntent(3, -1, 101.0, 99.0, 4, 0.5)
+        >>> (intent.side, intent.hold_bars, intent.risk_ref)
+        (-1, 4, None)
+        >>> TradeIntent(3, 0, 101.0, 99.0, 4, 0.5)
+        Traceback (most recent call last):
+            ...
+        ValueError: side must be 1 or -1, got 0
+    """
+
+    entry_idx: int
+    side: int
+    stop_price: float
+    target_price: float
+    hold_bars: int
+    atr_value: float
+    risk_ref: float | None = None
+
+    def __post_init__(self) -> None:
+        """Reject sign-flipped or degenerate trade geometry loudly."""
+        if self.side not in (-1, 1):
+            raise ValueError(f"side must be 1 or -1, got {self.side}")
+        validate_int("hold_bars", self.hold_bars, minimum=1)
+        stop_level = validate_number("stop_price", self.stop_price)
+        if stop_level <= 0.0:
+            raise ValueError(f"stop_price must be > 0, got {stop_level}")
+        target_level = validate_number("target_price", self.target_price)
+        if target_level <= 0.0:
+            raise ValueError(
+                f"target_price must be > 0, got {target_level}"
+            )
+        atr = validate_number("atr_value", self.atr_value)
+        if atr < 0.0:
+            raise ValueError(f"atr_value must be >= 0, got {atr}")
+        if self.risk_ref is not None:
+            risk_ref = validate_number("risk_ref", self.risk_ref)
+            if risk_ref <= 0.0:
+                raise ValueError(f"risk_ref must be > 0, got {risk_ref}")
+
+
+class SimIntentResult(TypedDict):
+    """Full exit record of one batch-simulated trade intent.
+
+    Everything :class:`SimResult` carries (``r_opt`` / ``r_pess`` /
+    ``exit_idx``, with the same NaN / ``-1`` unresolved convention)
+    plus the execution details the Book layer needs to reconcile
+    against its own trades: the labeled exit reason and prices and
+    the bundled round-trip cost.
+
+    Keys:
+        entry_idx: validated entry bar of the trade.
+        exit_idx: resolved exit bar; ``-1`` when unresolved (no exit
+            inside the hold window, or a degenerate risk distance), in
+            which case ``exit_reason`` is ``""``, ``r_opt`` /
+            ``r_pess`` / ``fill_price`` / ``exit_price`` are NaN and
+            ``costs_r`` is ``0.0``.
+        exit_reason: ``"sl"``, ``"tp"``, ``"time"`` or ``""`` (empty
+            exactly when ``exit_idx == -1``).
+        r_opt: optimistic net R from the shared scan (NaN when
+            unresolved).
+        r_pess: pessimistic net R from the shared scan (NaN when
+            unresolved).
+        risk_ref: the R denominator actually used -- the intent's
+            positive ``risk_ref`` or, when absent, the derived
+            ``|entry fill - stop|`` fallback (mirrors
+            :func:`simulate_signal` so the R values are comparable).
+        fill_price: the entry fill price the scan used (NaN when
+            unresolved).
+        exit_price: the (slipped) exit price of the resolved exit --
+            the market fill for a gap-through scratch, the slipped
+            stop for ``"sl"``, the raw target for ``"tp"``, the
+            slipped final close for ``"time"`` (NaN when unresolved).
+        costs_r: the bundled round-trip taker cost in R that the scan
+            charged on the resolved exit (``0.0`` when unresolved).
+    """
+
+    entry_idx: int
+    exit_idx: int
+    exit_reason: str
+    r_opt: float
+    r_pess: float
+    risk_ref: float
+    fill_price: float
+    exit_price: float
+    costs_r: float
+
+
+def _intent_exit_details(
+    highs: np.ndarray,
+    lows: np.ndarray,
+    closes: np.ndarray,
+    sign: float,
+    *,
+    fill: float,
+    stop_level: float,
+    target_level: float,
+    exit_idx: int,
+    denom: float,
+    cost: CostModel,
+) -> tuple[str, float, float]:
+    """Label the exit bar that the shared scan already resolved.
+
+    Precondition: ``exit_idx`` is a RESOLVED exit bar returned by
+    :func:`_exit_scan` (never ``-1``).  The scan decides WHICH bar
+    exits; this helper only names the branch the scan took at that
+    bar, in the scan's own branch order (entry-bar gap-through
+    scratch, then stop, then target, else the time exit), and reports
+    the exact price the scan's ``r_opt`` formula used for that branch
+    plus the bundled round-trip ``cost_r`` in R.  Prices mirror
+    :func:`_exit_scan` line-for-line.
+
+    Returns:
+        ``(exit_reason, exit_price, costs_r)`` with ``exit_reason`` in
+        ``("sl", "tp", "time")``.
+    """
+    cost_r = (2 * cost.comm * fill + cost.gen_slip * fill) / denom
+    gap_through = (sign > 0 and fill < stop_level) or (
+        sign < 0 and fill > stop_level
+    )
+    if gap_through:
+        # entry bar opened beyond the stop: market scratch at the fill
+        return "sl", float(fill), cost_r
+    stop_hit = (
+        lows[exit_idx] <= stop_level
+        if sign > 0
+        else highs[exit_idx] >= stop_level
+    )
+    if stop_hit:
+        exit_px = float(stop_level * (1 - sign * cost.gen_slip))
+        return "sl", exit_px, cost_r
+    target_hit = (
+        highs[exit_idx] >= target_level
+        if sign > 0
+        else lows[exit_idx] <= target_level
+    )
+    if target_hit:
+        return "tp", float(target_level), cost_r
+    exit_px = float(closes[exit_idx] * (1 - sign * cost.gen_slip))
+    return "time", exit_px, cost_r
+
+
+def simulate_intents(
+    intents: Any,
+    opens: Any,
+    highs: Any,
+    lows: Any,
+    closes: Any,
+    *,
+    cost: CostModel = DEFAULT_COST,
+) -> list[SimIntentResult]:
+    """Batch-simulate trade intents under the taker cost model.
+
+    For every :class:`TradeIntent` this runs THE SAME code path as
+    :func:`simulate_signal` -- the shared :func:`_exit_scan` exit
+    mechanics and its cost/pessimism stack, driven through
+    :func:`simulate_signal` itself -- so SL-first pessimism inside a
+    bar (a bar touching BOTH levels resolves as a stop) and the
+    gap-through-stop-at-entry market scratch are identical to the
+    single-signal sim by construction, not by reimplementation.
+
+    This function is the DELEGATION TARGET of the Book layer
+    (:mod:`atropos.book`, later checkpoint): the equality pin "a Book
+    trade == a simulated trade" for legs without signal exits is
+    pinned against THIS public function, not against the private
+    scan.
+
+    Args:
+        intents: sequence of :class:`TradeIntent` objects; order is
+            preserved and the output length equals ``len(intents)``.
+        opens: 1-D finite open prices.
+        highs: 1-D finite high prices, same length as ``opens``.
+        lows: 1-D finite low prices, same length as ``opens``.
+        closes: 1-D finite close prices, same length as ``opens``.
+        cost: cost model; defaults to :data:`DEFAULT_COST`.
+
+    Returns:
+        One :class:`SimIntentResult` per intent, in input order.
+
+    Raises:
+        ValueError: if the price series are not 1-D finite arrays of
+            equal length, or an intent's ``entry_idx`` is not a valid
+            integer inside ``[0, len(opens))`` (the error names the
+            intent position).
+
+    Example::
+
+        >>> opens = np.full(6, 100.0)
+        >>> highs = np.full(6, 100.0)
+        >>> highs[1] = 101.0
+        >>> lows = np.full(6, 100.0)
+        >>> closes = np.full(6, 100.0)
+        >>> intent = TradeIntent(0, 1, 99.0, 101.0, 4, 1.0)
+        >>> out = simulate_intents([intent], opens, highs, lows, closes)[0]
+        >>> (out["exit_idx"], out["exit_reason"])
+        (1, 'tp')
+        >>> (round(out["r_opt"], 6), round(out["r_pess"], 6))
+        (0.75, 0.65)
+        >>> (out["fill_price"], out["exit_price"])
+        (100.0, 101.0)
+        >>> (round(out["costs_r"], 6), out["risk_ref"])
+        (0.25, 1.0)
+        >>> # identical to the single-signal sim by construction:
+        >>> ref = simulate_signal(
+        ...     opens, highs, lows, closes, 0, "long", 99.0, 101.0, 4, 1.0,
+        ... )
+        >>> (out["r_opt"], out["r_pess"], out["exit_idx"]) == (
+        ...     ref["r_opt"], ref["r_pess"], ref["exit_idx"],
+        ... )
+        True
+        >>> # entry at the last bar: the hold window is cut short, so
+        >>> # no exit happens at all (same unresolved contract as
+        >>> # simulate_signal: NaN R, empty reason, no cost)
+        >>> missed = simulate_intents(
+        ...     [TradeIntent(5, 1, 99.0, 101.0, 2, 1.0)],
+        ...     opens, highs, lows, closes,
+        ... )[0]
+        >>> (missed["exit_idx"], missed["exit_reason"], missed["costs_r"])
+        (-1, '', 0.0)
+        >>> (math.isnan(missed["r_pess"]), math.isnan(missed["fill_price"]))
+        (True, True)
+        >>> simulate_intents(
+        ...     [TradeIntent(99, 1, 99.0, 101.0, 4, 1.0)],
+        ...     opens, highs, lows, closes,
+        ... )
+        Traceback (most recent call last):
+            ...
+        ValueError: intents[0].entry_idx must be < len(opens)=6, got 99
+    """
+    open_arr, high_arr, low_arr, close_arr = _validated_ohlc(
+        opens, highs, lows, closes
+    )
+    n_bars = int(open_arr.size)
+    results: list[SimIntentResult] = []
+    for position, intent in enumerate(list(intents)):
+        name = f"intents[{position}].entry_idx"
+        idx = validate_int(name, intent.entry_idx, minimum=0)
+        if idx >= n_bars:
+            raise ValueError(
+                f"{name} must be < len(opens)={n_bars}, got {idx}"
+            )
+        sign = 1.0 if int(intent.side) == 1 else -1.0
+        side = "long" if sign > 0 else "short"
+        fill = float(open_arr[idx])
+        denom = abs(fill - float(intent.stop_price))
+        risk_ref = intent.risk_ref
+        if risk_ref is not None and float(risk_ref) > 0.0:
+            denom = float(risk_ref)
+        result = simulate_signal(
+            open_arr,
+            high_arr,
+            low_arr,
+            close_arr,
+            idx,
+            side,
+            intent.stop_price,
+            intent.target_price,
+            intent.hold_bars,
+            intent.atr_value,
+            risk_ref=risk_ref,
+            cost=cost,
+        )
+        exit_idx = int(result["exit_idx"])
+        if exit_idx == -1:
+            results.append(
+                SimIntentResult(
+                    entry_idx=idx,
+                    exit_idx=-1,
+                    exit_reason="",
+                    r_opt=float("nan"),
+                    r_pess=float("nan"),
+                    risk_ref=float(denom),
+                    fill_price=float("nan"),
+                    exit_price=float("nan"),
+                    costs_r=0.0,
+                )
+            )
+            continue
+        reason, exit_px, costs_r = _intent_exit_details(
+            high_arr,
+            low_arr,
+            close_arr,
+            sign,
+            fill=fill,
+            stop_level=float(intent.stop_price),
+            target_level=float(intent.target_price),
+            exit_idx=exit_idx,
+            denom=denom,
+            cost=cost,
+        )
+        results.append(
+            SimIntentResult(
+                entry_idx=idx,
+                exit_idx=exit_idx,
+                exit_reason=reason,
+                r_opt=float(result["r_opt"]),
+                r_pess=float(result["r_pess"]),
+                risk_ref=float(denom),
+                fill_price=fill,
+                exit_price=exit_px,
+                costs_r=float(costs_r),
+            )
+        )
+    return results
 
 
 # ---------------------------------------------------------------------------
