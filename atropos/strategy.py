@@ -3,8 +3,8 @@
 A strategy is ``tuple[LegSpec, ...] + PortfolioPolicy`` -- ONE
 abstraction so momentum, pairs and multi-leg options are the same
 object for feature analysis.  An iron condor is 4 legs + an
-independent policy + caps; a pairs trade is 2 legs (netting later);
-a momentum system is 1 leg.  The object shape does not change with
+independent policy + caps; a pairs trade is 2 legs (independent or
+netting); a momentum system is 1 leg.  The object shape does not change with
 the leg count, so every strategy's trades flatten into the same
 analysis-ready frame (:func:`records_to_features`, the bridge from
 "what the strategy did" to "what Atropos analyzes").
@@ -12,19 +12,23 @@ analysis-ready frame (:func:`records_to_features`, the bridge from
 Anti-patterns this module forbids:
 
 * **strategy-as-backtest** -- a :class:`StrategySpec` is a pure
-  DECLARATION; the Book (:func:`atropos.book.run_book`) is the only
+  DECLARATION; the Book (:mod:`atropos.book`) is the only
   simulator.  Positions, cooldowns, concurrency and costs live
   there, never here.
 * **multi-leg-as-special-case** -- composition is homogeneous:
-  ``run_book`` runs each leg in a fresh Book so legs cannot
-  interact, and the portfolio layer is policy metadata plus
-  diagnostics, not a second simulator.
+  independent legs run one fresh Book each (``run_book``) so they
+  cannot interact; the shared families delegate to the Book's own
+  portfolio walk (``Book.walk_portfolio``).  This module adds
+  policy and diagnostics, never a second simulator.
 
-MVP boundary: ``combination`` accepts ``"independent"`` only.  The
-deferred combination families (netting / sequential / priority),
-exposure ENFORCEMENT (the caps are diagnostics, not admission
-control) and universe enforcement (survivorship filters, calendar
-gating) are deferred (KNOWN-ISSUES section 14).
+Composition paths: ``"independent"`` isolates the legs;
+``"netting"`` / ``"sequential"`` / ``"priority"`` share ONE
+position pool and equity ledger inside a single walk (sequential
+and priority have NO offsetting -- opposites coexist; netting is
+its own combination).  Exposure ENFORCEMENT (the caps are
+diagnostics, not admission control) and universe enforcement
+(survivorship filters, calendar gating) are deferred (KNOWN-ISSUES
+section 14).
 """
 
 from __future__ import annotations
@@ -38,7 +42,7 @@ import pandas as pd
 
 from atropos._utils import validate_int, validate_number
 from atropos.backtesting import DEFAULT_COST, CostModel
-from atropos.book import run_book
+from atropos.book import Book, run_book
 from atropos.data_contract import MaterializedData
 from atropos.legs import (
     Compare,
@@ -50,6 +54,7 @@ from atropos.legs import (
     TargetSpec,
     validate_features_declared,
 )
+from atropos.portfolio import GateReport, portfolio_gates
 
 __all__ = [
     "PortfolioPolicy",
@@ -63,8 +68,11 @@ __all__ = [
 _DEFERRED_NOTE = "deferred (KNOWN-ISSUES section 14)"
 """House phrase every deferred-feature ValueError must contain."""
 
-_DEFERRED_COMBINATIONS = ("netting", "sequential", "priority")
-"""Portfolio combination families rejected loudly in the MVP."""
+_SHARED_COMBINATIONS = ("sequential", "priority", "netting")
+"""Combinations routed through Book.walk_portfolio's shared state."""
+
+_VALID_COMBINATIONS = ("independent", *_SHARED_COMBINATIONS)
+"""Every combination PortfolioPolicy accepts (validated loudly)."""
 
 
 # ---------------------------------------------------------------------------
@@ -72,15 +80,20 @@ _DEFERRED_COMBINATIONS = ("netting", "sequential", "priority")
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class PortfolioPolicy:
-    """How a strategy's legs share one book (MVP: independent only).
+    """How a strategy's legs share one book.
 
-    ``combination="independent"`` means positions from different
-    legs COEXIST -- a long-X and a short-X leg both hold at the same
-    time and each accrues its own PnL; this is NOT netting (no
-    offsetting, no margin netting, no position merging).  The other
-    combination families are loud deferred rejections, and the caps
-    are validated here but only REPORTED as diagnostics by
-    :func:`run_strategy` -- enforcement is deferred.
+    ``combination="independent"`` runs each leg in a FRESH Book
+    (:func:`atropos.book.run_book`) so legs cannot interact:
+    positions from different legs COEXIST -- a long-X and a short-X
+    leg both hold at the same time and each accrues its own PnL
+    (this is NOT netting: no offsetting, no margin netting, no
+    position merging).  ``combination="sequential"`` /
+    ``"priority"`` / ``"netting"`` delegate to the ONE shared-state
+    walk (:meth:`atropos.book.Book.walk_portfolio`): a single
+    position pool and equity ledger -- sequential and priority have
+    NO offsetting (opposites coexist), netting closes opposite
+    intents.  The caps are validated here but only REPORTED as
+    diagnostics by :func:`run_strategy` -- enforcement is deferred.
 
     Args:
         borrow_bps_annual: REQUIRED annual short-borrow rate in bps;
@@ -92,12 +105,15 @@ class PortfolioPolicy:
         periods_override: optional explicit bars-per-year for the
             carry accrual; ``None`` derives from the bundle's
             calendar (checkpoint W3-1).
-        combination: how legs combine; the MVP accepts
-            ``"independent"`` only.  ``"netting"`` /
-            ``"sequential"`` / ``"priority"`` raise ``ValueError``
-            naming KNOWN-ISSUES section 14 (the runtime check exists
-            despite the ``Literal`` so dynamic callers die loudly
-            too).
+        combination: how legs combine -- ``"independent"`` (fresh
+            Book per leg), ``"sequential"`` (shared walk, entry
+            competition in declaration order), ``"priority"``
+            (shared walk, highest ``LegSpec.priority`` first) or
+            ``"netting"`` (shared walk; an entry intent opposite in
+            direction to an open position on the same instrument
+            closes it and is itself consumed).  Unknown values
+            raise ``ValueError`` (the runtime check exists so
+            dynamic callers die loudly too).
         max_concurrent_positions: soft cap on simultaneous open
             positions; must be >= 1.  Exceeding it is reported as a
             diagnostic note, never enforced in the MVP.
@@ -107,7 +123,7 @@ class PortfolioPolicy:
             must be finite > 0.  Not enforced in the MVP.
 
     Raises:
-        ValueError: on a deferred or unknown ``combination``, a
+        ValueError: on an unknown ``combination``, a
             ``max_concurrent_positions`` below 1, or a non-finite /
             non-positive exposure cap.
 
@@ -119,15 +135,13 @@ class PortfolioPolicy:
         >>> (policy.combination, policy.max_concurrent_positions,
         ...  policy.max_gross_exposure, policy.max_net_exposure)
         ('independent', 10, 2.0, 1.0)
-        >>> try:
-        ...     PortfolioPolicy(
-        ...         borrow_bps_annual=500.0,
-        ...         funding_bps_annual=100.0,
-        ...         combination="netting",
-        ...     )
-        ... except ValueError as error:
-        ...     "deferred (KNOWN-ISSUES section 14)" in str(error)
-        True
+        >>> netted = PortfolioPolicy(
+        ...     borrow_bps_annual=500.0,
+        ...     funding_bps_annual=100.0,
+        ...     combination="netting",
+        ... )
+        >>> netted.combination
+        'netting'
         >>> try:
         ...     PortfolioPolicy(
         ...         borrow_bps_annual=500.0,
@@ -135,7 +149,7 @@ class PortfolioPolicy:
         ...         combination="random",
         ...     )
         ... except ValueError as error:
-        ...     "combination must be 'independent'" in str(error)
+        ...     "combination must be one of" in str(error)
         True
     """
 
@@ -148,7 +162,7 @@ class PortfolioPolicy:
     max_net_exposure: float = 1.0
 
     def __post_init__(self) -> None:
-        """Reject deferred families and validate the soft caps."""
+        """Reject unknown combinations and validate the soft caps."""
         validate_number("borrow_bps_annual", self.borrow_bps_annual)
         if self.borrow_bps_annual < 0.0:
             raise ValueError(
@@ -163,17 +177,11 @@ class PortfolioPolicy:
                 "periods_override must be a positive finite float when"
                 f" given, got {self.periods_override!r}"
             )
-        if self.combination != "independent":
-            if self.combination in _DEFERRED_COMBINATIONS:
-                raise ValueError(
-                    f"PortfolioPolicy: combination"
-                    f" {self.combination!r} is {_DEFERRED_NOTE}"
-                    " (MVP composes independent legs)"
-                )
+        if self.combination not in _VALID_COMBINATIONS:
+            valid = ", ".join(repr(name) for name in _VALID_COMBINATIONS)
             raise ValueError(
-                "PortfolioPolicy: combination must be 'independent'"
-                " (or a deferred family), got"
-                f" {self.combination!r}"
+                "PortfolioPolicy: combination must be one of"
+                f" {valid}, got {self.combination!r}"
             )
         validate_int(
             "PortfolioPolicy.max_concurrent_positions",
@@ -390,36 +398,68 @@ def run_strategy(
     md: MaterializedData,
     *,
     cost: CostModel = DEFAULT_COST,
+    gates: bool = False,
 ) -> dict[str, Any]:
     """Run one strategy spec through the Book and summarize it.
 
-    The strategy's legs are handed to :func:`atropos.book.run_book`,
-    which runs each leg in a fresh Book so legs cannot interact
-    (independent composition).  The policy's caps are NOT enforced:
-    a leg count above ``max_concurrent_positions`` becomes a
-    diagnostic note, and net/gross exposure enforcement is skipped
-    with an honest note (records describe CLOSED trades, not open
-    exposure) -- both land in ``summary["policy_notes"]``.  Before
-    summarizing, the records' leg attribution is verified (every
-    record must belong to a declared leg) and the per-leg trade
-    counts are recounted from the records against the Book's
-    ``per_leg`` map; the REAL isolation pin lives in the tests.
+    Dispatch on ``strategy.portfolio.combination``:
+    ``"independent"`` hands the legs to :func:`atropos.book.run_book`,
+    which runs each leg in a FRESH Book so legs cannot interact;
+    ``"sequential"`` / ``"priority"`` / ``"netting"`` delegate to
+    :meth:`atropos.book.Book.walk_portfolio`, the ONE shared-state
+    walk (single position pool, shared equity ledger).
+    ``"sequential"`` and ``"priority"`` have NO offsetting -- a long
+    and a short on the same instrument both hold and each accrues
+    its own PnL; ``"netting"`` is its own combination (an entry
+    intent opposite to an open position on the same instrument
+    closes it and is itself consumed).  The policy's caps are NOT
+    enforced on either path: the leg-count cap and the per-bar
+    gross/net cap breaches land in ``result["policy_notes"]`` as
+    diagnostics only -- enforcement is deferred (KNOWN-ISSUES
+    section 14).  Before summarizing, the records' leg attribution
+    is verified (every record must belong to a declared leg) and the
+    per-leg trade counts are recounted from the records against the
+    run's ``per_leg`` map; the REAL isolation pin lives in the
+    tests.
 
     Args:
         strategy: the strategy spec (legs audited at construction).
         md: the materialized bundle every leg consumes.
-        cost: the cost model handed unchanged to the Book.
+        cost: the cost model handed unchanged to the Book (each
+            fresh Book, or the shared walk's Book).
+        gates: when True, run the portfolio kill gates
+            (:func:`atropos.portfolio.portfolio_gates`) with
+            ``min_trades=20``, ``n_trials=5`` and
+            ``prereg_hash=None``.  The gates' ``daily_ev`` input is
+            CALENDAR-DAY, NOT per-bar: each trade's ``pnl_net_r`` is
+            bucketed by its exit day (``exit_ts.normalize()``) and
+            summed per day.  The report's ``prereg_hash`` is
+            therefore None and the ``"gates UNVERIFIED (no
+            prereg_hash)"`` note fires; no hash is ever fabricated.
 
     Returns:
-        A dict with keys ``"records"`` (per-leg TradeRecord lists,
-        echoed from ``run_book``), ``"per_leg"`` (the Book's per-leg
-        counts and net R, echoed), ``"equity_r"`` (total net R) and
-        ``"summary"`` (a :class:`StrategySummary`).
+        The UNIFIED result -- the same keys for every combination:
+        ``"records"`` (per-leg TradeRecord lists), ``"equity_r"``
+        (total net R), ``"per_leg"`` (per-leg counts and net R),
+        ``"exposure"`` (``{"concurrent": [...], "net": [...]}``, one
+        entry per decision bar; for the shared modes the walk's own
+        authoritative series, for ``"independent"`` reconstructed
+        from the closed-trade ledger where a trade occupies
+        ``[entry_bar, exit_bar]`` inclusive), ``"equity_curve"``
+        (per-bar cumulative net R, credited at exit bars, ``0.0``
+        before the first close), ``"policy_notes"`` (the summary's
+        boundary notes extended with the shared walk's warnings
+        verbatim, the cap-breach diagnostics and, when ``gates``
+        ran, the UNVERIFIED note; ``summary["policy_notes"]`` keeps
+        its stable base list), ``"gates"`` (a
+        :class:`atropos.portfolio.GateReport` when ``gates=True``,
+        else ``None``) and ``"summary"`` (a
+        :class:`StrategySummary`).
 
     Raises:
         ValueError: when leg attribution is lost (a record keyed by,
             or carrying a ``leg_name`` different from, a name outside
-            ``strategy.legs``) or the Book's per-leg trade counts
+            ``strategy.legs``) or the run's per-leg trade counts
             disagree with the recount from the records.
 
     Example::
@@ -497,12 +537,18 @@ def run_strategy(
         ('momo_pair', 2)
         >>> (summary["combination"], summary["universe_symbols"])
         ('independent', ['synthetic'])
-        >>> required = {
+        >>> required_summary = {
         ...     "combination", "equity_r", "leg_isolation_check",
         ...     "n_legs", "n_trades", "per_leg", "policy_notes",
         ...     "strategy_name", "universe_symbols",
         ... }
-        >>> required <= set(summary)
+        >>> required_summary <= set(summary)
+        True
+        >>> required_result = {
+        ...     "equity_curve", "equity_r", "exposure", "gates",
+        ...     "per_leg", "policy_notes", "records", "summary",
+        ... }
+        >>> required_result <= set(result)
         True
         >>> sorted(result["records"])
         ['momo_long', 'momo_short']
@@ -526,27 +572,100 @@ def run_strategy(
         True
         >>> summary["leg_isolation_check"]
         True
-        >>> notes = summary["policy_notes"]
-        >>> isinstance(notes, list) and len(notes) >= 1
+        >>> summary_notes = summary["policy_notes"]
+        >>> isinstance(summary_notes, list) and len(summary_notes) >= 1
+        True
+        >>> result["gates"] is None
+        True
+        >>> n_bars = len(bars)
+        >>> lengths = (
+        ...     len(result["exposure"]["concurrent"]),
+        ...     len(result["exposure"]["net"]),
+        ...     len(result["equity_curve"]),
+        ... )
+        >>> lengths == (n_bars, n_bars, n_bars)
+        True
+        >>> abs(result["equity_curve"][-1] - result["equity_r"]) < 1e-9
+        True
+        >>> gated = run_strategy(strategy, md, gates=True)
+        >>> gated["gates"]["portfolio_verdict"]
+        'UNDERPOWERED'
+        >>> gated["gates"]["prereg_hash"] is None
+        True
+        >>> "gates UNVERIFIED (no prereg_hash)" in gated["policy_notes"]
         True
     """
-    book_result = run_book(
-        list(strategy.legs),
-        md,
-        cost=cost,
-        borrow_bps_annual=strategy.portfolio.borrow_bps_annual,
-        funding_bps_annual=strategy.portfolio.funding_bps_annual,
-        periods_override=strategy.portfolio.periods_override,
-    )
-    records = book_result["records"]
-    per_leg = book_result["per_leg"]
+    policy = strategy.portfolio
+    legs = list(strategy.legs)
+    n_bars = len(md.index)
+    walk_warnings: list[str] = []
+    if policy.combination == "independent":
+        book_result = run_book(
+            legs,
+            md,
+            cost=cost,
+            borrow_bps_annual=policy.borrow_bps_annual,
+            funding_bps_annual=policy.funding_bps_annual,
+            periods_override=policy.periods_override,
+        )
+        records = book_result["records"]
+        per_leg = book_result["per_leg"]
+        equity_r = float(book_result["equity_r"])
+        concurrent, net_exposure, equity_curve = _exposure_from_records(
+            records, n_bars
+        )
+    else:
+        book = Book(
+            borrow_bps_annual=policy.borrow_bps_annual,
+            funding_bps_annual=policy.funding_bps_annual,
+            periods_override=policy.periods_override,
+            cost=cost,
+        )
+        book_result = book.walk_portfolio(
+            legs,
+            md,
+            combination=policy.combination,
+            max_concurrent_positions=policy.max_concurrent_positions,
+            periods_override=policy.periods_override,
+        )
+        records = book_result["records"]
+        per_leg = book_result["per_leg"]
+        equity_r = float(book_result["equity_r"])
+        walk_exposure = book_result["exposure"]
+        concurrent = [int(count) for count in walk_exposure["concurrent"]]
+        net_exposure = [float(value) for value in walk_exposure["net"]]
+        equity_curve = [float(value) for value in book_result["equity_curve"]]
+        walk_warnings = [str(warning) for warning in book_result["warnings"]]
     counts = _recount_and_verify(strategy, records, per_leg)
-    equity_r = float(book_result["equity_r"])
+    # Gross open exposure is reconstructed from the closed-trade
+    # ledger in BOTH branches: the shared walk's exposure carries
+    # concurrent/net only, and those two stay authoritative there.
+    gross = _open_series(records, n_bars)[2]
+    gate_report: GateReport | None = None
+    if gates:
+        gate_report = portfolio_gates(
+            equity_r=equity_curve,
+            daily_ev=_daily_ev(records).to_numpy(dtype=np.float64),
+            concurrent=concurrent,
+            net_exposure=net_exposure,
+            min_trades=20,
+            n_trials=5,
+            prereg_hash=None,
+        )
     summary = _build_summary(strategy, counts, per_leg, equity_r)
+    policy_notes = _policy_notes(strategy)
+    policy_notes.extend(walk_warnings)
+    policy_notes.extend(_cap_breach_notes(policy, gross, net_exposure))
+    if gate_report is not None:
+        policy_notes.append("gates UNVERIFIED (no prereg_hash)")
     return {
         "records": records,
-        "per_leg": per_leg,
         "equity_r": equity_r,
+        "per_leg": per_leg,
+        "exposure": {"concurrent": concurrent, "net": net_exposure},
+        "equity_curve": equity_curve,
+        "policy_notes": policy_notes,
+        "gates": gate_report,
         "summary": summary,
     }
 
@@ -661,10 +780,11 @@ def _recount_and_verify(
 ) -> dict[str, int]:
     """Verify leg attribution and recount trades per strategy leg.
 
-    ``run_book`` gives each leg a fresh Book (so legs cannot
-    interact); here the records must still carry honest attribution:
-    a record stored under one leg's name must name exactly that leg,
-    and the Book's ``per_leg`` counts must match the recount.
+    Both dispatch paths key records by leg name (a fresh Book per
+    leg, or the shared walk's one pool); here the records must still
+    carry honest attribution: a record stored under one leg's name
+    must name exactly that leg, and the run's ``per_leg`` counts
+    must match the recount.
 
     Returns:
         Trade count per declared leg name (0 for a leg with no
@@ -762,10 +882,152 @@ def _policy_notes(strategy: StrategySpec) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# private helpers (exposure + gates inputs from the closed-trade ledger)
+# ---------------------------------------------------------------------------
+def _open_series(
+    records_by_leg: dict[str, list[dict[str, Any]]],
+    n_bars: int,
+) -> tuple[list[int], list[float], list[float]]:
+    """Per-bar open-position series rebuilt from CLOSED-trade records.
+
+    A trade occupies ``[entry_bar, exit_bar]`` inclusive (its
+    ``entry_bar`` / ``exit_bar`` keys, positions on the decision
+    grid).  ``concurrent`` counts the open positions at each bar,
+    ``net`` sums ``direction * size_r`` over them (``direction`` is
+    ``+1`` long / ``-1`` short) and ``gross`` sums ``abs(size_r)``
+    over them.  This is a RECONSTRUCTION from the closed-trade
+    ledger, not the walk's live ledger -- the shared modes keep
+    their own walk's concurrent/net series as authoritative.
+
+    Returns:
+        ``(concurrent, net, gross)`` -- one entry per bar, zeros
+        where nothing is open.
+    """
+    concurrent = [0] * n_bars
+    net = [0.0] * n_bars
+    gross = [0.0] * n_bars
+    for leg_records in records_by_leg.values():
+        for record in leg_records:
+            entry_bar = int(record["entry_bar"])
+            exit_bar = int(record["exit_bar"])
+            signed = int(record["direction"]) * float(record["size_r"])
+            for bar in range(entry_bar, exit_bar + 1):
+                concurrent[bar] += 1
+                net[bar] += signed
+                gross[bar] += abs(signed)
+    return concurrent, net, gross
+
+
+def _equity_curve_from_records(
+    records_by_leg: dict[str, list[dict[str, Any]]],
+    n_bars: int,
+) -> list[float]:
+    """Per-bar cumulative net R, credited at each trade's exit bar.
+
+    Matches the shared walk's equity-curve shape: ``curve[i]`` is
+    the cumulative ``pnl_net_r`` AFTER bar ``i`` (a close credits
+    its bar), ``0.0`` before the first close.
+    """
+    credited = [0.0] * n_bars
+    for leg_records in records_by_leg.values():
+        for record in leg_records:
+            credited[int(record["exit_bar"])] += float(record["pnl_net_r"])
+    curve: list[float] = []
+    running = 0.0
+    for pnl in credited:
+        running += pnl
+        curve.append(running)
+    return curve
+
+
+def _exposure_from_records(
+    records_by_leg: dict[str, list[dict[str, Any]]],
+    n_bars: int,
+) -> tuple[list[int], list[float], list[float]]:
+    """The independent-mode per-bar exposure triple from records.
+
+    Composes :func:`_open_series` and
+    :func:`_equity_curve_from_records` into
+    ``(concurrent, net, equity_curve)`` -- the same series shape the
+    shared walk reports, so :func:`run_strategy` can hand one
+    unified result contract to consumers of either composition
+    path.
+    """
+    concurrent, net, _gross = _open_series(records_by_leg, n_bars)
+    equity_curve = _equity_curve_from_records(records_by_leg, n_bars)
+    return concurrent, net, equity_curve
+
+
+def _daily_ev(
+    records_by_leg: dict[str, list[dict[str, Any]]],
+) -> pd.Series:
+    """Calendar-day aggregation of closed-trade net R.
+
+    Each trade's ``pnl_net_r`` is bucketed by its ``exit_ts``
+    normalized to midnight (``ts.normalize()``), summed per day and
+    ordered by day -- the ``daily_ev`` stream the portfolio gates
+    consume is calendar-day, NOT per-bar.
+
+    Returns:
+        A ``pd.Series`` indexed by normalized day Timestamps whose
+        values are the summed ``pnl_net_r``; empty records give an
+        empty float series.
+    """
+    day_totals: dict[pd.Timestamp, float] = {}
+    for leg_records in records_by_leg.values():
+        for record in leg_records:
+            day = pd.Timestamp(record["exit_ts"]).normalize()
+            day_totals[day] = day_totals.get(day, 0.0) + float(
+                record["pnl_net_r"]
+            )
+    if not day_totals:
+        return pd.Series(dtype=np.float64)
+    ordered_days = sorted(day_totals)
+    return pd.Series(
+        [day_totals[day] for day in ordered_days],
+        index=pd.DatetimeIndex(ordered_days),
+        dtype=np.float64,
+    )
+
+
+def _cap_breach_notes(
+    policy: PortfolioPolicy,
+    gross: list[float],
+    net: list[float],
+) -> list[str]:
+    """Soft-cap breach diagnostics (reporting only, no enforcement).
+
+    A note fires only when the series' per-bar peak EXCEEDS the
+    policy cap (strictly); the bar count is the number of bars
+    strictly above the cap.  Enforcement stays deferred.
+    """
+    notes: list[str] = []
+    gross_peak = max(gross, default=0.0)
+    if gross_peak > policy.max_gross_exposure:
+        gross_bars = sum(
+            1 for value in gross if value > policy.max_gross_exposure
+        )
+        notes.append(
+            f"cap breach: gross {gross_peak:.2f}"
+            f" > {policy.max_gross_exposure:.2f}"
+            f" on {gross_bars} bars"
+        )
+    net_peak = max(net, default=0.0)
+    if net_peak > policy.max_net_exposure:
+        net_bars = sum(1 for value in net if value > policy.max_net_exposure)
+        notes.append(
+            f"cap breach: net {net_peak:.2f}"
+            f" > {policy.max_net_exposure:.2f}"
+            f" on {net_bars} bars"
+        )
+    return notes
+
+
+# ---------------------------------------------------------------------------
 # demo
 # ---------------------------------------------------------------------------
 def run_all_examples() -> None:
-    """Demo: two-leg composition + the records bridge, asserted."""
+    """Demo: independent + netting two-leg composition, asserted."""
     bars = pd.date_range("2024-01-01", periods=6, freq="D", tz="UTC")
     md = MaterializedData(
         outcome=pd.Series(0.0, index=bars),
@@ -842,16 +1104,39 @@ def run_all_examples() -> None:
         for record in records
     )
     assert "entry::mom_signal" in frame.columns
-    try:
-        PortfolioPolicy(
+    n_bars = len(md.index)
+    assert len(result["equity_curve"]) == n_bars
+    assert len(result["exposure"]["concurrent"]) == n_bars
+    assert len(result["exposure"]["net"]) == n_bars
+    assert result["gates"] is None
+    netted_strategy = StrategySpec(
+        name="mirror_netted",
+        legs=(
+            gated("long_gate", "long"),
+            gated("short_gate", "short"),
+        ),
+        portfolio=PortfolioPolicy(
             borrow_bps_annual=500.0,
             funding_bps_annual=100.0,
+            periods_override=252.0,
             combination="netting",
-        )
-        raised = False
-    except ValueError as error:
-        raised = "section 14" in str(error)
-    assert raised
+        ),
+        universe=UniverseSpec(symbols=("synthetic",)),
+    )
+    print("strategy demo: the same mirror world under 'netting'")
+    netted = run_strategy(netted_strategy, md)
+    netted_summary = netted["summary"]
+    print(
+        f"legs={netted_summary['n_legs']}"
+        f" trades={netted_summary['n_trades']}"
+        f" combination={netted_summary['combination']}"
+        f" equity_r={netted_summary['equity_r']:.4f}"
+    )
+    assert netted_summary["combination"] == "netting"
+    assert len(netted["exposure"]["concurrent"]) == n_bars
+    assert len(netted["exposure"]["net"]) == n_bars
+    assert len(netted["equity_curve"]) == n_bars
+    assert netted["gates"] is None
 
 
 if __name__ == "__main__":

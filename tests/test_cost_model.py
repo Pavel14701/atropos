@@ -14,8 +14,10 @@ import pytest
 from atropos.cost_model import (
     _net_returns_clean,
     annual_turnover,
+    apply_holding_costs,
     apply_proportional_costs,
     breakeven_cost_bps,
+    breakeven_holding_cost_bps,
     cost_death_test,
     run_all_examples,
     turnover_series,
@@ -319,3 +321,41 @@ def test_demo_run_all_examples_smoke(
     assert "breakeven_cost_bps:" in out
     assert "cost_death_test( 10.0 bps): verdict=PASS" in out
     assert "cost_death_test(200.0 bps): verdict=FAIL" in out
+
+
+# ---------------------------------------------------------------------------
+# W3-3 -- holding costs for shorts (borrow) and the breakeven analogue
+# ---------------------------------------------------------------------------
+def test_apply_holding_costs_shorts_only() -> None:
+    """Shorts pay the per-bar drag; longs pay exactly zero.
+
+    Mutation fact: charging max(positions, 0) (longs) instead of
+    max(-positions, 0) breaks both signed asserts.
+    """
+    gross = np.array([0.001, 0.001, 0.001])
+    positions = np.array([-1.0, -1.0, 1.0])
+    net = apply_holding_costs(gross, positions, 400.0, periods=252)
+    drag = 400.0 / 1e4 / 252.0
+    assert net[0] == pytest.approx(0.001 - drag)
+    assert net[1] == pytest.approx(0.001 - drag)
+    assert net[2] == pytest.approx(0.001)  # the long bar pays nothing
+
+
+def test_breakeven_holding_cost_formula() -> None:
+    """breakeven_bps = mean(gross) * 1e4 * periods / mean(short_exp).
+
+    Mutation fact: any formula variant (missing periods, gross/short
+    inverted) breaks the exact 1260.0 pin.
+    """
+    gross = np.array([0.001, 0.0])
+    positions = np.array([-1.0, -1.0])
+    report = breakeven_holding_cost_bps(gross, positions, periods=252)
+    assert report["breakeven_bps"] == pytest.approx(1260.0)
+    assert report["mean_gross"] == pytest.approx(0.0005)
+    assert report["mean_short_exposure"] == pytest.approx(1.0)
+    assert report["n_obs"] == 2
+    # a long-only book has no short exposure -> inf breakeven
+    long_only = breakeven_holding_cost_bps(
+        np.array([0.001, 0.001]), np.array([1.0, 1.0]), periods=252
+    )
+    assert long_only["breakeven_bps"] == float("inf")

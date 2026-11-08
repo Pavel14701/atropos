@@ -6,8 +6,12 @@ arithmetic.  This module closes that gap:
 
 * :func:`turnover_series` - one-sided turnover ``|pos[t] - pos[t-1]|``
 * :func:`apply_proportional_costs` - net returns after bps costs
+* :func:`apply_holding_costs` - net returns after annual short-borrow
+  holding costs (carry accrues on held shorts, not on turnover)
 * :func:`annual_turnover` - annualized turnover and rebalance count
 * :func:`breakeven_cost_bps` - one-way cost level that eats the edge
+* :func:`breakeven_holding_cost_bps` - annual borrow level (bps)
+  that eats a short book's edge
 * :func:`cost_death_test` - contract test with a PASS / FAIL
   (COST-DEATH) / INCONCLUSIVE verdict from a block-bootstrap CI of
   the net mean
@@ -28,8 +32,10 @@ from atropos.bootstrap_ci import block_bootstrap_ci
 
 __all__ = [
     "annual_turnover",
+    "apply_holding_costs",
     "apply_proportional_costs",
     "breakeven_cost_bps",
+    "breakeven_holding_cost_bps",
     "cost_death_test",
     "turnover_series",
 ]
@@ -292,6 +298,163 @@ def breakeven_cost_bps(
     else:
         value = float(1e4 * mean_gross / mean_tvr)
     return {"breakeven_cost_bps": value}
+
+
+# ----------------------------------------------------------------------------
+# holding costs: short-borrow carry
+# ----------------------------------------------------------------------------
+def apply_holding_costs(
+    strategy_returns: Any,
+    positions: Any,
+    borrow_bps_annual: float,
+    *,
+    periods: int,
+) -> np.ndarray:
+    """Net returns after annualized short-borrow HOLDING costs.
+
+    ``net[t] = gross[t] - (borrow_bps_annual / 1e4 / periods)
+    * max(-positions[t], 0)``: only SHORT positions (negative
+    entries) pay; long positions accrue exactly zero borrow charge.
+
+    The borrow fee is carry, not a transaction cost: it accrues on
+    the held short exposure every period, so it cannot ride on
+    :func:`turnover_series` the way entry/exit fees do.
+
+    ``positions`` must be in the SAME units as the per-bar returns:
+    the charge is ``bps x exposure / periods`` per bar, so a constant
+    short of 1.0 unit on a return series pays
+    ``borrow_bps_annual / 1e4 / periods`` each and every bar.
+
+    Warning:
+        ``periods`` is a REQUIRED keyword argument with NO default.
+        A silent ``periods=252`` fallback would understate short
+        carry on a 24/7 grid by ~31%: the true per-bar drag at ~365
+        periods/yr is ``bps / 1e4 / 365`` while a 252 fallback
+        charges ``bps / 1e4 / 252``, silently dropping
+        ``(365 - 252) / 365`` of the carry.  Forcing the calendar to
+        be explicit keeps 24/7 crypto / FX books honest.
+
+    Args:
+        strategy_returns: per-period gross strategy returns.
+        positions: per-period positions/weights behind those
+            returns, in the SAME units as the returns per bar.
+        borrow_bps_annual: non-negative annualized borrow cost in
+            basis points of the short exposure.
+        periods: periods per year of the return grid (252 for daily
+            equity data, 365 for 24/7 grids); must be an
+            integer >= 1.
+
+    Returns:
+        Net return series, same length as the jointly cleaned inputs
+        (:func:`_clean_pair` drops periods where either input is
+        non-finite).
+
+    Raises:
+        ValueError: if ``borrow_bps_annual`` is not a finite number
+            >= 0, ``periods`` is not an integer >= 1, either raw
+            input is not 1-D, or the raw inputs differ in length.
+            Parameter checks run before the data is touched.
+
+    Example::
+
+        >>> net = apply_holding_costs(
+        ...     [0.001, 0.001, 0.001], [-1.0, -1.0, 0.5],
+        ...     borrow_bps_annual=400.0, periods=252)
+        >>> net.shape
+        (3,)
+        >>> round(float(net[0]), 10)  # 0.001 - 400 / 1e4 / 252
+        0.0008412698
+        >>> bool(np.all(net[:2] == net[0]))
+        True
+        >>> float(net[2])  # long bar: borrow charge is zero
+        0.001
+    """
+    if validate_number("borrow_bps_annual", borrow_bps_annual) < 0.0:
+        raise ValueError(
+            f"borrow_bps_annual must be >= 0, got {borrow_bps_annual}"
+        )
+    periods = validate_int("periods", periods)
+    gross, pos = _clean_pair(strategy_returns, positions)
+    rate_per_bar = float(borrow_bps_annual) / 1e4 / float(periods)
+    short_exposure = np.maximum(-pos, 0.0)
+    return np.asarray(gross - rate_per_bar * short_exposure, dtype=float)
+
+
+def breakeven_holding_cost_bps(
+    strategy_returns: Any, positions: Any, *, periods: int
+) -> dict[str, Any]:
+    """Annual borrow level (bps) that exactly eats a short edge.
+
+    Pinned formula (the holding-cost analogue of
+    :func:`breakeven_cost_bps`)::
+
+        bps* = mean(gross) * 1e4 * periods / mean(short_exposure)
+
+    where ``short_exposure = max(-positions, 0)``: the strategy stays
+    profitable at any annualized borrow strictly below ``bps*`` and
+    dies above it.
+
+    Edge behaviour:
+
+    * ``inf`` - there is no short exposure at all (mean
+      ``short_exposure == 0``) while the gross mean is positive:
+      nothing pays borrow, so no finite rate can kill the edge.
+    * ``NaN`` - the gross mean is degenerate (empty series after
+      joint cleaning, or no positive edge), matching the
+      never-trades convention of :func:`breakeven_cost_bps`.
+    * negative - the gross edge is already negative at zero borrow;
+      any borrow rate >= 0 kills the strategy.
+
+    Args:
+        strategy_returns: per-period gross strategy returns.
+        positions: per-period positions/weights behind those
+            returns, in the same units as the returns per bar (see
+            :func:`apply_holding_costs`).
+        periods: periods per year of the return grid; must be an
+            integer >= 1.
+
+    Returns:
+        Dict with keys ``breakeven_bps``, ``mean_gross``,
+        ``mean_short_exposure`` and ``n_obs`` (number of jointly
+        cleaned observations).
+
+    Raises:
+        ValueError: if ``periods`` is not an integer >= 1, either
+            raw input is not 1-D, or the raw inputs differ in
+            length.
+
+    Example::
+
+        >>> out = breakeven_holding_cost_bps(
+        ...     [0.001, 0.0], [-1.0, -1.0], periods=252)
+        >>> out["breakeven_bps"]  # 0.0005 * 1e4 * 252 / 1.0
+        1260.0
+        >>> out["mean_gross"], out["mean_short_exposure"]
+        (0.0005, 1.0)
+        >>> out["n_obs"]
+        2
+        >>> breakeven_holding_cost_bps(   # long-only book: no carry
+        ...     [0.001, 0.001], [1.0, 1.0], periods=252
+        ... )["breakeven_bps"]
+        inf
+    """
+    periods = validate_int("periods", periods)
+    gross, pos = _clean_pair(strategy_returns, positions)
+    mean_gross = float(np.mean(gross)) if gross.size else float("nan")
+    short_exposure = np.maximum(-pos, 0.0)
+    mean_short = (
+        float(np.mean(short_exposure)) if short_exposure.size else 0.0
+    )
+    if mean_short == 0.0:
+        value = float("inf") if mean_gross > 0.0 else float("nan")
+    else:
+        value = float(mean_gross * 1e4 * float(periods) / mean_short)
+    return {
+        "breakeven_bps": value,
+        "mean_gross": mean_gross,
+        "mean_short_exposure": mean_short,
+        "n_obs": int(gross.size),
+    }
 
 
 def _is_constant(values: np.ndarray) -> bool:
