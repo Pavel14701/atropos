@@ -485,7 +485,9 @@ def run_strategy(
         ...     name="momo_pair",
         ...     legs=(long_leg, short_leg),
         ...     portfolio=PortfolioPolicy(
-        ...         borrow_bps_annual=500.0, funding_bps_annual=100.0
+        ...         borrow_bps_annual=500.0,
+        ...         funding_bps_annual=100.0,
+        ...         periods_override=252.0,
         ...     ),
         ...     universe=UniverseSpec(symbols=("synthetic",)),
         ... )
@@ -808,7 +810,9 @@ def run_all_examples() -> None:
             gated("short_gate", "short"),
         ),
         portfolio=PortfolioPolicy(
-            borrow_bps_annual=500.0, funding_bps_annual=100.0
+            borrow_bps_annual=500.0,
+            funding_bps_annual=100.0,
+            periods_override=252.0,
         ),
         universe=UniverseSpec(symbols=("synthetic",)),
     )

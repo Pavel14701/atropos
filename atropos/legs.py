@@ -778,7 +778,12 @@ class LegSpec:
     adds the BOTH-directions audit.  ``rationale`` is a CONTRACT
     field, not documentation: an empty rationale raises
     "LegSpec.rationale is a contract field, not documentation: state
-    why the leg might have edge".
+    why the leg might have edge".  ``priority`` is purely metadata in
+    the MVP: an ordering weight for the shared Book walk (higher runs
+    first on the same bar; negative = deliberately demoted; the
+    tiebreaker after equal priorities is the declaration order in
+    ``StrategySpec.legs`` -- a tuple, so deterministic); the Book's
+    combination modes read it (checkpoint W3-2).
 
     Example::
 
@@ -804,6 +809,7 @@ class LegSpec:
     sizing: SizingSpec = SizingSpec(mode="fixed", param=1.0)
     features_used: tuple[str, ...] = ()
     rationale: str = ""
+    priority: float = 0.0
 
     def __post_init__(self) -> None:
         """Validate identity, layers and the feature contract."""
@@ -845,12 +851,13 @@ def _validate_leg_fields(spec: LegSpec) -> None:
 
 
 def _validate_leg_contract(spec: LegSpec) -> None:
-    """Rationale contract and features_used shape for a LegSpec."""
+    """Rationale, priority and features_used shape for a LegSpec."""
     if not spec.rationale:
         raise ValueError(
             "LegSpec.rationale is a contract field, not documentation:"
             " state why the leg might have edge"
         )
+    validate_number("LegSpec.priority", spec.priority)
     features = tuple(spec.features_used)
     if not features:
         raise ValueError(
@@ -1069,14 +1076,25 @@ def _resolve_target(
 ) -> float:
     """Resolve the target price for the decision bar.
 
-    A missing target uses the far price sentinel ``entry + 1e9 *
-    risk_ref`` -- ABOVE the entry for BOTH directions, so it can
-    never fill (a short profits downward; a never-hit target sits
-    arbitrarily high) while staying a positive, TradeIntent-valid
-    price.
+    A missing target uses a DIRECTIONAL far sentinel -- a price the
+    trade can never reach, so only stop/time can fire:
+
+    * long: ``entry + 1e9 * risk_ref`` (arbitrarily high; the scan
+      hits a long target when ``high >= target``);
+    * short: ``entry / 1e9`` (arbitrarily low but POSITIVE --
+      TradeIntent rejects non-positive prices; the scan hits a
+      short target when ``low <= target``).
+
+    The v13 single ``entry + 1e9 * risk`` sentinel was instantly
+    "hit" for shorts (their hit condition is ``low <= target``, and
+    every low sits below ``entry + 1e9``), so no-target shorts
+    exited on their entry bar and could never hold -- the carry
+    wave's borrow accrual needs holding shorts, hence the fix.
     """
     if target is None:
-        return entry_ref + _FAR_TARGET_MULTIPLE * risk_ref
+        if side == 1:
+            return entry_ref + _FAR_TARGET_MULTIPLE * risk_ref
+        return entry_ref / _FAR_TARGET_MULTIPLE
     if target.kind == "price":
         return target.multiple
     distance = target.multiple * _finite_row_value(
@@ -1366,6 +1384,8 @@ def run_all_examples() -> None:
         raised = "section 14" in str(error)
     print(f"deferred instrument kind rejected loudly: {raised}")
     assert raised
+    print(f"leg.priority default: {leg.priority}")
+    assert leg.priority == 0.0
 
 
 if __name__ == "__main__":

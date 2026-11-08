@@ -28,8 +28,17 @@ from atropos.strategy import (
 
 
 def _policy() -> PortfolioPolicy:
-    """The demo carry policy (declared, never defaulted)."""
-    return PortfolioPolicy(borrow_bps_annual=500.0, funding_bps_annual=100.0)
+    """The demo carry policy (declared, never defaulted).
+
+    ``periods_override=252.0`` pins the explicit path: the demo
+    bundle is manifest-less, and the carry accrual refuses to guess
+    a calendar (loud, by design).
+    """
+    return PortfolioPolicy(
+        borrow_bps_annual=500.0,
+        funding_bps_annual=100.0,
+        periods_override=252.0,
+    )
 
 
 def _leg(name: str, op: str) -> LegSpec:

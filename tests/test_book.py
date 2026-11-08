@@ -14,6 +14,7 @@ valid geometry (explicit targets on shorts).
 from __future__ import annotations
 
 import itertools
+import warnings
 from typing import Any, Literal
 
 import pandas as pd
@@ -25,7 +26,11 @@ from atropos.backtesting import (
     simulate_intents,
 )
 from atropos.book import Book, _demo_leg, _demo_md, run_book
-from atropos.data_contract import MaterializedData
+from atropos.data_contract import (
+    DataManifest,
+    MaterializedData,
+    ValidationReport,
+)
 from atropos.legs import (
     Compare,
     EntrySpec,
@@ -38,10 +43,16 @@ from atropos.legs import (
 
 
 def _make_book(**overrides: Any) -> Book:
-    """Construct the demo Book with the declared carry policy."""
+    """Construct the demo Book with the declared carry policy.
+
+    ``periods_override=252.0`` pins the explicit path: the demo
+    bundle is manifest-less, and the accrual refuses to guess a
+    calendar (loud, by design).
+    """
     kwargs: dict[str, Any] = {
         "borrow_bps_annual": 500.0,
         "funding_bps_annual": 100.0,
+        "periods_override": 252.0,
     }
     kwargs.update(overrides)
     return Book(**kwargs)
@@ -95,16 +106,18 @@ def _leg(
     with_target: bool = False,
     cooldown_bars: int = 0,
     signal: str | None = None,
+    stop_multiple: float = 2.0,
 ) -> LegSpec:
     """Long/short demo geometry: 2-ATR stop, optional 3-ATR target."""
-    exits = ExitSpec(stop=StopSpec("atr", 2.0))
+    exits = ExitSpec(stop=StopSpec("atr", stop_multiple))
     if with_target:
         exits = ExitSpec(
-            stop=StopSpec("atr", 2.0), target=TargetSpec("atr", 3.0)
+            stop=StopSpec("atr", stop_multiple),
+            target=TargetSpec("atr", 3.0),
         )
     if signal is not None:
         exits = ExitSpec(
-            stop=StopSpec("atr", 2.0),
+            stop=StopSpec("atr", stop_multiple),
             signal=Compare("mom", "<", 0.0)
             if signal == "flip"
             else Compare("mom", ">", 0.0),
@@ -166,9 +179,6 @@ def test_delegation_equality_no_signal() -> None:
         closes,
     )[0]
     assert record["exit_bar"] == reference["exit_idx"]
-    assert record["pnl_net_r"] == pytest.approx(
-        reference["r_pess"], abs=1e-12
-    )
     assert (
         record["exit_reason"]
         == {
@@ -177,6 +187,17 @@ def test_delegation_equality_no_signal() -> None:
             "time": "time",
         }[reference["exit_reason"]]
     )
+    # W3-1 semantic: the SIM still decides exits and r_pess; the
+    # recorded NET is r_pess minus the carry drag (long: no borrow,
+    # funding paid when the rate is positive)
+    drag = (
+        record["diagnostics"]["borrow_r"] + record["diagnostics"]["funding_r"]
+    )
+    assert record["pnl_net_r"] == pytest.approx(
+        reference["r_pess"] - drag, abs=1e-12
+    )
+    assert record["diagnostics"]["borrow_r"] == 0.0  # long: no borrow
+    assert drag > 0.0
 
 
 def test_sl_first_race_and_gap_through() -> None:
@@ -341,6 +362,7 @@ def test_run_book_isolation() -> None:
         md,
         borrow_bps_annual=500.0,
         funding_bps_annual=100.0,
+        periods_override=252.0,
     )
     assert sorted(result["records"]) == ["demo_long", "demo_short"]
     for leg_name, records in result["records"].items():
@@ -359,4 +381,209 @@ def test_run_book_isolation() -> None:
             for records in result["records"].values()
             for record in records
         )
+    )
+
+
+# ---------------------------------------------------------------------------
+# W3-1 -- carry accrual: calendar periods, formulas, signs
+# ---------------------------------------------------------------------------
+def test_periods_from_calendar_xnys_daily() -> None:
+    """XNYS + daily grid resolves 252, never 365 (the footgun pin).
+
+    The manifest carries the calendar; the derivation reads it.
+    Mutation fact: deriving periods as year/bar_delta (365) instead
+    of the calendar table breaks the 252 equality.
+    """
+    book = _make_book(periods_override=None)  # derivation must run
+    periods = book._resolve_periods(_manifest_md(_demo_md(), calendar="XNYS"))
+    assert periods == 252.0
+
+
+def test_periods_hourly_xnys_and_override() -> None:
+    """XNYS + hourly -> 1638; an explicit override wins.
+
+    Mutation fact: dropping the session-hours term (or the override
+    branch) breaks either equality.
+    """
+    book = _make_book(periods_override=None)
+    hourly = pd.date_range("2024-01-01", periods=30, freq="h", tz="UTC")
+    md = _manifest_md(
+        MaterializedData(
+            outcome=pd.Series(0.0, index=hourly),
+            features=pd.DataFrame(
+                {
+                    "open": 1.0,
+                    "high": 1.0,
+                    "low": 1.0,
+                    "close": 1.0,
+                    "mom": 1.0,
+                    "atr": 1.0,
+                },
+                index=hourly,
+            ),
+            controls=pd.DataFrame(index=hourly),
+            index=pd.DataFrame(
+                {"ts": hourly, "entity": "", "split": "train"},
+                index=hourly,
+            ),
+        ),
+        calendar="XNYS",
+    )
+    assert book._resolve_periods(md) == 1638.0
+    # an explicit override wins over the calendar table
+    override_book = _make_book(periods_override=8760.0)
+    assert override_book._resolve_periods(md) == 8760.0
+
+
+def test_periods_no_manifest_no_override_fatal() -> None:
+    """Manifest-less + no override refuses loudly (never guesses).
+
+    Mutation fact: a silent default calendar (or a guessed 252)
+    makes the pytest.raises fail.
+    """
+    book = _make_book(periods_override=None)
+    with pytest.raises(ValueError, match="refuses to guess"):
+        book._resolve_periods(_demo_md())
+    unknown = _manifest_md(_demo_md(), calendar="JPX")
+    with pytest.raises(ValueError, match="unknown calendar"):
+        book._resolve_periods(unknown)
+
+
+def _manifest_md(md: MaterializedData, *, calendar: str) -> MaterializedData:
+    """Return ``md`` with a minimal manifest carrying ``calendar``."""
+    manifest: DataManifest = {
+        "bundle_hash": "0" * 64,
+        "source_versions": {},
+        "calendar": calendar,
+        "row_count": len(md.index),
+        "train_rows": 0,
+        "test_rows": 0,
+        "dropped_embargo_gap": 0,
+        "date_range": ("", ""),
+        "nan_fraction": {},
+        "dropped": {},
+        "warnings": [],
+        "feature_hashes": {},
+        "lookahead_checks": {},
+        "validation": ValidationReport(
+            passed=True,
+            fatal=[],
+            warnings=[],
+        ),
+    }
+    return MaterializedData(
+        outcome=md.outcome,
+        features=md.features,
+        controls=md.controls,
+        index=md.index,
+        manifest=manifest,
+    )
+
+
+def test_borrow_short_only_funding_sign() -> None:
+    """Borrow is shorts-only; funding follows the rate's sign.
+
+    A paying short (borrow > 0) loses MORE than its sim R; a paying
+    long (funding > 0) loses; a receiving long (funding < 0) GAINS
+    over the sim R.  Mutation facts: charging borrow on longs breaks
+    the zero-borrow long; rejecting negative funding breaks the
+    receiving-long world construction; flipping the funding sign
+    breaks the loses/gains ordering.
+    """
+    md = _demo_md()
+    paying_long = _make_book().run(_demo_leg(), md)
+    long_diag = paying_long[0]["diagnostics"]
+    assert long_diag["borrow_r"] == 0.0  # the borrow book is shorts-only
+    assert long_diag["funding_r"] > 0.0  # pays positive funding
+    paying = paying_long[0]["pnl_net_r"]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        free_long = _make_book(
+            borrow_bps_annual=0.0, funding_bps_annual=0.0
+        ).run(_demo_leg(), md)
+        receiving_long = _make_book(funding_bps_annual=-100.0).run(
+            _demo_leg(), md
+        )
+    # paying costs money; receiving gains it (vs the zero-carry R)
+    assert free_long[0]["pnl_net_r"] > paying
+    assert receiving_long[0]["pnl_net_r"] > paying
+
+    # a HOLDING short pays borrow; a negative funding rate makes the
+    # short pay too (sign-carried)
+    short_leg = _leg(
+        name="short_hold", direction="short", op="<", stop_multiple=20.0
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        short_records = _make_book(
+            borrow_bps_annual=2000.0, funding_bps_annual=-100.0
+        ).run(short_leg, md)
+    assert short_records != []
+    short_diag = short_records[0]["diagnostics"]
+    assert short_diag["borrow_r"] > 0.0  # shorts pay borrow
+    assert short_diag["funding_r"] > 0.0  # negative rate: shorts pay
+
+
+def test_zero_carry_rates_warn() -> None:
+    """Zero rates are legal but warn (the no-silent-zero pin).
+
+    Mutation fact: removing either zero-warning makes the
+    pytest.warns fail.
+    """
+    with pytest.warns(UserWarning, match="borrow_bps_annual=0"):
+        Book(borrow_bps_annual=0.0, funding_bps_annual=100.0)
+    with pytest.warns(UserWarning, match="funding_bps_annual=0"):
+        Book(borrow_bps_annual=500.0, funding_bps_annual=0.0)
+    with pytest.raises(ValueError, match=">= 0"):
+        Book(borrow_bps_annual=-50.0, funding_bps_annual=100.0)
+    # negative funding is LEGAL (sign-carried)
+    neg = Book(borrow_bps_annual=500.0, funding_bps_annual=-100.0)
+    assert neg.funding_bps_annual == -100.0
+
+
+def test_same_bar_close_zero_carry() -> None:
+    """A same-bar close accrues zero carry (discrete-bar rule).
+
+    Mutation fact: counting the entry bar (k+1 semantics) makes the
+    zero assert fail.
+    """
+    opens = [100.0, 100.0, 90.0, 90.0, 90.0, 90.0, 90.0, 90.0]
+    highs = [101.0, 101.0, 91.0, 91.0, 91.0, 91.0, 91.0, 91.0]
+    lows = [99.0, 99.0, 89.0, 89.0, 89.0, 89.0, 89.0, 89.0]
+    closes = [100.0, 100.0, 90.0, 90.0, 90.0, 90.0, 90.0, 90.0]
+    mom = [-1.0, 1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]
+    md = _ohlc_md(opens=opens, highs=highs, lows=lows, closes=closes, mom=mom)
+    records = _make_book().run(_leg(name="gap_carry"), md)
+    assert records != []
+    scratch = records[0]
+    assert scratch["entry_bar"] == scratch["exit_bar"]
+    assert scratch["diagnostics"]["borrow_r"] == 0.0
+    assert scratch["diagnostics"]["funding_r"] == 0.0
+
+
+def test_carry_split_attribution() -> None:
+    """Taker + borrow + funding == costs_r, exactly (the split pin).
+
+    Mutation fact: collapsing the split into taker (or dropping any
+    component) breaks the identity and the per-component asserts.
+    """
+    md = _demo_md()
+    records = _make_book().run(_demo_leg(), md)
+    diag = records[0]["diagnostics"]
+    assert diag["taker_r"] > 0.0
+    assert diag["funding_r"] > 0.0
+    # k is pinned: the demo leg enters at bar 2, exits at bar 4
+    # (two CLOSED hold bars) -- a k+1 mutation shifts funding_r by
+    # exactly one per-bar unit and fails this exact-value pin.
+    assert records[0]["exit_bar"] - records[0]["entry_bar"] == 2
+    per_bar_funding = (
+        100.0 / 1e4 / 252.0 * (1.0 * 1.0 * 101.0 / (101.0 - 99.0))
+    )
+    assert diag["funding_r"] == pytest.approx(
+        2.0 * per_bar_funding, abs=1e-12
+    )
+    total = diag["taker_r"] + diag["borrow_r"] + diag["funding_r"]
+    assert records[0]["costs_r"] == pytest.approx(total, abs=1e-15)
+    assert records[0]["pnl_gross_r"] == pytest.approx(
+        records[0]["pnl_net_r"] + records[0]["costs_r"], abs=1e-15
     )

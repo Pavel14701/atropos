@@ -6,6 +6,8 @@ fail -> restored before commit).
 
 from __future__ import annotations
 
+import dataclasses
+
 import pandas as pd
 import pytest
 from atropos.data_contract import MaterializedData
@@ -190,3 +192,25 @@ def test_spec_validation_ladder() -> None:
     # undeclared instrument field is caught by the declaration check
     with pytest.raises(ValueError, match="must declare every"):
         _leg(instrument=InstrumentRef("field", {"field": "close"}))
+
+
+def test_leg_priority_default_and_validation() -> None:
+    """Priority defaults 0, is finite, negative is LEGAL (demotion).
+
+    Mutation fact: dropping the validate_number rung accepts NaN
+    priorities silently and the pytest.raises fail.
+    """
+    leg = _leg(name="base")
+    assert leg.priority == 0.0  # declaration order is the tiebreak
+    demoted = dataclasses.replace(_leg(name="demoted"), priority=-5.0)
+    assert demoted.priority == -5.0  # negative = deliberate demotion
+    with pytest.raises(ValueError, match="priority"):
+        _leg_with_priority(float("nan"))
+    with pytest.raises(ValueError, match="priority"):
+        _leg_with_priority("high")  # type: ignore[arg-type]
+
+
+def _leg_with_priority(priority: float) -> LegSpec:
+    """A leg with an explicit priority (replace re-runs validation)."""
+    base = _leg(name="prio")
+    return dataclasses.replace(base, priority=priority)
