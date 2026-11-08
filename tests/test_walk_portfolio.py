@@ -116,8 +116,8 @@ def test_netting_close_all_and_remainder() -> None:
     result = _walk(legs, "netting")
     netted = [
         record
-        for records in result["records"].values()
-        for record in records
+        for leg_records in result["records"].values()
+        for record in leg_records
         if record["exit_reason"] == "netted"
     ]
     assert len(netted) == 1
@@ -126,7 +126,10 @@ def test_netting_close_all_and_remainder() -> None:
     assert netted[0]["diagnostics"]["netted_remainder_dropped"] is True
     # the colon anchors the FULL prefix (a "dropped-silent" relabel
     # must fail this pin, not substring-sneak through)
-    assert any("netted remainder dropped:" in w for w in result["warnings"])
+    assert any(
+        "netted remainder dropped:" in warning
+        for warning in result["warnings"]
+    )
 
 
 def test_netted_reduction_no_warning() -> None:
@@ -145,14 +148,15 @@ def test_netted_reduction_no_warning() -> None:
     result = _walk(legs, "netting")
     netted = [
         record
-        for records in result["records"].values()
-        for record in records
+        for leg_records in result["records"].values()
+        for record in leg_records
         if record["exit_reason"] == "netted"
     ]
     assert len(netted) == 1
     assert netted[0]["netted_remainder"] == 0.0
     assert not any(
-        "netted remainder dropped" in w for w in result["warnings"]
+        "netted remainder dropped" in warning
+        for warning in result["warnings"]
     )
 
 
@@ -170,8 +174,8 @@ def test_netting_closes_all_positions() -> None:
     result = _walk(legs, "netting", cap=3)
     netted = [
         record
-        for records in result["records"].values()
-        for record in records
+        for leg_records in result["records"].values()
+        for record in leg_records
         if record["exit_reason"] == "netted"
     ]
     assert len(netted) == 2
@@ -294,8 +298,10 @@ def test_no_displacement_in_priority() -> None:
     result = _walk(legs, "priority", cap=2)
     assert result["records"]["leg_low"] != []
     assert result["records"]["leg_high"] != []
-    for records in result["records"].values():
-        assert all(r["exit_reason"] == "forced" for r in records)
+    for leg_records in result["records"].values():
+        assert all(
+            record["exit_reason"] == "forced" for record in leg_records
+        )
     assert result["exposure"]["net"][-1] == pytest.approx(2.0)
 
 
@@ -433,7 +439,8 @@ def test_sequential_opposites_coexist() -> None:
     assert long_trades != []
     assert short_trades != []
     assert signal_trades != []
-    assert any(r["exit_reason"] == "signal" for r in signal_trades)
+    assert any(record["exit_reason"] == "signal" for record in signal_trades)
     assert all(
-        r["exit_reason"] != "netted" for r in long_trades + short_trades
+        record["exit_reason"] != "netted"
+        for record in long_trades + short_trades
     )

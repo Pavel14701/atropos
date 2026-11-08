@@ -811,6 +811,7 @@ class Book:
             ...         index=bars,
             ...     ),
             ... )
+            >>> from atropos.legs import SizingSpec
             >>> long_leg = LegSpec(
             ...     name="demo_long",
             ...     direction="long",
