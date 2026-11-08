@@ -75,15 +75,16 @@ are never overwritten; edit them manually after init.
 """
 
 #: Skeleton files created by :func:`init_workspace` (relative POSIX
-#: paths -> file content, in creation order).
-DEFAULT_WORKSPACE_FILES: dict[Path, str] = {
-    Path("GRAVEYARD.md"): _GRAVEYARD_TEMPLATE,
-    Path("hypotheses/INDEX.csv"): _INDEX_CSV_HEADER,
-    Path("hypotheses/README.md"): _HYPOTHESES_README_TEMPLATE,
+#: path strings -> file content, in creation order; plain ``str`` keys
+#: keep the pdoc-rendered value platform-independent).
+DEFAULT_WORKSPACE_FILES: dict[str, str] = {
+    "GRAVEYARD.md": _GRAVEYARD_TEMPLATE,
+    "hypotheses/INDEX.csv": _INDEX_CSV_HEADER,
+    "hypotheses/README.md": _HYPOTHESES_README_TEMPLATE,
 }
 
 
-def init_workspace(root: Path = Path(".")) -> dict[str, Any]:
+def init_workspace(root: Path) -> dict[str, Any]:
     """Create the workspace skeleton under ``root``; never overwrite.
 
     For every file of :data:`DEFAULT_WORKSPACE_FILES`: an existing file
@@ -134,9 +135,9 @@ def init_workspace(root: Path = Path(".")) -> dict[str, Any]:
             with open(target, "x", encoding="utf-8") as handle:
                 handle.write(content)
         except FileExistsError:
-            skipped.append(rel_path.as_posix())
+            skipped.append(rel_path)
             continue
-        created.append(rel_path.as_posix())
+        created.append(rel_path)
     return {"created": created, "skipped": skipped, "root": str(root)}
 
 

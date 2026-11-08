@@ -157,10 +157,8 @@ def test_index_and_readme_skeleton_markers(tmp_path: Path) -> None:
 
 
 def test_default_workspace_files_shape() -> None:
-    """The registry maps relative paths to non-empty text templates."""
-    assert list(DEFAULT_WORKSPACE_FILES) == [
-        Path(rel_text) for rel_text in _REL_PATHS
-    ]
+    """The registry maps relative POSIX path strings to templates."""
+    assert list(DEFAULT_WORKSPACE_FILES) == _REL_PATHS
     assert all(
         content.strip() for content in DEFAULT_WORKSPACE_FILES.values()
     )

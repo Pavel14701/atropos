@@ -34,10 +34,6 @@ from atropos.agent._resolution import (
 )
 
 __all__ = [
-    "AGENTS_MD",
-    "AGENT_DIR",
-    "CLAUDE_MD",
-    "SKILLS_DIR",
     "list_skills",
     "read_agent_context",
     "read_skill",
@@ -45,6 +41,10 @@ __all__ = [
 
 # importlib.resources locates the package layer both in a source tree
 # and inside an installed wheel; str() adapts the Traversable to Path.
+# The four path constants below are importable but deliberately NOT in
+# __all__: pdoc renders the VALUE of every __all__ variable, which
+# would bake an absolute, install-specific machine path (and the
+# platform repr) into the committed API reference.
 AGENT_DIR = Path(str(files("atropos.agent")))
 AGENTS_MD = AGENT_DIR / "AGENTS.md"
 CLAUDE_MD = AGENT_DIR / "CLAUDE.md"
