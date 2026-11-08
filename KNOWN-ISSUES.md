@@ -419,3 +419,29 @@ C''-daily is now marked VOID in docs/JOURNAL.md as a design error.
 Unblocks: prevents repeating the error on future legs.
 Trigger to close: N/A — permanent rule. The VOID example stays as
 the canonical illustration.
+
+## 13. Feature-analysis tool (analytic, not part of the 7-stage protocol)
+
+Status: shipped (2026-11-08). Not a protocol stage.
+
+Cause: atropos/feature_scan.py — feature_analysis orchestrator (11
+functions: missingness_scan, correlation_cluster, orthogonal_check
+(§11), bucket_scan, interaction_scan, rule_fit, regime_scan,
+threshold_scan, auto_discovery, feature_importance,
+auto_rule_generation). Returns the extended classification
+(STRONG / REGIME_DEPENDENT / STRONG_UNVERIFIED / SHAPE_UNKNOWN /
+PROXY / NOISE / EXPLORATORY); the report schema was frozen at the
+first checkpoint commit and every key is present on every outcome.
+Used in: C''-trade (results in docs/JOURNAL.md, feed 2).
+Explicitly out of scope: ML black-box SHAP (permutation importance
+only); auto-discovery never produces STRONG (always a hypothesis
+list under the exploratory doctrine note); auto_rule_generation
+searches values on train only and lets the untouched test split
+judge (overfit_warning fires when every kept candidate fails).
+Verification: 28 test items; 25-mutation sweep — every mutation
+applied -> pinned test failed -> module restored clean.
+Unblocks: nothing (analytic tool, not a gap).
+Trigger to close: N/A — permanent tool. Add to §8 protocol sync only
+if integrated as a stage (currently not planned). If a future wave
+wants auto-discovery -> prereg path, that is a separate protocol
+change, not a tool feature.

@@ -120,6 +120,65 @@ evaluation is trade-level only.
   properties carry the contribution (tight/fast vs wide/slow)?
 - prereg 6ef9383289163d0e; n_obs 3368
 
+### C''-trade feature analysis (v12) — exploration, NOT validation
+
+Run: `atropos.feature_analysis` over the same 3398-trade cache
+(outcome net_r; features direction / strength / zone_width_atr /
+retest_delay; controls mom7/mom30; Bonferroni family = 4 clusters,
+gate |t| ≥ 2.50; 60/40 frozen split). Full report verbatim:
+`Desktop/atropos_transfer/feature_scan_report.json`. This is the
+zone-geometry thread the orthogonal check opened, mapped through the
+feature lab. **feature_analysis is exploration, not validation;
+validation requires prereg + run_full_pipeline.**
+
+- classification: **retest_delay STRONG_UNVERIFIED**,
+  **zone_width_atr STRONG_UNVERIFIED** (orthogonal pass + monotone;
+  the regime split below is data-derived, so the cell cannot become
+  STRONG); **direction PROXY, strength PROXY** (orthogonal gate fail
+  — consistent with the v11 HC0 ts −1.72 / −2.08); cluster count
+  n_effective 4.
+- missingness: zero NaN flags on all four features.
+- bucket_scan (feed-quantile edges; see the mis-scale note below):
+  zone_width_atr monotone, bucket means 0.837 → 0.261 across the
+  width quintiles, Q2−Q1 net_t −6.43 / norm_t −6.43, hit-rate z
+  only ≈ −2.0 — **the width effect is a magnitude effect, not a
+  hit-rate effect**. retest_delay monotone, means 0.717 → 0.118,
+  all three signals fire (t −7.50) — **delay kills hit rate AND
+  magnitude**.
+- interaction zone_width × delay: NOT present (F p = 0.18, no
+  low-power cells) — the two effects are additive.
+- rules (frozen 60/40): `narrow_fast` (width < 1.5 & delay ≤ 5)
+  delta_test **+0.37R** (n 149) and `narrow_only` +0.37R (n 389) —
+  both valid; `best_valid_rule = narrow_fast` (the deltas tie, the
+  tool names the higher one).
+- threshold sweep width ∈ [1.2, 2.4]: **plateau, no edge** — every
+  point valid, delta_test 0.32–0.42 (optimal_range the whole sweep):
+  a wide ridge, not a pick-one-number spike.
+- regime scan (trailing-30-trade net_r std, calm/storm at the
+  median — **data-derived, prereg_hash None → REGIME_UNVERIFIED**):
+  retest_delay monotone in both regimes (stable); zone_width_atr
+  flips — calm rho −0.000 (nothing), storm rho −0.088 (monotone):
+  the width effect concentrates in high-volatility regimes. This is
+  a hypothesis for a PREREGISTERED indicator, nothing more.
+- rule generation (grid width < t1 & delay ≤ t2, 16 combos,
+  train-only search, top-5 judged on test): best
+  `width < 1.5 & delay ≤ 10` delta_test **+0.62R** (n 230), warning
+  False; the train-top combos (width < 1.2) all starve on test
+  (insufficient_n) — the n-guard, not the test split, killed them.
+- feature_importance (linear, permutation, diagnostic only):
+  retest_delay 0.056 [0.044, 0.069] > zone_width_atr 0.037
+  [0.029, 0.045] >> strength 0.0025 > direction 0.0018 — the same
+  ordering the v11 HC0 t's gave.
+- mis-scale note (honest record): the plan's zone_width_atr numbers
+  (edges 0.2–0.8, rules < 0.4) sit BELOW the feed's support (0.74–
+  7.83, median 1.82); the first run returned all-insufficient /
+  low-power cells — the tool's power guards did their job. The
+  recorded run uses feed-quantile values, which are data-derived:
+  everything above stays exploratory-grade regardless.
+- strength is ~90% zeros in this cache (max 0.026) — its PROXY is a
+  gate fail on a near-degenerate column, flagged here so nobody
+  reads it as a tested negative.
+
 ## Feed 3 — E predictor-form (30946 asset-days, 30 perps,
 ## signal = funding z-score → returns = forward funding)
 

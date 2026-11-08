@@ -2,6 +2,14 @@
 
 ## 1.2.1 — verdict taxonomy
 
+- feature_scan module: 11 functions + 28 tests; extended feature
+  classification (STRONG / REGIME_DEPENDENT / STRONG_UNVERIFIED /
+  SHAPE_UNKNOWN / PROXY / NOISE / EXPLORATORY — the last three never
+  upgradeable: PROXY = orthogonal fail, NOISE = untestable,
+  EXPLORATORY = auto-discovery output only). `orthogonal_check`
+  gains `per_feature_detected` (report key) and an optional
+  `t_threshold` override; `KNOWN-ISSUES.md` §13 documents the tool
+  boundary.
 - Generic `DEAD` removed from the pipeline verdicts: the former
   catch-all is split into specific tokens — `ROBUSTNESS_DEATH` (a
   specific battery test failed while the baseline held; was `DEAD` at

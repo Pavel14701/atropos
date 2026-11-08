@@ -1965,11 +1965,12 @@ def threshold_scan(
         >>> rows = np.arange(600)
         >>> feat = pd.Series(rng.uniform(0, 1, 600), index=rows)
         >>> out = pd.Series(
-        ...     np.where(feat < 0.5, 1.0, 0.0)
+        ...     np.where(feat < 0.65, 1.0, 0.0)
         ...     + 0.1 * rng.standard_normal(600), index=rows
         ... )
         >>> report = threshold_scan(
-        ...     out, feat, "feat < {t}", [0.3, 0.4, 0.5, 0.6, 0.7],
+        ...     out, feat, "feat < {t}",
+        ...     [0.7, 0.75, 0.8, 0.85, 0.9],
         ...     feature_name="feat",
         ...     train_idx=np.arange(400), test_idx=np.arange(400, 600),
         ...     min_n_kept=30,
