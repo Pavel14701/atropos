@@ -446,46 +446,73 @@ if integrated as a stage (currently not planned). If a future wave
 wants auto-discovery -> prereg path, that is a separate protocol
 change, not a tool feature.
 
-## 14. Data contract + legs layer (v13) — MVP boundary and deferred families
+## 14. Data contract + legs layer (v13) + composition/carry (v14) — surfaces, roadmap, deferred families
 
-Status: shipped (2026-11-08), wave v13.  Six checkpoints (data
-contract / adapters / real-data smoke / legs / book / strategy).
+Status: v13 shipped (2026-11-08), wave v14 shipped (2026-11-08).
 
-Shipped: `atropos/data_contract.py` (MaterializedData,
-FieldMeta.t_known_offset, as-of resolver with VERIFIED lookahead
-checks, DataManifest with full sha256 bundle_hash, timestamp-based
-split + embargo), `atropos/adapters.py` (OHLCV + Tidy), the union
-`feature_analysis(MaterializedData | Series)` whose manifest is
-VALIDATED (failed lookahead/validation = fatal; missing manifest =
-loud warning), `to_pipeline_data` (LEGACY bridge - warns on every
-call; the pipeline's inner-join re-alignment destroys as-of
-guarantees), `atropos/legs.py` (Predicate AST, 4-layer LegSpec,
-stateless LegEngine), `atropos/backtesting.simulate_intents` (public
-batch delegation target), `atropos/book.py` (Book + TradeRecord with
-exit_reason + feature snapshots), `atropos/strategy.py`
-(StrategySpec, independent combination, records_to_features bridge).
+### The four diagnostic surfaces (the §14 ranking, decided BEFORE wave 3)
 
-Deferred (each a loud ValueError naming this section):
-OptionsChainAdapter / EventAdapter / FuturesAdapter / WidePanelAdapter;
-multi-entity materialization (entity_axis != "none"); resampling
-(freq) and non-"last" aggregates; zscore transform (full-sample
-moments leak the future); netting/sequential/priority combinations;
-fraction_of_equity / vol_target sizing; limit/stop order types;
-borrow/funding costs; participation caps; universe/survivorship
-machinery; run_full_pipeline signature integration (the bridge is
-legacy-only); option_leg/composite/spread instruments; Book
-max_concurrent > 1; OHLCV real-data feed (covered by synthetic
-end-to-end demo + unit tests only in this wave).
+A missing surface = a class of strategies Atropos cannot issue a
+verdict for.  Ranked by breadth (who is affected), not visibility:
 
-Known facts (not issues): the no-target sentinel is entry + 1e9 x
-risk_ref (ABOVE entry for both directions - a never-hit target must
-stay a positive, TradeIntent-valid price).  The C''-Tidy smoke uses
-a sequence clock (trade date + within-day rank); as-of windows
-degenerate to row order there - by design, documented in the JOURNAL
-entry.
+| Surface | Unlocks | Affected |
+|---|---|---|
+| composition (netting/sequential/priority) | portfolio-level DSR/DD/concentration gates | EVERY multi-leg strategy (pairs, calendars, condors) |
+| short-cost honesty (borrow/funding) | honest COST_DEATH for shorts | EVERY short strategy |
+| execution realism (limit/stop + participation) | COST_DEATH where fills fail | every strategy with execution constraints |
+| cross-sectional/universe | bucket_scan by ENTITY, not time | everyone without OHLCV/Tidy data |
 
-Unblocks: per-trade/predictor-form ingestion named in FRAMEWORK
-section 4's booked-R caveat (the generic layer; the SYSTEM-9 port
-keeps its reserved name system9_legs.py).
-Trigger to close: N/A - permanent layer; deferred families graduate
-by separate waves, each removing its own line here.
+### Roadmap (decided, not re-litigated)
+
+* Wave 3 (DONE, this section): netting/sequential/priority +
+  borrow/funding.  Shipped: Book.walk_portfolio (shared walk, the
+  ORDERING PIN: exits -> slot-release -> netting -> entries; the
+  tuple declaration order is the tiebreak; priorities not applied
+  in netting; NO displacement), netting = full collapse +
+  netted_remainder (clamped: a reduction is not a loss; > 0 warns),
+  exit_reason "netted", carry accrual (calendar-derived periods —
+  XNYS 252/1638, 24/7 365/8760 — NOT year/bar_delta, which
+  understated equity short-carry by ~31%), discrete bar semantics
+  k = exit_bar − entry_bar, REQUIRED carry params with loud
+  zero-warnings, funding sign-carried (negative legal),
+  portfolio_gates over the walk's equity/exposure, cost_model
+  apply_holding_costs + breakeven_holding_cost_bps (periods
+  REQUIRED).
+* Wave 4: options — OptionsChainAdapter + option_leg +
+  surface scalars + cost_regime on InstrumentRef.  NOW
+  portfolio-diagnosable because netting exists.
+* Wave 5: execution realism — limit/stop orders + participation
+  caps (COST_DEATH where strategies fail to fill).
+* Wave 6: cross-sectional/universe + fraction_of_equity/vol_target
+  sizing (a different analysis mode: bucket_scan by entity).
+
+### Deferred in wave 3 (each a loud ValueError naming this section)
+
+* Displacement by priority — needs a stateful intra-bar mutation +
+  PnL reconstruction + a conflict with netted semantics.  MVP
+  priority resolves ordering and freed-slot competition only.
+* Partial netting (opening the remainder) — mutable size, three
+  new states.  The remainder is RECORDED (netted_remainder +
+  diagnostics flag + portfolio warning), not silently dropped.
+* Rate SERIES from data — needs per-instrument series in Book and
+  a FieldSpec for funding/borrow with t_known_offset (perps:
+  funding changes every 8h; hard-to-borrow equities).  MVP: flat
+  annual bps = a cost POLICY; series = DATA; not mixed.
+* cost_regime on InstrumentRef (equity/perp/future) — wave 4.
+* gross/net cap ENFORCEMENT — reported as pinned-format notes.
+* OptionsChainAdapter / EventAdapter / FuturesAdapter /
+  WidePanelAdapter — waves 4-6.
+* zscore transform; multi-entity materialization; run_full_pipeline
+  signature integration — unchanged from v13.
+
+Shipped in v13 (unchanged): the data contract, adapters, legs,
+Book, StrategySpec; the v13 deferred list above migrates here.
+
+Verification: v14 sweeps 22/22 CAUGHT rc=1 (8 carry/periods +
+9 walk/netting + 5 dispatch/gates/holding); full suite green;
+§7 law respected (cost_death_test stays standalone — portfolio
+honesty comes from carry INSIDE the equity, not a new gate).
+
+Unblocks: wave 4 (options).  Waves 5-6 unblocked transitively.
+Trigger to close: N/A — permanent layer; each deferred line graduates
+by its own wave and removes itself here.

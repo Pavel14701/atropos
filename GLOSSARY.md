@@ -487,3 +487,34 @@ combination is "independent" — legs' positions COEXIST (NOT netting);
 each leg runs in a fresh Book (isolation by construction). Example:
 an iron condor is four option_legs + caps; today it is four field
 legs — the homogeneous shape is already the contract.
+
+
+## Composition + carry (v14)
+
+**walk_portfolio** — the multi-leg shared walk: one decision grid,
+per-leg cooldowns, a portfolio slot cap, and the ORDERING PIN (exits
+→ slot-release → netting → entries; a slot freed on bar b admits on
+bar b).  Example: two legs, cap 1, both fire bar 0 → priority mode
+admits the higher priority; sequential admits the first declared.
+
+**Netting** — an opposite-direction entry on the same instrument
+closes ALL positions on it (exit_reason "netted") and is consumed;
+`netted_remainder = max(|new| − Σold, 0)` is RECORDED (clamped: a
+reduction is not a loss; > 0 warns — signal loss, honestly
+reported).  Partial netting is deferred.  Example: long 1R + short
+2R → long closes "netted", remainder 1.0R flagged and warned.
+
+**Priority** — an ordering weight for the shared walk: same-bar
+entries compete by (−priority, declaration index); a freed slot
+admits by the same rule; displacement (closing a lower-priority
+holder) does NOT exist.  Example: priorities 9 and 1 on cap 1 →
+the 9-leg enters; the 1-leg waits; neither closes the other.
+
+**Borrow/funding (carry)** — flat annual bps, REQUIRED parameters
+(zero warns — no silent short-cost understatement), accrued per
+CLOSED hold bar (k = exit_bar − entry_bar; same-bar → 0) on a
+CALENDAR-derived periods (XNYS daily = 252, not 365).  Notional is
+pinned: size_r × risk_ref × fill/(fill − stop) long, fill/(stop −
+fill) short.  Funding is sign-carried: positive → longs pay.
+Example: a holding short with borrow 2000/funding −100 pays BOTH,
+recorded separately in diagnostics (borrow_r/funding_r/taker_r).

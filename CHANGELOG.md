@@ -2,6 +2,22 @@
 
 ## 1.2.1 — verdict taxonomy
 
+- composition + carry (wave v14): Book.walk_portfolio — the
+  multi-leg shared walk with netting (full collapse +
+  netted_remainder clamped: a reduction is not a loss),
+  sequential, priority (ordering + freed-slot competition, NO
+  displacement, tuple-order tiebreak); carry accrual with
+  CALENDAR-derived periods (XNYS 252/1638, 24/7 365/8760 — the
+  year/bar_delta footgun pinned and killed), discrete bar
+  semantics k = exit_bar − entry_bar; REQUIRED carry params on
+  Book/PortfolioPolicy (zero warns — no silent short-cost
+  understatement); funding sign-carried (negative legal);
+  exit_reason "netted"; portfolio_gates over walk equity
+  (DSR/DD/concentration at portfolio level); cost_model
+  apply_holding_costs + breakeven_holding_cost_bps (periods
+  required).  §14 re-ranked by diagnostic surface + the waves 4-6
+  roadmap (options; execution realism; cross-sectional).
+- Generic `DEAD` removed from the pipeline verdicts: the former
 - data contract + legs layer (wave v13): `MaterializedData`
   (as-of resolved, manifest-verified bundles - lookahead checks are
   VERIFIED, not assumed; failed manifest = fatal in
