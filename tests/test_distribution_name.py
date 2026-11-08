@@ -21,7 +21,7 @@ PYPROJECT = "pyproject.toml"
 
 
 def test_pyproject_name_is_atropos_quant() -> None:
-    """pyproject name is atropos-quant -- the MUTATABLE pin (a).
+    """Pyproject name is atropos-quant -- the MUTATABLE pin (a).
 
     Reads the SOURCE file directly (tomllib), so a pyproject revert
     fails this test with no reinstall step.  Mutation fact: reverting

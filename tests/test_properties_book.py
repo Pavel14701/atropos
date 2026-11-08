@@ -12,7 +12,7 @@ from typing import Any
 
 import pandas as pd
 import pytest
-from atropos.book import Book
+from atropos.book import Book, _year_periods
 from atropos.data_contract import MaterializedData
 from atropos.legs import (
     Compare,
@@ -184,8 +184,6 @@ def test_year_periods_calendar_table() -> None:
     replacing the table with 365 (or dropping the session-hours
     term) breaks an exact equality.
     """
-    from atropos.book import _year_periods
-
     day = pd.Timedelta(days=1)
     hour = pd.Timedelta(hours=1)
     assert _year_periods("XNYS", day) == 252.0
