@@ -384,3 +384,38 @@ Trigger to close: an independent thirds-test study across window
 sizes (does the sign-flip rate collapse to the null under window
 resampling?); on results, either pin a window-selection rule or
 document the sensitivity as an accepted property.
+
+## 11. Orthogonal-check tool (analytic, not part of the 7-stage protocol)
+
+Status: shipped (v11). Not a protocol stage.
+
+Cause: `atropos/orthogonal.py` — `orthogonal_check(outcome, features,
+controls)` + `signal_vs_controls(outcome, signal, controls)`. Used
+ad-hoc to decompose whether a candidate feature carries information
+beyond known controls. Not invoked by `run_full_pipeline`; callers
+use it directly on a feed.
+
+Used in: C''-trade (zone_width_atr t=−9.33, retest_delay t=−9.92
+after mom7/mom30 controls; direction t=−1.72 not significant),
+E-predictor (funding level z t=+4.89 beyond persistence),
+A-daily (signal_vs_controls: t ≈ stage-1 value, consistency check).
+
+Unblocks: nothing (analytic tool, not a gap).
+Trigger to close: N/A — permanent tool. Add to §8 protocol sync only
+if integrated as a stage (currently not planned).
+
+## 12. Feed granularity must match strategy decision granularity
+
+Status: rule documented (skill 02, FRAMEWORK §4); C''-daily VOID as
+example.
+
+Cause: aggregating a sub-daily strategy's decisions to a daily P&L
+stream is signal loss, not a time-frame test. The feed must operate
+at the granularity the strategy actually decides at. C''-daily
+(daily aggregate of a 15m OB-retest leg) was run and returned DEAD;
+that DEAD is a verdict on the aggregate, not on the leg, and
+C''-daily is now marked VOID in docs/JOURNAL.md as a design error.
+
+Unblocks: prevents repeating the error on future legs.
+Trigger to close: N/A — permanent rule. The VOID example stays as
+the canonical illustration.
