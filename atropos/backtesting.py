@@ -911,9 +911,7 @@ class TradeIntent:
             raise ValueError(f"stop_price must be > 0, got {stop_level}")
         target_level = validate_number("target_price", self.target_price)
         if target_level <= 0.0:
-            raise ValueError(
-                f"target_price must be > 0, got {target_level}"
-            )
+            raise ValueError(f"target_price must be > 0, got {target_level}")
         atr = validate_number("atr_value", self.atr_value)
         if atr < 0.0:
             raise ValueError(f"atr_value must be >= 0, got {atr}")
