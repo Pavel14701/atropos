@@ -20,12 +20,14 @@ pieces (:func:`atropos.backtesting.pessimistic_r` + the bundled
 cost formula).
 
 EXIT REASONS ARE DIAGNOSTICS.  ``TradeRecord.exit_reason`` ("stop" /
-"target" / "time" / "signal" / "forced") is the most valuable
-post-hoc field the Book emits: a leg closing ~90% of its trades on
-stops is being stop-hunted (or its stop is noise), not validated by
-its signal -- read the reason histogram before the P&L.  The
-simulator's raw "sl"/"tp" labels are translated in EXACTLY ONE
-place, the module-level :data:`_EXIT_REASON_MAP`.
+"target" / "time" / "signal" / "forced" / "netted") is the most
+valuable post-hoc field the Book emits: a leg closing ~90% of its
+trades on stops is being stop-hunted (or its stop is noise), not
+validated by its signal -- read the reason histogram before the P&L.
+The simulator's raw "sl"/"tp" labels are translated in EXACTLY ONE
+place, the module-level :data:`_EXIT_REASON_MAP`; "netted" is the
+one Book-native reason -- it originates in
+:meth:`Book.walk_portfolio`'s netting phase, never in the map.
 
 SNAPSHOT SEMANTICS (review item 5).  ``exit_ts`` is the CLOSE stamp
 of the bar in which the exit filled (intrabar stop/target fills land
@@ -69,6 +71,7 @@ from atropos.legs import (
     EntrySpec,
     ExitSpec,
     InstrumentRef,
+    LegDecision,
     LegEngine,
     LegSpec,
     StopSpec,
@@ -86,6 +89,8 @@ _OHLC_COLUMNS = ("open", "high", "low", "close")
 # The SINGLE translation point sim-label -> TradeRecord exit_reason:
 # every "sl"/"tp" -> "stop"/"target" mapping must go through this
 # dict exactly once, so record consumers only ever see mapped labels.
+# "netted" never appears here: it originates in the Book itself
+# (walk_portfolio's netting phase), not in the simulator.
 _EXIT_REASON_MAP = {"sl": "stop", "tp": "target", "time": "time"}
 
 # Carry-calendar table (W3-1): calendar -> (daily bars per year,
@@ -125,13 +130,19 @@ class TradeRecord(TypedDict, total=True):
         pnl_net_r: pessimistic net R scaled by ``size_r``.
         costs_r: bundled round-trip taker cost scaled by ``size_r``.
         exit_reason: "stop" | "target" | "time" | "signal" |
-            "forced".
+            "forced" | "netted".
+        netted_remainder: un-absorbed incoming size of a "netted"
+            close (``max(|incoming size_r| - sum(netted size_r), 0)``;
+            the clamp makes a reduction book 0.0, never a loss);
+            ``0.0`` on every non-netted record.
         features_at_entry: feature row AS OF the entry DECISION bar
             (one bar before the fill, except the final-bar clamp).
         features_at_exit: feature row AS OF the exit bar.
         diagnostics: free-form dict (positions, raw sim labels,
             per-1R values, equity after; ``r_opt`` is the sim's
-            value, or the optimistic net for Book-managed exits).
+            value, or the optimistic net for Book-managed exits;
+            netting closes with a dropped remainder add
+            ``netted_remainder_dropped``).
     """
 
     leg_name: str
@@ -148,6 +159,7 @@ class TradeRecord(TypedDict, total=True):
     pnl_net_r: float
     costs_r: float
     exit_reason: str
+    netted_remainder: float
     features_at_entry: dict[str, float]
     features_at_exit: dict[str, float]
     diagnostics: dict[str, Any]
@@ -238,8 +250,13 @@ def _year_periods(calendar: str, bar_delta: pd.Timedelta) -> float:
 
 @dataclass(frozen=True)
 class _OpenPosition:
-    """One admitted entry's immutable tracking snapshot (Book state)."""
+    """One admitted entry's immutable tracking snapshot (Book state).
 
+    ``leg_name`` names the owning leg: the portfolio walk keys its
+    shared position pool by it.
+    """
+
+    leg_name: str
     intent: TradeIntent
     sim: SimIntentResult
     entry_decision_pos: int
@@ -247,6 +264,61 @@ class _OpenPosition:
     size_r: float
     fill: float
     risk_ref: float
+
+
+_EntryCandidate = tuple[int, str, TradeIntent, LegDecision]
+"""One flat leg's fired entry on one decision bar.
+
+``(declaration index, leg name, TradeIntent, LegDecision)``: the
+declaration index drives the "priority" ordering and its tiebreak,
+the intent is the delegation input, the decision carries the
+``forced_last_bar`` diagnostic.
+"""
+
+
+@dataclass(frozen=True)
+class _PreparedWalk:
+    """Immutable per-walk inputs of :meth:`Book.walk_portfolio`.
+
+    Built once by :meth:`Book._wp_prepare` before the decision
+    grid: the validated legs, the walk's own mode constants, the
+    shared bundle, the per-leg price/cooldown lookups and the
+    resolved carry periods -- the phase helpers read everything
+    from here instead of taking long parameter lists.
+    """
+
+    leg_list: list[LegSpec]
+    md: MaterializedData
+    combination: str
+    max_concurrent_positions: int
+    ts_series: pd.DatetimeIndex
+    n_bars: int
+    periods: float
+    leg_by_name: dict[str, LegSpec]
+    arrays_by_leg: dict[
+        str,
+        tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    ]
+    instrument_px_by_leg: dict[str, np.ndarray]
+    instrument_id_by_leg: dict[str, str]
+    cooldown_bars_by_leg: dict[str, int]
+
+
+@dataclass
+class _WalkState:
+    """Mutable shared state of one :meth:`Book.walk_portfolio` walk.
+
+    The phase helpers receive this bundle and mutate it in place:
+    the position pool (keyed by leg name), the per-leg cooldown
+    and carry-bar counters, the per-leg record lists and the
+    collected netting warnings.
+    """
+
+    open_positions: dict[str, _OpenPosition]
+    cooldown_until: dict[str, int]
+    carry_bars: dict[str, int]
+    records_by_leg: dict[str, list[TradeRecord]]
+    remainder_warnings: list[str]
 
 
 def _demo_md() -> MaterializedData:
@@ -334,7 +406,9 @@ class Book:
 
     One instance may walk several legs (``run`` accumulates on
     ``closed`` / ``equity_r``); :func:`run_book` gives every leg a
-    fresh Book.
+    fresh Book.  For a shared-state multi-leg walk over ONE decision
+    grid (one slot pool, optional netting), see
+    :meth:`Book.walk_portfolio`.
 
     Args:
         cost: the taker cost model handed to every delegated
@@ -482,7 +556,7 @@ class Book:
         # an undivided sentinel).  On a <2-bar grid every trade is
         # same-bar (k = exit_bar - entry_bar = 0), so the calendar
         # stays unresolved without changing any record.
-        carry_active, periods = self._carry_setup(md, n_bars)
+        _carry_active, periods = self._carry_setup(md, n_bars)
         instrument_id = str(leg.instrument.spec["field"])
         engine = LegEngine()
         records: list[TradeRecord] = []
@@ -500,6 +574,7 @@ class Book:
                     [intent], opens, highs, lows, closes, cost=self.cost
                 )[0]
                 open_pos = _OpenPosition(
+                    leg_name=leg.name,
                     intent=intent,
                     sim=sim,
                     entry_decision_pos=decision_pos,
@@ -600,6 +675,865 @@ class Book:
             )
             records.append(record)
         return records
+
+    def walk_portfolio(
+        self,
+        legs: tuple[LegSpec, ...] | list[LegSpec],
+        md: MaterializedData,
+        *,
+        combination: str,
+        max_concurrent_positions: int,
+        periods_override: float | None = None,
+    ) -> dict[str, Any]:
+        """Walk many legs over ONE decision grid with shared state.
+
+        Unlike :func:`run_book` (one isolated Book per leg), the
+        portfolio walk keeps ONE shared state across the legs: the
+        position pool (keyed by leg name), the per-leg entry
+        cooldowns and one equity ledger.  ``risk_per_trade`` sizing
+        acts on the SHARED equity and every close -- whichever leg
+        owns it -- credits the same curve; the walk books onto the
+        instance ledger (``closed`` / ``equity_r``) exactly like
+        :meth:`run` does.
+
+        ORDERING PIN (the exact per-bar phase order):
+
+        * Phase A -- EXIT RESOLUTION for every open position: each
+          owning leg's engine decision; signal exits at that bar's
+          instrument value, delegated sim exits at
+          ``decision_pos == exit_idx``, unresolved-on-last-bar
+          forced.  Carry bars count exactly as :meth:`run` does --
+          incremented only when a position survives the whole bar,
+          reset on every close -- so a close books exactly
+          ``exit_bar - entry_bar`` accrual bars.
+        * Phase B -- SLOT RELEASE: a slot freed in Phase A (or by a
+          same-bar resolution at admission) is available THIS bar
+          for entry competition.
+        * Phase C -- NETTING (``combination="netting"`` only, before
+          entry competition): an entry intent OPPOSITE in direction
+          to an open position on the SAME instrument closes ALL open
+          positions on that instrument -- a market close at the
+          DECISION bar's instrument value, reason "netted" -- and is
+          itself CONSUMED (never opened, no cooldown change).  The
+          remainder recorded on every netted close is
+          ``max(|incoming size_r| - sum(netted size_r), 0)``: the
+          clamp makes a pure REDUCTION book zero remainder, never a
+          loss; a positive remainder sets the record's
+          ``diagnostics["netted_remainder_dropped"]`` and appends
+          ``"netted remainder dropped: {leg} {remainder:.4f}R"``
+          (naming the INCOMING leg) to the result's warnings.
+          Priorities are NOT applied inside netting: candidates net
+          in declaration order, mutation-pinned (a later candidate
+          sees the positions an earlier one just closed).
+        * Phase D -- ENTRY COMPETITION: candidates ordered by
+          ``(-priority, declaration index)`` for "priority" and by
+          declaration index for "sequential"/"netting"; admitted
+          while ``len(open_positions) < max_concurrent_positions``,
+          SKIPPED beyond the cap -- there is NO queue.
+
+        No offsetting outside netting: under "sequential"/"priority"
+        a long and a short on the same instrument both hold; netting
+        is its own combination.
+
+        Args:
+            legs: the legs to co-walk (tuple or list; non-empty,
+                distinct names -- records are keyed by ``leg.name``).
+            md: the materialized bundle every leg walks; its
+                features frame must carry every leg's declared
+                columns plus the OHLC columns (see the MVP price
+                path above).
+            combination: "sequential" (declaration order),
+                "priority" (highest ``LegSpec.priority`` first) or
+                "netting" (opposite intents close and are consumed);
+                "independent" is :func:`run_book`'s job.
+            max_concurrent_positions: the portfolio slot cap (>= 1).
+            periods_override: optional explicit bars-per-year for
+                the carry accrual; wins over the instance attribute
+                (so a manifest-less bundle stays runnable); ``None``
+                derives like :meth:`run`.
+
+        Returns:
+            ``{"records": {leg_name: [TradeRecord, ...]} -- EVERY
+            leg, an empty list for a trade-less one, "equity_r":
+            this walk's net R (exactly ``equity_curve[-1]``),
+            "per_leg": {leg_name: {"n_trades": int, "pnl_net_r":
+            float}}, "exposure": {"concurrent": per-bar count of
+            FILLED positions -- each trade contributes from its
+            FILL bar (``entry_bar``) through its ``exit_bar``
+            inclusive, so an admitted-but-not-yet-filled entry
+            contributes nothing until its fill lands -- "net":
+            per-bar sum of direction * size_r over the same fill
+            windows}, "equity_curve": per-bar cumulative equity
+            AFTER that bar's processing (0.0 before the first
+            close), "warnings": netted-remainder drops}``.  Every
+            per-bar list has exactly one entry per decision bar.
+
+        Raises:
+            ValueError: on an empty leg list, duplicate leg names, an
+                unknown or "independent" combination, a
+                ``max_concurrent_positions`` below 1, a violated
+                feature contract, ``entry.max_concurrent > 1``
+                (deferred), missing or misaligned OHLC feature
+                columns, a non-finite instrument value at a signal
+                or netting close, a degenerate risk distance on a
+                Book-managed exit, an undecidable carry calendar (no
+                manifest and no override), a degenerate
+                fill-equals-stop geometry while carry accrues, or an
+                unexpected simulator exit label.
+
+        Example::
+
+            >>> bars = pd.date_range(
+            ...     "2024-01-01", periods=8, freq="D", tz="UTC"
+            ... )
+            >>> features = pd.DataFrame(
+            ...     {
+            ...         "open": [100.0, 100.0, 101.0, 102.0, 102.0,
+            ...                  101.5, 101.0, 100.0],
+            ...         "high": [100.5, 100.5, 101.5, 102.5, 102.5,
+            ...                  102.0, 101.5, 100.5],
+            ...         "low": [99.5, 99.5, 100.5, 101.5, 101.5,
+            ...                 101.0, 100.5, 99.5],
+            ...         "close": [100.0, 100.0, 101.0, 102.0, 102.0,
+            ...                   101.5, 101.0, 100.0],
+            ...         "mom": [0.0, 1.0, 1.0, -1.0, -1.0, -1.0,
+            ...                 -1.0, -1.0],
+            ...         "atr": [0.5] * 8,
+            ...     },
+            ...     index=bars,
+            ... )
+            >>> md = MaterializedData(
+            ...     outcome=pd.Series(0.0, index=bars),
+            ...     features=features,
+            ...     controls=pd.DataFrame(index=bars),
+            ...     index=pd.DataFrame(
+            ...         {"ts": bars, "entity": "", "split": "train"},
+            ...         index=bars,
+            ...     ),
+            ... )
+            >>> long_leg = LegSpec(
+            ...     name="demo_long",
+            ...     direction="long",
+            ...     entry=EntrySpec(Compare("mom", ">", 0.0)),
+            ...     exit=ExitSpec(stop=StopSpec("atr", 2.0)),
+            ...     instrument=InstrumentRef("field", {"field": "close"}),
+            ...     features_used=("mom", "atr", "close"),
+            ...     rationale="demo: momentum long at the daily grid",
+            ... )
+            >>> short_leg = LegSpec(
+            ...     name="demo_short",
+            ...     direction="short",
+            ...     entry=EntrySpec(Compare("mom", "<", 0.0)),
+            ...     exit=ExitSpec(stop=StopSpec("atr", 2.0)),
+            ...     instrument=InstrumentRef("field", {"field": "close"}),
+            ...     features_used=("mom", "atr", "close"),
+            ...     sizing=SizingSpec(mode="fixed", param=2.0),
+            ...     rationale="demo: momentum short, 2R per trade",
+            ... )
+            >>> book = Book(
+            ...     borrow_bps_annual=500.0,
+            ...     funding_bps_annual=100.0,
+            ...     periods_override=252.0,
+            ... )
+            >>> out = book.walk_portfolio(
+            ...     (long_leg, short_leg),
+            ...     md,
+            ...     combination="netting",
+            ...     max_concurrent_positions=2,
+            ... )
+            >>> long_record = out["records"]["demo_long"][0]
+            >>> long_record["exit_reason"]
+            'netted'
+            >>> long_record["entry_bar"], long_record["exit_bar"]
+            (2, 3)
+            >>> long_record["netted_remainder"]
+            1.0
+            >>> long_record["diagnostics"]["netted_remainder_dropped"]
+            True
+            >>> short_record = out["records"]["demo_short"][0]
+            >>> short_record["exit_reason"]
+            'forced'
+            >>> short_record["entry_bar"], short_record["exit_bar"]
+            (5, 7)
+            >>> out["warnings"]
+            ['netted remainder dropped: demo_short 1.0000R']
+            >>> out["exposure"]["concurrent"]
+            [0, 0, 1, 1, 0, 1, 1, 1]
+            >>> out["exposure"]["net"]
+            [0.0, 0.0, 1.0, 1.0, 0.0, -2.0, -2.0, -2.0]
+            >>> out["per_leg"]["demo_long"]["n_trades"]
+            1
+            >>> out["per_leg"]["demo_short"]["n_trades"]
+            1
+            >>> out["equity_curve"][0]
+            0.0
+            >>> out["equity_curve"][3] == long_record["pnl_net_r"]
+            True
+            >>> out["equity_r"] == out["equity_curve"][-1]
+            True
+            >>> book.walk_portfolio(
+            ...     (), md, combination="netting",
+            ...     max_concurrent_positions=1,
+            ... )
+            Traceback (most recent call last):
+                ...
+            ValueError: walk_portfolio needs at least one leg, got 0
+            >>> book.walk_portfolio(
+            ...     (long_leg, short_leg), md,
+            ...     combination="independent",
+            ...     max_concurrent_positions=2,
+            ... )
+            Traceback (most recent call last):
+                ...
+            ValueError: use run_book for independent legs
+        """
+        prepared = self._wp_prepare(
+            legs,
+            md,
+            combination=combination,
+            max_concurrent_positions=max_concurrent_positions,
+            periods_override=periods_override,
+        )
+        state = _WalkState(
+            open_positions={},
+            cooldown_until=dict.fromkeys(prepared.leg_by_name, -1),
+            carry_bars=dict.fromkeys(prepared.leg_by_name, 0),
+            records_by_leg={name: [] for name in prepared.leg_by_name},
+            remainder_warnings=[],
+        )
+        # the engine is STATELESS: one instance serves every leg
+        engine = LegEngine()
+        equity_start = self.equity_r
+        equity_curve: list[float] = []
+        for decision_pos in range(prepared.n_bars):
+            ts = prepared.ts_series[decision_pos]
+            # Phase A resolves exits; the candidate scan below reads
+            # the already-updated pool, so slots freed this bar are
+            # immediately competitive (the Phase B pin).
+            survived = self._wp_phase_a_exits(
+                prepared, state, engine, decision_pos, ts
+            )
+            entry_candidates = self._wp_entry_candidates(
+                prepared, state, engine, decision_pos, ts
+            )
+            # Phase C nets (netting mode only), Phase D competes.
+            remaining = self._wp_phase_c_netting(
+                prepared, state, decision_pos, entry_candidates
+            )
+            self._wp_phase_d_entries(prepared, state, decision_pos, remaining)
+            self._wp_accrue_survived(state, survived)
+            # per-bar equity snapshot (entry i = AFTER bar i's
+            # closes); the exposure series are fill-window based and
+            # are built from the records after the grid
+            equity_curve.append(self.equity_r - equity_start)
+        self._wp_force_close_remaining(prepared, state)
+        concurrent, net_exposure = self._wp_exposure_series(prepared, state)
+        if equity_curve:
+            # the last bar's entry must also reflect these closes
+            # (their exit_bar IS the last bar)
+            equity_curve[-1] = self.equity_r - equity_start
+        return self._wp_result(
+            prepared,
+            state,
+            equity_start,
+            concurrent=concurrent,
+            net_exposure=net_exposure,
+            equity_curve=equity_curve,
+        )
+
+    def _wp_validate_portfolio(
+        self,
+        legs: tuple[LegSpec, ...] | list[LegSpec],
+        *,
+        combination: str,
+        max_concurrent_positions: int,
+    ) -> list[LegSpec]:
+        """Validate the portfolio-level arguments; return the legs.
+
+        Raises:
+            ValueError: on an empty leg list, duplicate leg names
+                (records are keyed by ``leg.name``), the
+                "independent" combination (:func:`run_book`'s job),
+                an unknown combination, or a
+                ``max_concurrent_positions`` below 1.
+        """
+        leg_list = list(legs)
+        if not leg_list:
+            raise ValueError(
+                f"walk_portfolio needs at least one leg, got {len(leg_list)}"
+            )
+        names_seen: set[str] = set()
+        for spec in leg_list:
+            if spec.name in names_seen:
+                raise ValueError(
+                    f"walk_portfolio: duplicate leg name"
+                    f" {spec.name!r}; per-leg records are keyed by"
+                    " name"
+                )
+            names_seen.add(spec.name)
+        if combination == "independent":
+            raise ValueError("use run_book for independent legs")
+        allowed = ("sequential", "priority", "netting")
+        if combination not in allowed:
+            raise ValueError(
+                "walk_portfolio: combination must be one of"
+                f" {list(allowed)}, got {combination!r}"
+            )
+        if max_concurrent_positions < 1:
+            raise ValueError(
+                "walk_portfolio: max_concurrent_positions must be"
+                f" >= 1, got {max_concurrent_positions}"
+            )
+        return leg_list
+
+    def _wp_resolve_periods(
+        self,
+        md: MaterializedData,
+        n_bars: int,
+        *,
+        periods_override: float | None,
+    ) -> float:
+        """Bars per year for this walk's carry accrual.
+
+        Carry setup, ONCE per walk -- same rates, same
+        ``_carry_drag_r``, same <2-bar fast path as ``run()``.  The
+        walk-level override wins over the instance attribute and
+        short-circuits the calendar derivation, so a manifest-less
+        bundle stays runnable when the researcher names the periods
+        explicitly.
+
+        Raises:
+            ValueError: through ``_resolve_periods`` on an
+                undecidable carry calendar, or on a non-positive /
+                non-finite ``periods_override``.
+        """
+        if periods_override is not None and not (
+            np.isfinite(periods_override) and periods_override > 0.0
+        ):
+            raise ValueError(
+                "periods_override must be a positive finite float"
+                f" when given, got {periods_override!r}"
+            )
+        carry_rates_active = self.borrow_bps_annual != 0.0 or (
+            self.funding_bps_annual != 0.0
+        )
+        periods = 0.0
+        if carry_rates_active and n_bars >= 2:
+            periods = (
+                float(periods_override)
+                if periods_override is not None
+                else self._resolve_periods(md)
+            )
+        return periods
+
+    def _wp_prepare(
+        self,
+        legs: tuple[LegSpec, ...] | list[LegSpec],
+        md: MaterializedData,
+        *,
+        combination: str,
+        max_concurrent_positions: int,
+        periods_override: float | None = None,
+    ) -> _PreparedWalk:
+        """Validate the arguments and precompute the per-walk state.
+
+        Per leg: the feature contract, the deferred
+        ``max_concurrent`` refusal, the OHLC/instrument arrays (the
+        per-leg ``_price_arrays`` call) and the cooldown length in
+        decision bars.  The stateless engine is deliberately NOT
+        stored here: the walk builds one shared ``LegEngine``.
+
+        Raises:
+            ValueError: from :meth:`_wp_validate_portfolio`, on a
+                violated feature contract, ``entry.max_concurrent >
+                1`` (deferred), missing or misaligned OHLC feature
+                columns, an undecidable carry calendar, or a
+                non-positive ``periods_override``.
+        """
+        leg_list = self._wp_validate_portfolio(
+            legs,
+            combination=combination,
+            max_concurrent_positions=max_concurrent_positions,
+        )
+        ts_series = pd.DatetimeIndex(md.index["ts"])
+        n_bars = int(ts_series.size)
+        periods = self._wp_resolve_periods(
+            md, n_bars, periods_override=periods_override
+        )
+        leg_by_name: dict[str, LegSpec] = {}
+        arrays_by_leg: dict[
+            str,
+            tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+        ] = {}
+        instrument_px_by_leg: dict[str, np.ndarray] = {}
+        instrument_id_by_leg: dict[str, str] = {}
+        cooldown_bars_by_leg: dict[str, int] = {}
+        for spec in leg_list:
+            validate_features_declared(spec)
+            if spec.entry.max_concurrent > 1:
+                raise ValueError(
+                    f"Book: LegSpec {spec.name!r}"
+                    f" entry.max_concurrent="
+                    f"{spec.entry.max_concurrent} is {_DEFERRED_NOTE}"
+                    " (MVP runs one slot per leg)"
+                )
+            opens, highs, lows, closes, instrument_px = self._price_arrays(
+                spec, md
+            )
+            leg_by_name[spec.name] = spec
+            arrays_by_leg[spec.name] = (
+                opens,
+                highs,
+                lows,
+                closes,
+                instrument_px,
+            )
+            instrument_px_by_leg[spec.name] = instrument_px
+            instrument_id_by_leg[spec.name] = str(
+                spec.instrument.spec["field"]
+            )
+            cooldown_bars_by_leg[spec.name] = self._cooldown_bars(
+                spec, ts_series
+            )
+        return _PreparedWalk(
+            leg_list=leg_list,
+            md=md,
+            combination=combination,
+            max_concurrent_positions=max_concurrent_positions,
+            ts_series=ts_series,
+            n_bars=n_bars,
+            periods=periods,
+            leg_by_name=leg_by_name,
+            arrays_by_leg=arrays_by_leg,
+            instrument_px_by_leg=instrument_px_by_leg,
+            instrument_id_by_leg=instrument_id_by_leg,
+            cooldown_bars_by_leg=cooldown_bars_by_leg,
+        )
+
+    def _wp_phase_a_exits(
+        self,
+        prepared: _PreparedWalk,
+        state: _WalkState,
+        engine: LegEngine,
+        decision_pos: int,
+        ts: pd.Timestamp,
+    ) -> list[str]:
+        """Phase A: resolve an exit for every open position.
+
+        Signal exits at this bar's instrument value, delegated sim
+        exits at ``decision_pos == exit_idx``, unresolved-on-last-bar
+        forced; every close appends its record, arms the leg's
+        cooldown and resets its carry counter.  Returns the legs
+        whose position survived this bar's Phase A -- their carry
+        bar books ONLY at end of bar, after netting had its chance
+        to close them at this same bar (a bar that closes a trade
+        accrues nothing).
+
+        Raises:
+            ValueError: on a non-finite instrument value at a
+                signal exit, or through the close paths (degenerate
+                risk distance, undecidable carry, an unexpected
+                simulator exit label).
+        """
+        survived: list[str] = []
+        for leg_name in list(state.open_positions):
+            spec = prepared.leg_by_name[leg_name]
+            position = state.open_positions[leg_name]
+            decision = engine.evaluate(spec, prepared.md, ts)
+            if decision.exit_requested:
+                exit_price = float(
+                    prepared.instrument_px_by_leg[leg_name][decision_pos]
+                )
+                if not math.isfinite(exit_price):
+                    raise ValueError(
+                        f"Book: instrument field"
+                        f" {prepared.instrument_id_by_leg[leg_name]!r}"
+                        f" is not finite at signal-exit bar"
+                        f" {decision_pos}; cannot anchor the"
+                        " close"
+                    )
+                record = self._close_market(
+                    spec,
+                    prepared.md,
+                    prepared.ts_series,
+                    position,
+                    prepared.instrument_id_by_leg[leg_name],
+                    exit_bar=decision_pos,
+                    exit_price=exit_price,
+                    exit_reason="signal",
+                    periods=prepared.periods,
+                    carry_bars=state.carry_bars[leg_name],
+                )
+            elif decision_pos == position.sim["exit_idx"]:
+                record = self._close_with_sim(
+                    spec,
+                    prepared.md,
+                    prepared.ts_series,
+                    position,
+                    prepared.instrument_id_by_leg[leg_name],
+                    periods=prepared.periods,
+                    carry_bars=state.carry_bars[leg_name],
+                )
+            elif (
+                position.sim["exit_idx"] < 0
+                and decision_pos == prepared.n_bars - 1
+            ):
+                record = self._close_market(
+                    spec,
+                    prepared.md,
+                    prepared.ts_series,
+                    position,
+                    prepared.instrument_id_by_leg[leg_name],
+                    exit_bar=prepared.n_bars - 1,
+                    exit_price=float(
+                        prepared.arrays_by_leg[leg_name][3][
+                            prepared.n_bars - 1
+                        ]
+                    ),
+                    exit_reason="forced",
+                    periods=prepared.periods,
+                    carry_bars=state.carry_bars[leg_name],
+                )
+            else:
+                survived.append(leg_name)
+                continue
+            state.records_by_leg[leg_name].append(record)
+            state.cooldown_until[leg_name] = (
+                record["exit_bar"] + prepared.cooldown_bars_by_leg[leg_name]
+            )
+            del state.open_positions[leg_name]
+            state.carry_bars[leg_name] = 0
+        return survived
+
+    def _wp_entry_candidates(
+        self,
+        prepared: _PreparedWalk,
+        state: _WalkState,
+        engine: LegEngine,
+        decision_pos: int,
+        ts: pd.Timestamp,
+    ) -> list[_EntryCandidate]:
+        """Phase B: gather this bar's entry candidates (flat legs).
+
+        One engine decision per flat leg; a fired intent past its
+        leg's cooldown becomes a candidate shared by the netting
+        pass and the entry competition.  Evaluating BEFORE the
+        cooldown check mirrors ``run()`` (the pure engine raises on
+        degenerate geometry even when the intent is then discarded).
+        Slot release needs no code of its own: ``open_positions``
+        already reflects every Phase-A close and every same-bar
+        resolution at admission, so the pool count is current.
+        """
+        entry_candidates: list[_EntryCandidate] = []
+        for decl_index, spec in enumerate(prepared.leg_list):
+            leg_name = spec.name
+            if leg_name in state.open_positions:
+                continue
+            decision = engine.evaluate(spec, prepared.md, ts)
+            intent = decision.entry_intent
+            if intent is None or (
+                decision_pos <= state.cooldown_until[leg_name]
+            ):
+                continue
+            entry_candidates.append((decl_index, leg_name, intent, decision))
+        return entry_candidates
+
+    def _wp_phase_c_netting(
+        self,
+        prepared: _PreparedWalk,
+        state: _WalkState,
+        decision_pos: int,
+        entry_candidates: list[_EntryCandidate],
+    ) -> list[_EntryCandidate]:
+        """Phase C: netting pass ("netting" combination only).
+
+        Any other combination is a pass-through: "sequential" and
+        "priority" do NO offsetting -- a long and a short on the
+        same instrument both hold.  In netting mode a candidate
+        intent OPPOSITE in direction to an open position on the
+        SAME instrument closes ALL open positions on that
+        instrument (market close at this DECISION bar's instrument
+        value, reason "netted") and is itself CONSUMED -- never
+        opened, no cooldown change.  Candidates net in declaration
+        order; priorities are NOT applied here, and the pass is
+        mutation-pinned: a later candidate sees the positions an
+        earlier one just closed.  Returns the candidates that
+        survive into entry competition.
+
+        Raises:
+            ValueError: on a non-finite instrument value at a
+                netted close, or through the close paths.
+        """
+        if prepared.combination != "netting":
+            return entry_candidates
+        remaining: list[_EntryCandidate] = []
+        for candidate in entry_candidates:
+            _decl, leg_name, intent, _decision = candidate
+            matched = [
+                name
+                for name in state.open_positions
+                if prepared.instrument_id_by_leg[name]
+                == prepared.instrument_id_by_leg[leg_name]
+            ]
+            opposite_exists = any(
+                int(state.open_positions[name].intent.side)
+                != int(intent.side)
+                for name in matched
+            )
+            if not matched or not opposite_exists:
+                remaining.append(candidate)
+                continue
+            incoming_size = self._size_r(prepared.leg_by_name[leg_name])
+            netted_total = math.fsum(
+                state.open_positions[name].size_r for name in matched
+            )
+            # clamp: a reduction is not a loss
+            remainder = max(abs(incoming_size) - netted_total, 0.0)
+            self._wp_net_close_all(
+                prepared, state, decision_pos, matched, remainder
+            )
+            if remainder > 0.0:
+                state.remainder_warnings.append(
+                    f"netted remainder dropped: {leg_name} {remainder:.4f}R"
+                )
+            continue  # the incoming intent is CONSUMED
+        return remaining
+
+    def _wp_net_close_all(
+        self,
+        prepared: _PreparedWalk,
+        state: _WalkState,
+        decision_pos: int,
+        matched: list[str],
+        remainder: float,
+    ) -> None:
+        """Close every open position the netting intent matched.
+
+        Market close at this bar's instrument value for the matched
+        position's own leg (reason "netted"); every closed record
+        carries the same clamped ``remainder``; the owning leg's
+        cooldown arms and its carry counter resets.
+        """
+        for name in matched:
+            net_price = float(
+                prepared.instrument_px_by_leg[name][decision_pos]
+            )
+            if not math.isfinite(net_price):
+                raise ValueError(
+                    f"Book: instrument field"
+                    f" {prepared.instrument_id_by_leg[name]!r} is"
+                    f" not finite at netting bar"
+                    f" {decision_pos}; cannot anchor the"
+                    " close"
+                )
+            record = self._close_market(
+                prepared.leg_by_name[name],
+                prepared.md,
+                prepared.ts_series,
+                state.open_positions[name],
+                prepared.instrument_id_by_leg[name],
+                exit_bar=decision_pos,
+                exit_price=net_price,
+                exit_reason="netted",
+                periods=prepared.periods,
+                carry_bars=state.carry_bars[name],
+                netted_remainder=remainder,
+            )
+            state.records_by_leg[name].append(record)
+            state.cooldown_until[name] = (
+                record["exit_bar"] + prepared.cooldown_bars_by_leg[name]
+            )
+            del state.open_positions[name]
+            state.carry_bars[name] = 0
+
+    def _wp_phase_d_entries(
+        self,
+        prepared: _PreparedWalk,
+        state: _WalkState,
+        decision_pos: int,
+        candidates: list[_EntryCandidate],
+    ) -> None:
+        """Phase D: entry competition.
+
+        Candidates ordered by ``(-priority, declaration index)`` for
+        "priority" and by declaration index for "sequential" /
+        "netting"; admitted while the pool has room, SKIPPED beyond
+        the cap -- there is NO queue.  Each admission delegates to
+        :func:`atropos.backtesting.simulate_intents` exactly like
+        ``run()``; a delegation resolved ON the entry bar
+        (gap-through scratch or same-bar stop/target) closes
+        immediately (k = 0, no accrual) and releases its slot THIS
+        bar.
+
+        Raises:
+            ValueError: through the delegation (invalid price
+                arrays) or the same-bar close path.
+        """
+        if prepared.combination == "priority":
+            ordered = sorted(
+                candidates,
+                key=lambda candidate: (
+                    -prepared.leg_by_name[candidate[1]].priority,
+                    candidate[0],
+                ),
+            )
+        else:
+            ordered = candidates
+        for _decl, leg_name, intent, decision in ordered:
+            if len(state.open_positions) >= (
+                prepared.max_concurrent_positions
+            ):
+                # no queue: past-cap candidates are skipped
+                break
+            spec = prepared.leg_by_name[leg_name]
+            opens, highs, lows, closes, _px = prepared.arrays_by_leg[leg_name]
+            sim = simulate_intents(
+                [intent], opens, highs, lows, closes, cost=self.cost
+            )[0]
+            state.open_positions[leg_name] = _OpenPosition(
+                leg_name=leg_name,
+                intent=intent,
+                sim=sim,
+                entry_decision_pos=decision_pos,
+                forced_last_bar=bool(decision.diagnostics["forced_last_bar"]),
+                size_r=self._size_r(spec),
+                fill=float(opens[intent.entry_idx]),
+                risk_ref=float(sim["risk_ref"]),
+            )
+            state.carry_bars[leg_name] = 0
+            if 0 <= sim["exit_idx"] <= intent.entry_idx:
+                # resolved ON the entry bar (gap-through scratch
+                # or same-bar stop/target): no signal window, no
+                # accrual (k = 0); the slot is released THIS bar.
+                record = self._close_with_sim(
+                    spec,
+                    prepared.md,
+                    prepared.ts_series,
+                    state.open_positions[leg_name],
+                    prepared.instrument_id_by_leg[leg_name],
+                    periods=prepared.periods,
+                    carry_bars=state.carry_bars[leg_name],
+                )
+                state.records_by_leg[leg_name].append(record)
+                state.cooldown_until[leg_name] = (
+                    record["exit_bar"]
+                    + prepared.cooldown_bars_by_leg[leg_name]
+                )
+                del state.open_positions[leg_name]
+                state.carry_bars[leg_name] = 0
+
+    def _wp_accrue_survived(
+        self, state: _WalkState, survived: list[str]
+    ) -> None:
+        """Deferred carry bookkeeping for this bar's Phase-A survivors.
+
+        Only a position still open after EVERY phase of the bar
+        accrues it: a bar that closes the trade (Phase A, netting,
+        or a same-bar resolution at admission) accrues nothing, so
+        the count at close stays exactly ``exit_bar - entry_bar``.
+        """
+        for leg_name in survived:
+            if leg_name in state.open_positions:
+                state.carry_bars[leg_name] += 1
+
+    def _wp_exposure_series(
+        self, prepared: _PreparedWalk, state: _WalkState
+    ) -> tuple[list[int], list[float]]:
+        """Fill-window exposure series: (concurrent, net), per bar.
+
+        A position contributes to a bar ONLY from its FILL bar
+        (``entry_bar``) through its ``exit_bar`` inclusive -- the
+        admission decision bar is not exposure, and an
+        admitted-but-not-yet-filled entry contributes nothing until
+        its fill lands.  Every position ends the walk with a record
+        (the post-grid forced close pins ``exit_bar`` at the last
+        bar), so the series is reconstructed from the records:
+        ``concurrent`` counts the per-bar contributions, ``net``
+        sums ``direction * size_r`` over them -- exactly, one
+        ``math.fsum`` per bar.  Both lists have ``n_bars`` entries.
+        """
+        concurrent = [0] * prepared.n_bars
+        contributions: list[list[float]] = [
+            [] for _ in range(prepared.n_bars)
+        ]
+        for leg_records in state.records_by_leg.values():
+            for record in leg_records:
+                contribution = int(record["direction"]) * record["size_r"]
+                for bar in range(record["entry_bar"], record["exit_bar"] + 1):
+                    concurrent[bar] += 1
+                    contributions[bar].append(contribution)
+        net_exposure = [math.fsum(values) for values in contributions]
+        return concurrent, net_exposure
+
+    def _wp_force_close_remaining(
+        self, prepared: _PreparedWalk, state: _WalkState
+    ) -> None:
+        """After the grid: force-close whatever is still open.
+
+        Per leg in entry order -- ``run()``'s post-loop close (an
+        entry clamped onto the final bar never gets a Phase-A
+        visit).
+        """
+        for leg_name in list(state.open_positions):
+            record = self._close_market(
+                prepared.leg_by_name[leg_name],
+                prepared.md,
+                prepared.ts_series,
+                state.open_positions[leg_name],
+                prepared.instrument_id_by_leg[leg_name],
+                exit_bar=prepared.n_bars - 1,
+                exit_price=float(
+                    prepared.arrays_by_leg[leg_name][3][prepared.n_bars - 1]
+                ),
+                exit_reason="forced",
+                periods=prepared.periods,
+                carry_bars=state.carry_bars[leg_name],
+            )
+            state.records_by_leg[leg_name].append(record)
+            del state.open_positions[leg_name]
+            state.carry_bars[leg_name] = 0
+
+    def _wp_result(
+        self,
+        prepared: _PreparedWalk,
+        state: _WalkState,
+        equity_start: float,
+        *,
+        concurrent: list[int],
+        net_exposure: list[float],
+        equity_curve: list[float],
+    ) -> dict[str, Any]:
+        """Assemble the pinned ``walk_portfolio`` result shape.
+
+        ``equity_r`` is this walk's ledger delta (exactly
+        ``equity_curve[-1]``); ``records`` and ``per_leg`` carry
+        EVERY leg -- a trade-less leg gets an empty record list
+        (setdefault-style, so ``records[leg_name]`` always exists).
+        """
+        records: dict[str, list[TradeRecord]] = {
+            spec.name: state.records_by_leg.setdefault(spec.name, [])
+            for spec in prepared.leg_list
+        }
+        per_leg: dict[str, dict[str, Any]] = {}
+        for spec in prepared.leg_list:
+            leg_records = state.records_by_leg[spec.name]
+            per_leg[spec.name] = {
+                "n_trades": len(leg_records),
+                "pnl_net_r": math.fsum(
+                    record["pnl_net_r"] for record in leg_records
+                ),
+            }
+        return {
+            "records": records,
+            "equity_r": self.equity_r - equity_start,
+            "per_leg": per_leg,
+            "exposure": {
+                "concurrent": concurrent,
+                "net": net_exposure,
+            },
+            "equity_curve": equity_curve,
+            "warnings": state.remainder_warnings,
+        }
 
     def _price_arrays(
         self, leg: LegSpec, md: MaterializedData
@@ -888,11 +1822,14 @@ class Book:
         exit_reason: str,
         periods: float,
         carry_bars: int,
+        netted_remainder: float = 0.0,
     ) -> TradeRecord:
-        """Close at a raw market price (the "signal"/"forced" flavors).
+        """Close at a raw market price (the "signal"/"forced"/"netted").
 
         The pessimism pieces decide the exit economics; the carry
-        window only rides along to the record builder.
+        window only rides along to the record builder.  The netted
+        flavor carries the un-absorbed incoming size through to the
+        record builder.
         """
         r_pess_1r, costs_r_1r, r_net_1r = self._market_close_r(
             leg, open_pos, exit_price=exit_price
@@ -911,6 +1848,7 @@ class Book:
             r_opt=r_net_1r,
             periods=periods,
             carry_bars=carry_bars,
+            netted_remainder=netted_remainder,
         )
 
     def _build_record(
@@ -929,6 +1867,7 @@ class Book:
         r_opt: float,
         periods: float,
         carry_bars: int,
+        netted_remainder: float = 0.0,
     ) -> TradeRecord:
         """Materialize one TradeRecord and book it (ledger + equity).
 
@@ -938,7 +1877,11 @@ class Book:
         pure money movement -- ``costs_r = taker_r + borrow_r +
         funding_r`` and ``pnl_gross_r == pnl_net_r + costs_r`` stay
         exact by construction (gross absorbs the drag, net shrinks
-        by it, equity follows net).
+        by it, equity follows net).  A positive ``netted_remainder``
+        marks a netting close whose incoming size exceeded the
+        netted sizes: the value lands on the record and
+        ``diagnostics["netted_remainder_dropped"]`` is set (the
+        default of 0.0 changes nothing on any other record).
         """
         size_r = open_pos.size_r
         taker_r = costs_r_1r * size_r
@@ -966,6 +1909,8 @@ class Book:
             "funding_r": funding_r,
             "equity_r_after": self.equity_r,
         }
+        if netted_remainder > 0.0:
+            diagnostics["netted_remainder_dropped"] = True
         record = TradeRecord(
             leg_name=leg.name,
             entry_ts=entry_ts,
@@ -981,6 +1926,7 @@ class Book:
             pnl_net_r=pnl_net_r,
             costs_r=costs_r,
             exit_reason=exit_reason,
+            netted_remainder=netted_remainder,
             features_at_entry=_feature_snapshot(
                 md, leg.features_used, entry_decision_ts
             ),
