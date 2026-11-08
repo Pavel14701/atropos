@@ -6,6 +6,8 @@ commit).
 
 from __future__ import annotations
 
+from typing import Literal
+
 import pytest
 from atropos.book import _demo_md
 from atropos.legs import (
@@ -25,12 +27,18 @@ from atropos.strategy import (
 )
 
 
+def _policy() -> PortfolioPolicy:
+    """The demo carry policy (declared, never defaulted)."""
+    return PortfolioPolicy(borrow_bps_annual=500.0, funding_bps_annual=100.0)
+
+
 def _leg(name: str, op: str) -> LegSpec:
     """A demo-geometry leg with a configurable entry gate."""
+    gate_op: Literal[">", "<"] = ">" if op == ">" else "<"
     return LegSpec(
         name=name,
         direction="long" if op == ">" else "short",
-        entry=EntrySpec(Compare("mom", op, 0.0)),
+        entry=EntrySpec(Compare("mom", gate_op, 0.0)),
         exit=ExitSpec(stop=StopSpec("atr", 2.0)),
         instrument=InstrumentRef("field", {"field": "close"}),
         features_used=("mom", "atr", "close"),
@@ -50,6 +58,7 @@ def test_independent_composition_and_isolation() -> None:
     strategy = StrategySpec(
         name="mirror",
         legs=(_leg("long_gate", ">"), _leg("short_gate", "<")),
+        portfolio=_policy(),
         universe=UniverseSpec(symbols=("TEST",)),
     )
     result = run_strategy(strategy, md)
@@ -79,8 +88,12 @@ def test_deferred_combinations_rejected() -> None:
     """
     for mode in ("netting", "sequential", "priority"):
         with pytest.raises(ValueError, match="section 14"):
-            PortfolioPolicy(combination=mode)  # type: ignore[arg-type]
-    policy = PortfolioPolicy()
+            PortfolioPolicy(
+                borrow_bps_annual=500.0,
+                funding_bps_annual=100.0,
+                combination=mode,
+            )
+    policy = _policy()
     assert policy.combination == "independent"
     assert "NOT netting" in (PortfolioPolicy.__doc__ or "")
 
@@ -92,7 +105,11 @@ def test_leg_attribution_and_recount() -> None:
     recount drift) breaks the attribution/recount asserts.
     """
     md = _demo_md()
-    strategy = StrategySpec(name="solo", legs=(_leg("solo", ">"),))
+    strategy = StrategySpec(
+        name="solo",
+        legs=(_leg("solo", ">"),),
+        portfolio=_policy(),
+    )
     result = run_strategy(strategy, md)
     records = result["records"]["solo"]
     summary = result["summary"]
@@ -102,7 +119,11 @@ def test_leg_attribution_and_recount() -> None:
     assert result["equity_r"] == pytest.approx(expected_equity)
     assert any("deferred" in note for note in summary["policy_notes"])
     with pytest.raises(ValueError, match="unique"):
-        StrategySpec(name="dup", legs=(_leg("same", ">"), _leg("same", "<")))
+        StrategySpec(
+            name="dup",
+            legs=(_leg("same", ">"), _leg("same", "<")),
+            portfolio=_policy(),
+        )
 
 
 def test_records_to_features_bridge() -> None:
@@ -115,7 +136,11 @@ def test_records_to_features_bridge() -> None:
     the column asserts.
     """
     md = _demo_md()
-    strategy = StrategySpec(name="bridge", legs=(_leg("b1", ">"),))
+    strategy = StrategySpec(
+        name="bridge",
+        legs=(_leg("b1", ">"),),
+        portfolio=_policy(),
+    )
     result = run_strategy(strategy, md)
     records = result["records"]["b1"]
     assert records != []

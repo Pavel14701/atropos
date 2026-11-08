@@ -47,12 +47,14 @@ delegated simulator's validated mechanics, driven by the Book's
 from __future__ import annotations
 
 import math
+import warnings
 from dataclasses import dataclass
 from typing import Any, TypedDict
 
 import numpy as np
 import pandas as pd
 
+from atropos._utils import validate_number
 from atropos.backtesting import (
     DEFAULT_COST,
     CostModel,
@@ -254,7 +256,9 @@ class Book:
 
         >>> md = _demo_md()
         >>> leg = _demo_leg()
-        >>> book = Book()
+        >>> book = Book(
+        ...     borrow_bps_annual=500.0, funding_bps_annual=100.0
+        ... )
         >>> records = book.run(leg, md)
         >>> len(records)  # one slot: the first firing entry wins
         1
@@ -273,9 +277,52 @@ class Book:
     """
 
     def __init__(
-        self, *, cost: CostModel = DEFAULT_COST, seed: int = 42
+        self,
+        *,
+        borrow_bps_annual: float,
+        funding_bps_annual: float,
+        periods_override: float | None = None,
+        cost: CostModel = DEFAULT_COST,
+        seed: int = 42,
     ) -> None:
-        """Store the cost model and reset the R ledger."""
+        """Store the cost model, the carry policy, reset the ledger.
+
+        The two carry rates are REQUIRED (no default): a silent zero
+        would make every short strategy look better than it is --
+        exactly the self-deception this framework kills.  Zero is
+        ALLOWED but warns loudly.
+        """
+        validate_number("borrow_bps_annual", borrow_bps_annual)
+        if borrow_bps_annual < 0.0:
+            raise ValueError(
+                "borrow_bps_annual must be >= 0 (a short-borrow cost),"
+                f" got {borrow_bps_annual!r}"
+            )
+        validate_number("funding_bps_annual", funding_bps_annual)
+        if periods_override is not None and not (
+            np.isfinite(periods_override) and periods_override > 0.0
+        ):
+            raise ValueError(
+                "periods_override must be a positive finite float when"
+                f" given, got {periods_override!r}"
+            )
+        if borrow_bps_annual == 0.0:
+            warnings.warn(
+                "borrow_bps_annual=0 disables short-cost modeling;"
+                " COST_DEATH for short strategies will be understated",
+                UserWarning,
+                stacklevel=2,
+            )
+        if funding_bps_annual == 0.0:
+            warnings.warn(
+                "funding_bps_annual=0 disables funding modeling;"
+                " carry costs will be understated",
+                UserWarning,
+                stacklevel=2,
+            )
+        self.borrow_bps_annual = float(borrow_bps_annual)
+        self.funding_bps_annual = float(funding_bps_annual)
+        self.periods_override = periods_override
         self.cost = cost
         self.seed = seed
         self.equity_r: float = 0.0
@@ -638,6 +685,9 @@ def run_book(
     md: MaterializedData,
     *,
     cost: CostModel = DEFAULT_COST,
+    borrow_bps_annual: float,
+    funding_bps_annual: float,
+    periods_override: float | None = None,
 ) -> dict[str, Any]:
     """Run every leg through a FRESH Book (leg isolation by design).
 
@@ -651,6 +701,12 @@ def run_book(
         md: the materialized bundle every leg walks.
         cost: the cost model handed to every leg's Book; defaults to
             :data:`DEFAULT_COST`.
+        borrow_bps_annual: REQUIRED annual short-borrow rate in bps;
+            ``0`` is allowed but warns (short-cost modeling off).
+        funding_bps_annual: REQUIRED annual funding rate in bps
+            (sign-carried); ``0`` is allowed but warns.
+        periods_override: optional explicit bars-per-year; ``None``
+            derives from the bundle's calendar (checkpoint W3-1).
 
     Returns:
         ``{"records": {leg_name: [TradeRecord, ...]}, "equity_r":
@@ -662,7 +718,11 @@ def run_book(
 
     Example::
 
-        >>> out = run_book((_demo_leg(),), _demo_md())
+        >>> out = run_book(
+        ...     (_demo_leg(),), _demo_md(),
+        ...     borrow_bps_annual=500.0,
+        ...     funding_bps_annual=100.0,
+        ... )
         >>> out["per_leg"]["demo_long"]["n_trades"]
         1
         >>> out["records"]["demo_long"][0]["exit_reason"] in {
@@ -671,7 +731,9 @@ def run_book(
         True
         >>> out["equity_r"] == out["records"]["demo_long"][0]["pnl_net_r"]
         True
-        >>> run_book((), _demo_md())
+        >>> run_book(
+        ...     (), _demo_md(), borrow_bps_annual=1.0, funding_bps_annual=1.0
+        ... )
         Traceback (most recent call last):
             ...
         ValueError: run_book needs at least one leg, got 0
@@ -693,7 +755,12 @@ def run_book(
     per_leg: dict[str, dict[str, Any]] = {}
     equity_total = 0.0
     for spec in leg_list:
-        book = Book(cost=cost)
+        book = Book(
+            cost=cost,
+            borrow_bps_annual=borrow_bps_annual,
+            funding_bps_annual=funding_bps_annual,
+            periods_override=periods_override,
+        )
         leg_records = book.run(spec, md)
         records[spec.name] = leg_records
         leg_pnl = math.fsum(rec["pnl_net_r"] for rec in leg_records)
@@ -715,7 +782,9 @@ def run_all_examples() -> None:
     print("=" * 72)
     print("book demo: delegation equality + exit diagnostics")
     print("=" * 72)
-    records = Book().run(leg, md)
+    records = Book(borrow_bps_annual=500.0, funding_bps_annual=100.0).run(
+        leg, md
+    )
     opens = md.features["open"].to_numpy(dtype=float)
     highs = md.features["high"].to_numpy(dtype=float)
     lows = md.features["low"].to_numpy(dtype=float)

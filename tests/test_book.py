@@ -14,6 +14,7 @@ valid geometry (explicit targets on shorts).
 from __future__ import annotations
 
 import itertools
+from typing import Any, Literal
 
 import pandas as pd
 import pytest
@@ -34,6 +35,17 @@ from atropos.legs import (
     StopSpec,
     TargetSpec,
 )
+
+
+def _make_book(**overrides: Any) -> Book:
+    """Construct the demo Book with the declared carry policy."""
+    kwargs: dict[str, Any] = {
+        "borrow_bps_annual": 500.0,
+        "funding_bps_annual": 100.0,
+    }
+    kwargs.update(overrides)
+    return Book(**kwargs)
+
 
 _BARS = pd.date_range("2024-01-01", periods=8, freq="D", tz="UTC")
 
@@ -97,11 +109,16 @@ def _leg(
             if signal == "flip"
             else Compare("mom", ">", 0.0),
         )
+    gate_op: Literal[">", "<"] = ">" if op == ">" else "<"
+    gate_value = 0.0
+    leg_direction: Literal["long", "short"] = (
+        "long" if direction == "long" else "short"
+    )
     return LegSpec(
         name=name,
-        direction=direction,
+        direction=leg_direction,
         entry=EntrySpec(
-            Compare(entry_gate, op, 0.0),
+            Compare(entry_gate, gate_op, gate_value),
             cooldown=pd.Timedelta(days=cooldown_bars),
         ),
         exit=exits,
@@ -122,7 +139,7 @@ def test_delegation_equality_no_signal() -> None:
     """
     md = _demo_md()
     leg = _demo_leg()
-    records = Book().run(leg, md)
+    records = _make_book().run(leg, md)
     assert len(records) >= 1
     record = records[0]
     opens = md.features["open"].to_numpy(dtype=float)
@@ -176,10 +193,14 @@ def test_sl_first_race_and_gap_through() -> None:
     closes = [100.0, 100.0, 101.0, 101.0, 101.0, 101.0, 101.0, 101.0]
     mom = [-1.0, 1.0, 1.0, 1.0, -1.0, -1.0, -1.0, -1.0]
     md = _ohlc_md(
-        opens=opens, highs=highs, lows=lows, closes=closes, mom=mom,
+        opens=opens,
+        highs=highs,
+        lows=lows,
+        closes=closes,
+        mom=mom,
         atr=[1.0] * 8,
     )
-    records = Book().run(_leg(name="race", with_target=True), md)
+    records = _make_book().run(_leg(name="race", with_target=True), md)
     assert records != []
     # entry_ref = close[1] = 100 -> stop 98, target 103; bar 4 touches
     # BOTH (high 103, low 97) -> SL-first books the STOP
@@ -190,10 +211,13 @@ def test_sl_first_race_and_gap_through() -> None:
     gap_opens = [100.0, 100.0, 90.0, 90.0, 90.0, 90.0, 90.0, 90.0]
     gap_lows = [99.0, 99.0, 89.0, 89.0, 89.0, 89.0, 89.0, 89.0]
     gap_md = _ohlc_md(
-        opens=gap_opens, highs=highs, lows=gap_lows, closes=closes,
+        opens=gap_opens,
+        highs=highs,
+        lows=gap_lows,
+        closes=closes,
         mom=mom,
     )
-    gap_records = Book().run(_leg(name="gap"), gap_md)
+    gap_records = _make_book().run(_leg(name="gap"), gap_md)
     assert gap_records != []
     scratch = gap_records[0]
     assert scratch["exit_reason"] == "stop"
@@ -210,7 +234,7 @@ def test_signal_exit_and_forced() -> None:
     """
     md = _demo_md()
     signal_leg = _leg(name="signal_long", signal="flip")
-    records = Book().run(signal_leg, md)
+    records = _make_book().run(signal_leg, md)
     assert records != []
     assert any(record["exit_reason"] == "signal" for record in records)
     evergreen = LegSpec(
@@ -222,7 +246,7 @@ def test_signal_exit_and_forced() -> None:
         features_used=("mom", "atr", "close"),
         rationale="no exit inside the window -> forced at data end",
     )
-    forced_records = Book().run(evergreen, md)
+    forced_records = _make_book().run(evergreen, md)
     assert forced_records != []
     assert forced_records[-1]["exit_reason"] == "forced"
     assert forced_records[-1]["exit_bar"] == 7
@@ -237,7 +261,7 @@ def test_costs_and_snapshots() -> None:
     snapshot taken at entry_bar+1 breaks the mom equality.
     """
     md = _demo_md()
-    records = Book().run(_demo_leg(), md)
+    records = _make_book().run(_demo_leg(), md)
     for record in records:
         assert record["costs_r"] >= 0.0
         assert record["pnl_gross_r"] == pytest.approx(
@@ -258,11 +282,13 @@ def test_determinism_and_cost_model() -> None:
     """
     md = _demo_md()
     leg = _demo_leg()
-    first = Book().run(leg, md)
-    second = Book().run(leg, md)
+    first = _make_book().run(leg, md)
+    second = _make_book().run(leg, md)
     assert first == second
-    free = Book(cost=CostModel(gen_slip=0.0, comm=0.0, gap=0.0)).run(leg, md)
-    priced = Book(cost=DEFAULT_COST).run(leg, md)
+    free = _make_book(cost=CostModel(gen_slip=0.0, comm=0.0, gap=0.0)).run(
+        leg, md
+    )
+    priced = _make_book(cost=DEFAULT_COST).run(leg, md)
     assert free[0]["exit_bar"] == priced[0]["exit_bar"]
     assert free[0]["pnl_net_r"] > priced[0]["pnl_net_r"]
     assert priced[0]["costs_r"] > 0.0
@@ -277,7 +303,7 @@ def test_cooldown_and_max_concurrent() -> None:
     """
     md = _demo_md()
     leg = _leg(name="cooled", with_target=True, cooldown_bars=10)
-    records = Book().run(leg, md)
+    records = _make_book().run(leg, md)
     assert records != []
     for earlier, later in itertools.pairwise(records):
         assert later["entry_bar"] > earlier["exit_bar"] + 10
@@ -291,7 +317,7 @@ def test_cooldown_and_max_concurrent() -> None:
         rationale="multi-slot is deferred",
     )
     with pytest.raises(ValueError, match="deferred"):
-        Book().run(crowded, md)
+        _make_book().run(crowded, md)
 
 
 def test_run_book_isolation() -> None:
@@ -310,7 +336,12 @@ def test_run_book_isolation() -> None:
         op="<",
         with_target=True,
     )
-    result = run_book((long_leg, short_leg), md)
+    result = run_book(
+        (long_leg, short_leg),
+        md,
+        borrow_bps_annual=500.0,
+        funding_bps_annual=100.0,
+    )
     assert sorted(result["records"]) == ["demo_long", "demo_short"]
     for leg_name, records in result["records"].items():
         for record in records:

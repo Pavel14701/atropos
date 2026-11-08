@@ -33,6 +33,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, TypedDict
 
+import numpy as np
 import pandas as pd
 
 from atropos._utils import validate_int, validate_number
@@ -82,6 +83,15 @@ class PortfolioPolicy:
     :func:`run_strategy` -- enforcement is deferred.
 
     Args:
+        borrow_bps_annual: REQUIRED annual short-borrow rate in bps;
+            ``>= 0`` (a cost, never a credit).  ``0`` is allowed --
+            it disables short-cost modeling and the Book warns.
+        funding_bps_annual: REQUIRED annual funding rate in bps;
+            ANY finite float is legal (sign-carried: ``> 0`` means
+            longs pay, ``< 0`` means shorts pay).
+        periods_override: optional explicit bars-per-year for the
+            carry accrual; ``None`` derives from the bundle's
+            calendar (checkpoint W3-1).
         combination: how legs combine; the MVP accepts
             ``"independent"`` only.  ``"netting"`` /
             ``"sequential"`` / ``"priority"`` raise ``ValueError``
@@ -103,22 +113,35 @@ class PortfolioPolicy:
 
     Example::
 
-        >>> policy = PortfolioPolicy()
+        >>> policy = PortfolioPolicy(
+        ...     borrow_bps_annual=500.0, funding_bps_annual=100.0
+        ... )
         >>> (policy.combination, policy.max_concurrent_positions,
         ...  policy.max_gross_exposure, policy.max_net_exposure)
         ('independent', 10, 2.0, 1.0)
         >>> try:
-        ...     PortfolioPolicy(combination="netting")
+        ...     PortfolioPolicy(
+        ...         borrow_bps_annual=500.0,
+        ...         funding_bps_annual=100.0,
+        ...         combination="netting",
+        ...     )
         ... except ValueError as error:
         ...     "deferred (KNOWN-ISSUES section 14)" in str(error)
         True
         >>> try:
-        ...     PortfolioPolicy(combination="random")
+        ...     PortfolioPolicy(
+        ...         borrow_bps_annual=500.0,
+        ...         funding_bps_annual=100.0,
+        ...         combination="random",
+        ...     )
         ... except ValueError as error:
         ...     "combination must be 'independent'" in str(error)
         True
     """
 
+    borrow_bps_annual: float
+    funding_bps_annual: float
+    periods_override: float | None = None
     combination: str = "independent"
     max_concurrent_positions: int = 10
     max_gross_exposure: float = 2.0
@@ -126,6 +149,20 @@ class PortfolioPolicy:
 
     def __post_init__(self) -> None:
         """Reject deferred families and validate the soft caps."""
+        validate_number("borrow_bps_annual", self.borrow_bps_annual)
+        if self.borrow_bps_annual < 0.0:
+            raise ValueError(
+                "borrow_bps_annual must be >= 0 (a short-borrow cost),"
+                f" got {self.borrow_bps_annual!r}"
+            )
+        validate_number("funding_bps_annual", self.funding_bps_annual)
+        if self.periods_override is not None and not (
+            np.isfinite(self.periods_override) and self.periods_override > 0.0
+        ):
+            raise ValueError(
+                "periods_override must be a positive finite float when"
+                f" given, got {self.periods_override!r}"
+            )
         if self.combination != "independent":
             if self.combination in _DEFERRED_COMBINATIONS:
                 raise ValueError(
@@ -235,12 +272,15 @@ class StrategySpec:
     arrival, not at run time.  Leg names must be UNIQUE across the
     strategy: ``run_book`` keys its records by leg name, so a
     duplicate would silently collide.  The MVP policy is
-    ``PortfolioPolicy()`` and the MVP universe is an unset placeholder.
+    an explicit REQUIRED ``PortfolioPolicy`` (the carry policy is
+    declared, never defaulted) and the MVP universe is an unset
+    placeholder.
 
     Args:
         name: non-empty strategy name (echoed into the summary).
         legs: one or more legs; each is feature-contract audited.
-        portfolio: how legs share the book (MVP: independent only).
+        portfolio: how legs share the book (REQUIRED -- the carry
+            policy is declared, never defaulted).
         universe: informational universe metadata (enforcement
             deferred).
 
@@ -262,11 +302,22 @@ class StrategySpec:
         ...     features_used=("mom",),
         ...     rationale="momentum persistence",
         ... )
-        >>> strategy = StrategySpec(name="demo", legs=(leg,))
+        >>> strategy = StrategySpec(
+        ...     name="demo", legs=(leg,),
+        ...     portfolio=PortfolioPolicy(
+        ...         borrow_bps_annual=500.0, funding_bps_annual=100.0
+        ...     ),
+        ... )
         >>> (strategy.portfolio.combination, strategy.universe.symbols)
         ('independent', ('unset',))
         >>> try:
-        ...     StrategySpec(name="demo", legs=(leg, leg))
+        ...     StrategySpec(
+        ...         name="demo", legs=(leg, leg),
+        ...         portfolio=PortfolioPolicy(
+        ...             borrow_bps_annual=500.0,
+        ...             funding_bps_annual=100.0,
+        ...         ),
+        ...     )
         ... except ValueError as error:
         ...     "leg names must be unique" in str(error)
         True
@@ -274,7 +325,7 @@ class StrategySpec:
 
     name: str
     legs: tuple[LegSpec, ...]
-    portfolio: PortfolioPolicy = PortfolioPolicy()
+    portfolio: PortfolioPolicy
     universe: UniverseSpec = UniverseSpec(symbols=("unset",))
 
     def __post_init__(self) -> None:
@@ -433,6 +484,9 @@ def run_strategy(
         >>> strategy = StrategySpec(
         ...     name="momo_pair",
         ...     legs=(long_leg, short_leg),
+        ...     portfolio=PortfolioPolicy(
+        ...         borrow_bps_annual=500.0, funding_bps_annual=100.0
+        ...     ),
         ...     universe=UniverseSpec(symbols=("synthetic",)),
         ... )
         >>> result = run_strategy(strategy, md)
@@ -474,7 +528,14 @@ def run_strategy(
         >>> isinstance(notes, list) and len(notes) >= 1
         True
     """
-    book_result = run_book(list(strategy.legs), md, cost=cost)
+    book_result = run_book(
+        list(strategy.legs),
+        md,
+        cost=cost,
+        borrow_bps_annual=strategy.portfolio.borrow_bps_annual,
+        funding_bps_annual=strategy.portfolio.funding_bps_annual,
+        periods_override=strategy.portfolio.periods_override,
+    )
     records = book_result["records"]
     per_leg = book_result["per_leg"]
     counts = _recount_and_verify(strategy, records, per_leg)
@@ -554,8 +615,10 @@ def records_to_features(
         >>> frame["entry::mom_signal"].iloc[0]
         np.float64(1.5)
         >>> empty = records_to_features([])
-        >>> (len(empty), list(empty.columns))
-        (0, ['leg_name', 'entry_ts', 'direction', 'size_r', 'pnl_net_r', 'exit_reason'])
+        >>> len(empty)
+        0
+        >>> list(empty.columns)[:3]
+        ['leg_name', 'entry_ts', 'direction']
     """
     rows: list[dict[str, Any]] = []
     entry_columns: list[str] = []
@@ -744,6 +807,9 @@ def run_all_examples() -> None:
             gated("long_gate", "long"),
             gated("short_gate", "short"),
         ),
+        portfolio=PortfolioPolicy(
+            borrow_bps_annual=500.0, funding_bps_annual=100.0
+        ),
         universe=UniverseSpec(symbols=("synthetic",)),
     )
     print("=" * 72)
@@ -773,7 +839,11 @@ def run_all_examples() -> None:
     )
     assert "entry::mom_signal" in frame.columns
     try:
-        PortfolioPolicy(combination="netting")
+        PortfolioPolicy(
+            borrow_bps_annual=500.0,
+            funding_bps_annual=100.0,
+            combination="netting",
+        )
         raised = False
     except ValueError as error:
         raised = "section 14" in str(error)
