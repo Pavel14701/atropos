@@ -107,6 +107,17 @@ evaluation is trade-level only.
   "not novel, but not dead"
 - next_step: identify the parent factor; orthogonal-information
   check
+- **Orthogonal feature check (aeb9332+)**: full HC0 regression of
+  net_r on direction / strength / zone_width_atr / retest_delay with
+  momentum controls (n=3368, Bonferroni threshold |t| ≥ 2.5):
+  **zone_width_atr t = −9.33** and **retest_delay t = −9.92** —
+  HIGHLY significant orthogonal contributors (both p < 1e-20);
+  strength t = −2.08 (p = 0.038, marginal); direction itself
+  t = −1.72 (p = 0.085, NOT significant).  The OB zone-selection
+  geometry carries real information that momentum controls do not
+  capture — the C'' REPACKAGING stands for the direction claim, but
+  the zone-geometry finding opens a new analysis thread: which zone
+  properties carry the contribution (tight/fast vs wide/slow)?
 - prereg 6ef9383289163d0e; n_obs 3368
 
 ## Feed 3 — E predictor-form (30946 asset-days, 30 perps,
