@@ -2,6 +2,20 @@
 
 ## 1.2.1 — verdict taxonomy
 
+- data contract + legs layer (wave v13): `MaterializedData`
+  (as-of resolved, manifest-verified bundles - lookahead checks are
+  VERIFIED, not assumed; failed manifest = fatal in
+  `feature_analysis`), FieldMeta.t_known_offset (structural
+  look-ahead ban), DataManifest.bundle_hash (full sha256 - the
+  anchor preregistration cites), OHLCV/Tidy adapters, Predicate AST
+  + 4-layer LegSpec + stateless LegEngine, `simulate_intents`
+  (public batch delegation target), Book + TradeRecord (exit_reason
+  diagnostics + feature snapshots), StrategySpec (independent
+  composition) + records_to_features bridge.  `to_pipeline_data` is
+  a LEGACY bridge that warns on every call.  Deferred families
+  (options/event/futures adapters, netting/sequential/priority,
+  zscore, multi-entity) reject loudly - KNOWN-ISSUES §14.
+- Generic `DEAD` removed from the pipeline verdicts: the former
 - feature_scan module: 11 functions + 28 tests; extended feature
   classification (STRONG / REGIME_DEPENDENT / STRONG_UNVERIFIED /
   SHAPE_UNKNOWN / PROXY / NOISE / EXPLORATORY — the last three never

@@ -428,3 +428,62 @@ tail.
 is allowed. Example: a 90-day live track is INCONCLUSIVE at
 `live_verdict` (shorter than the default 252-observation decision
 point), not a pass and not a kill.
+
+
+## Data contract + legs (v13)
+
+**MaterializedData** — the verified bundle every framework function
+should trust: outcome/features/controls aligned as-of onto a decision
+grid, plus a decision index (ts/entity/split/regime) and a manifest.
+Example: `md = materialize(adapter, spec)`; `feature_analysis(md)`
+validates the manifest instead of just unwrapping it.
+
+**t_known_offset** — (moment a value is known) − (its timestamp
+label). Bar closes carry 0; the OPEN of a close-labelled bar carries
+`-bar_delta`. The resolver cuts at `t - t_known_offset - lag*bar_delta`
+and then re-verifies the produced column against an independently
+recomputed cutoff — look-ahead is caught, not assumed. Example: a
+feature declared with offset 0 delivers `raw[t]`; with lag 1 it
+delivers `raw[t-1]` (the forward-label convention).
+
+**DataManifest** — provenance + verification record of one
+materialization: full sha256 `bundle_hash` (the anchor a prereg
+cites), per-field `lookahead_checks`, `feature_hashes`, validation
+battery outcome. Example: two runs over changed data produce
+different bundle hashes — a prereg anchored to the old hash is
+invalid by construction.
+
+**Adapter** — the dumb source normalizer (`fields/extent/fetch/
+as_of/validate_self`): declares FieldMeta, serves raw fields, and
+does NO lag/alignment/splits (the resolver owns those). Example:
+`OHLCVAdapter(bars, "close", 1h, symbol="TEST")` serves flat close
+series; the open of a close-labelled bar declares offset `-bar_delta`.
+
+**LegSpec** — a position-lifecycle declaration in four separate
+layers (signal / instrument / execution / sizing), each an
+independent mutation and diagnostic point. Predicates are ASTs
+(Compare/And/Or/Not) — serializable, hashable, node-mutable; lambdas
+are forbidden. Example: `LegSpec(name=..., entry=EntrySpec(
+Compare("mom", ">", 2.0)), exit=ExitSpec(stop=StopSpec("atr", 2.0)),
+features_used=("mom", "atr"), rationale="...")`.
+
+**Book** — the imperative shell: owns positions/cooldown/equity,
+delegates stop/target/time resolution to the PUBLIC
+`backtesting.simulate_intents` (SL-first + gap-through-stop by
+construction), handles signal/forced exits itself. Example: a Book
+trade equals the simulate_intents result on the same intent — pinned
+equality against the public API.
+
+**TradeRecord** — one closed trade as the SINGLE analysis input:
+exit_reason ("stop"/"target"/"time"/"signal"/"forced" — 90% stops
+means stop-hunting, not signal) plus features_at_entry/features_at_exit
+snapshots (as-of at the entry decision bar / the exit bar). Example:
+`records_to_features(run_strategy(...)["records"]["leg"])` feeds
+bucket_scan / feature_importance directly.
+
+**StrategySpec** — `tuple[LegSpec, ...] + PortfolioPolicy`: one
+object shape for momentum, pairs and multi-leg options. MVP
+combination is "independent" — legs' positions COEXIST (NOT netting);
+each leg runs in a fresh Book (isolation by construction). Example:
+an iron condor is four option_legs + caps; today it is four field
+legs — the homogeneous shape is already the contract.

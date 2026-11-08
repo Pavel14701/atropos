@@ -445,3 +445,47 @@ Trigger to close: N/A — permanent tool. Add to §8 protocol sync only
 if integrated as a stage (currently not planned). If a future wave
 wants auto-discovery -> prereg path, that is a separate protocol
 change, not a tool feature.
+
+## 14. Data contract + legs layer (v13) — MVP boundary and deferred families
+
+Status: shipped (2026-11-08), wave v13.  Six checkpoints (data
+contract / adapters / real-data smoke / legs / book / strategy).
+
+Shipped: `atropos/data_contract.py` (MaterializedData,
+FieldMeta.t_known_offset, as-of resolver with VERIFIED lookahead
+checks, DataManifest with full sha256 bundle_hash, timestamp-based
+split + embargo), `atropos/adapters.py` (OHLCV + Tidy), the union
+`feature_analysis(MaterializedData | Series)` whose manifest is
+VALIDATED (failed lookahead/validation = fatal; missing manifest =
+loud warning), `to_pipeline_data` (LEGACY bridge - warns on every
+call; the pipeline's inner-join re-alignment destroys as-of
+guarantees), `atropos/legs.py` (Predicate AST, 4-layer LegSpec,
+stateless LegEngine), `atropos/backtesting.simulate_intents` (public
+batch delegation target), `atropos/book.py` (Book + TradeRecord with
+exit_reason + feature snapshots), `atropos/strategy.py`
+(StrategySpec, independent combination, records_to_features bridge).
+
+Deferred (each a loud ValueError naming this section):
+OptionsChainAdapter / EventAdapter / FuturesAdapter / WidePanelAdapter;
+multi-entity materialization (entity_axis != "none"); resampling
+(freq) and non-"last" aggregates; zscore transform (full-sample
+moments leak the future); netting/sequential/priority combinations;
+fraction_of_equity / vol_target sizing; limit/stop order types;
+borrow/funding costs; participation caps; universe/survivorship
+machinery; run_full_pipeline signature integration (the bridge is
+legacy-only); option_leg/composite/spread instruments; Book
+max_concurrent > 1; OHLCV real-data feed (covered by synthetic
+end-to-end demo + unit tests only in this wave).
+
+Known facts (not issues): the no-target sentinel is entry + 1e9 x
+risk_ref (ABOVE entry for both directions - a never-hit target must
+stay a positive, TradeIntent-valid price).  The C''-Tidy smoke uses
+a sequence clock (trade date + within-day rank); as-of windows
+degenerate to row order there - by design, documented in the JOURNAL
+entry.
+
+Unblocks: per-trade/predictor-form ingestion named in FRAMEWORK
+section 4's booked-R caveat (the generic layer; the SYSTEM-9 port
+keeps its reserved name system9_legs.py).
+Trigger to close: N/A - permanent layer; deferred families graduate
+by separate waves, each removing its own line here.

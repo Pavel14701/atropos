@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 
 import pandas as pd
 
@@ -39,7 +39,16 @@ from atropos._utils import validate_int, validate_number
 from atropos.backtesting import DEFAULT_COST, CostModel
 from atropos.book import run_book
 from atropos.data_contract import MaterializedData
-from atropos.legs import LegSpec, validate_features_declared
+from atropos.legs import (
+    Compare,
+    EntrySpec,
+    ExitSpec,
+    InstrumentRef,
+    LegSpec,
+    StopSpec,
+    TargetSpec,
+    validate_features_declared,
+)
 
 __all__ = [
     "PortfolioPolicy",
@@ -546,7 +555,7 @@ def records_to_features(
         np.float64(1.5)
         >>> empty = records_to_features([])
         >>> (len(empty), list(empty.columns))
-        (0, ['entry_ts', 'direction', 'size_r', 'pnl_net_r', 'exit_reason'])
+        (0, ['leg_name', 'entry_ts', 'direction', 'size_r', 'pnl_net_r', 'exit_reason'])
     """
     rows: list[dict[str, Any]] = []
     entry_columns: list[str] = []
@@ -685,3 +694,91 @@ def _policy_notes(strategy: StrategySpec) -> list[str]:
         f" {_DEFERRED_NOTE}"
     )
     return notes
+
+
+# ---------------------------------------------------------------------------
+# demo
+# ---------------------------------------------------------------------------
+def run_all_examples() -> None:
+    """Demo: two-leg composition + the records bridge, asserted."""
+    bars = pd.date_range("2024-01-01", periods=6, freq="D", tz="UTC")
+    md = MaterializedData(
+        outcome=pd.Series(0.0, index=bars),
+        features=pd.DataFrame(
+            {
+                "mom_signal": [2.0, -2.0, 2.5, -2.5, 2.2, -2.2],
+                "open": [0.99, 1.19, 0.79, 1.09, 1.29, 0.89],
+                "high": [1.21, 1.21, 0.95, 1.21, 1.31, 1.05],
+                "low": [0.97, 0.99, 0.75, 0.95, 1.09, 0.85],
+                "close": [1.0, 1.2, 0.8, 1.1, 1.3, 0.9],
+            },
+            index=bars,
+        ),
+        controls=pd.DataFrame(index=bars),
+        index=pd.DataFrame(
+            {"ts": bars, "entity": "", "split": "train"}, index=bars
+        ),
+    )
+
+    def gated(name: str, direction: Literal["long", "short"]) -> LegSpec:
+        gate = (
+            Compare("mom_signal", ">", 1.0)
+            if direction == "long"
+            else Compare("mom_signal", "<", -1.0)
+        )
+        return LegSpec(
+            name=name,
+            direction=direction,
+            entry=EntrySpec(gate),
+            exit=ExitSpec(
+                stop=StopSpec("price", 0.9), target=TargetSpec("price", 1.1)
+            ),
+            instrument=InstrumentRef("field", {"field": "mom_signal"}),
+            features_used=("mom_signal",),
+            rationale="demo leg",
+        )
+
+    strategy = StrategySpec(
+        name="mirror",
+        legs=(
+            gated("long_gate", "long"),
+            gated("short_gate", "short"),
+        ),
+        universe=UniverseSpec(symbols=("synthetic",)),
+    )
+    print("=" * 72)
+    print("strategy demo: independent two-leg composition + bridge")
+    print("=" * 72)
+    result = run_strategy(strategy, md)
+    summary = result["summary"]
+    frame = records_to_features(
+        [
+            record
+            for records in result["records"].values()
+            for record in records
+        ]
+    )
+    print(
+        f"legs={summary['n_legs']} trades={summary['n_trades']}"
+        f" isolation={summary['leg_isolation_check']}"
+        f" bridge_rows={len(frame)}"
+    )
+    assert summary["n_legs"] == 2
+    assert summary["leg_isolation_check"] is True
+    assert sorted(result["records"]) == ["long_gate", "short_gate"]
+    assert all(
+        record["leg_name"] == leg_name
+        for leg_name, records in result["records"].items()
+        for record in records
+    )
+    assert "entry::mom_signal" in frame.columns
+    try:
+        PortfolioPolicy(combination="netting")
+        raised = False
+    except ValueError as error:
+        raised = "section 14" in str(error)
+    assert raised
+
+
+if __name__ == "__main__":
+    run_all_examples()

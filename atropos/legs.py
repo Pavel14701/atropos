@@ -1301,3 +1301,72 @@ class LegEngine:
             atr_value=atr_value,
             risk_ref=risk_ref,
         )
+
+
+# ---------------------------------------------------------------------------
+# demo
+# ---------------------------------------------------------------------------
+def run_all_examples() -> None:
+    """Demo: predicates, declarations and the engine, asserted.
+
+    Every printed verdict is asserted, so a regression crashes the
+    demo instead of printing a wrong number quietly.
+    """
+    bars = pd.date_range("2024-01-01", periods=5, freq="D", tz="UTC")
+    md = MaterializedData(
+        outcome=pd.Series(0.0, index=bars),
+        features=pd.DataFrame(
+            {"mom": [1.0, 3.0, -0.5, 4.0, 2.5], "atr": 0.5}, index=bars
+        ),
+        controls=pd.DataFrame(index=bars),
+        index=pd.DataFrame(
+            {"ts": bars, "entity": "", "split": "train"}, index=bars
+        ),
+    )
+    leg = LegSpec(
+        name="momo_long",
+        direction="long",
+        entry=EntrySpec(Compare("mom", ">", 2.0)),
+        exit=ExitSpec(
+            stop=StopSpec("atr", 1.0),
+            target=TargetSpec("atr", 2.0),
+            signal=Compare("mom", "<", 0.0),
+        ),
+        instrument=InstrumentRef("field", {"field": "mom"}),
+        features_used=("mom", "atr"),
+        rationale="demo: momentum persistence at the daily grid",
+    )
+    print("=" * 72)
+    print("legs demo: predicate gate + stateless engine decisions")
+    print("=" * 72)
+    engine = LegEngine()
+    no_signal = engine.evaluate(leg, md, bars[0])
+    intent = engine.evaluate(leg, md, bars[1]).entry_intent
+    assert intent is not None
+    exit_flip = engine.evaluate_exit(leg, md, bars[2])
+    print(
+        f"bar0 entry=None: {no_signal.entry_intent is None};"
+        f" bar1 intent: idx={intent.entry_idx} stop={intent.stop_price}"
+        f" target={intent.target_price}; bar2 signal exit={exit_flip}"
+    )
+    assert no_signal.entry_intent is None
+    assert intent.entry_idx == 2 and intent.side == 1
+    assert (intent.stop_price, intent.target_price) == (2.5, 4.0)
+    assert intent.risk_ref == 0.5
+    assert exit_flip is True
+    # the same triple maps to the same decision (statelessness)
+    assert engine.evaluate(leg, md, bars[1]) == engine.evaluate(
+        leg, md, bars[1]
+    )
+    validate_features_declared(leg)
+    try:
+        InstrumentRef("option_leg", {"right": "put"})
+        raised = False
+    except ValueError as error:
+        raised = "section 14" in str(error)
+    print(f"deferred instrument kind rejected loudly: {raised}")
+    assert raised
+
+
+if __name__ == "__main__":
+    run_all_examples()

@@ -179,6 +179,23 @@ validation requires prereg + run_full_pipeline.**
   gate fail on a near-degenerate column, flagged here so nobody
   reads it as a tested negative.
 
+### C''-trade data-contract smoke (v13) — plumbing, facts unchanged
+
+The SAME cache (3398 trades) through the new data-contract layer
+(`atropos_transfer/run_data_contract.py`): TidyAdapter → materialize
+→ feature_analysis(md).  **Classification identical to the v12 entry
+above** (direction/strength PROXY; zone_width_atr/retest_delay
+STRONG_UNVERIFIED) — the contract changes HOW data enters, not WHAT
+it says.  Manifest: bundle_hash 51a43f4d16924699…, lookahead_checks
+all True (verified, not assumed), row_count 3398.  Decision clock is
+a SEQUENCE CLOCK (trade date + within-day rank as minutes): it
+preserves trade order; as-of windows degenerate to row order
+(offsets are 0).  The embargo=0-on-sub-daily warning fires as
+designed on this clock.  Momentum controls are NOT as-of-safable on
+a sequence clock and were omitted from the materialized bundle —
+the v12 entry above (with mom7/mom30) remains the analysis of
+record.
+
 ## Feed 3 — E predictor-form (30946 asset-days, 30 perps,
 ## signal = funding z-score → returns = forward funding)
 

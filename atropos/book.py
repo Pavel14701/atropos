@@ -703,3 +703,53 @@ def run_book(
         }
         equity_total += leg_pnl
     return {"records": records, "equity_r": equity_total, "per_leg": per_leg}
+
+
+# ---------------------------------------------------------------------------
+# demo
+# ---------------------------------------------------------------------------
+def run_all_examples() -> None:
+    """Demo: delegation equality + exit diagnostics, asserted."""
+    md = _demo_md()
+    leg = _demo_leg()
+    print("=" * 72)
+    print("book demo: delegation equality + exit diagnostics")
+    print("=" * 72)
+    records = Book().run(leg, md)
+    opens = md.features["open"].to_numpy(dtype=float)
+    highs = md.features["high"].to_numpy(dtype=float)
+    lows = md.features["low"].to_numpy(dtype=float)
+    closes = md.features["close"].to_numpy(dtype=float)
+    stop_price = 100.0 - 2.0 * 0.5
+    reference = simulate_intents(
+        [
+            TradeIntent(
+                entry_idx=2,
+                side=1,
+                stop_price=stop_price,
+                target_price=100.0 + 1e9 * 0.5,
+                hold_bars=10_000_000,
+                atr_value=0.5,
+                risk_ref=1.0,
+            )
+        ],
+        opens,
+        highs,
+        lows,
+        closes,
+    )[0]
+    record = records[0]
+    print(
+        f"trades={len(records)} exit_bar={record['exit_bar']}"
+        f" reason={record['exit_reason']}"
+        f" pnl_net_r={record['pnl_net_r']:.4f}"
+    )
+    assert record["exit_bar"] == reference["exit_idx"]
+    assert record["pnl_net_r"] == reference["r_pess"]
+    assert record["exit_reason"] == "stop"
+    assert record["features_at_entry"]["mom"] == 1.0
+    assert record["pnl_gross_r"] == record["pnl_net_r"] + record["costs_r"]
+
+
+if __name__ == "__main__":
+    run_all_examples()

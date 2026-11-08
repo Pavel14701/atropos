@@ -452,7 +452,7 @@ survives its own manipulation).
 returns are booked R is circular for a signal-vs-return protocol: the
 "prediction" is verified against its own P&L bookkeeping. Such legs
 need per-trade or predictor-form ingestion — e.g. the SYSTEM-9 legs
-ported in `system9_legs.py`; that ingestion is separate work. **Feed
+ported in `system9_legs.py`; that ingestion now EXISTS generically: the data-contract + legs layer (v13) — `MaterializedData` / `Book` / `TradeRecord` (KNOWN-ISSUES §14); the SYSTEM-9 port keeps its reserved name. **Feed
 granularity must match the strategy's decision granularity**:
 aggregating a sub-daily strategy to a daily booked stream is not a
 time-frame test — it is signal loss (a 15m OB-retest leg collapses to
