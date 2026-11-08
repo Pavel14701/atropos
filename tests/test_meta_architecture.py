@@ -30,6 +30,7 @@ ASSERTING_DEMO_MODULES = [
     "kill_chain",
     "monte_carlo",
     "null_control_suite",
+    "orthogonal",
     "power_calculator",
     "predictive_model_eval",
     "prereg_generator",
