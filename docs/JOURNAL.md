@@ -268,3 +268,16 @@ collide with the bioinformatics package's CLI).  A NEGATIVE PIN
 import rename later: adding an `atropos_quant` package requires a
 dedicated wave with a shim and a deprecation cycle.  Recorded as
 an explicit decision, not an accident.
+
+## Coverage wave v15 (2026-11-09)
+
+V-0 baseline (above) -> V-2 coverage-driven error-path pins -> V-3
+property invariants -> V-4 cross-mode matrix -> V-5 pdoc freshness
+in CI -> V-7 docs audit.  W15-7 (targeted pre-v13 mutation sweep)
+DEFERRED per the reviewer's budget rule: the anchor inventory for
+the low-coverage pre-v13 modules did not match the real code
+(mutation anchors drifted from the multi-wave refactors), and the
+35-mutation budget would have spent entirely on anchor repair --
+exactly the failure-loop the budget rule exists to prevent.  The
+pre-v13 modules' critical paths remain pinned by the existing
+v12-and-earlier test suites (verified green throughout).
