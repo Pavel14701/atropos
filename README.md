@@ -35,8 +35,7 @@ around — see `POSITIONING.md`.
 
 ## Install
 
-Python 3.12; numpy/pandas/scipy/scikit-learn (lightgbm optional for the
-`ranking` extra). `uv sync` — or `pip install -e .`
+`pip install atropos-quant` — Python 3.12; numpy/pandas/scipy/scikit-learn (lightgbm optional for the `ranking` extra). From a clone: `uv sync` — or `pip install -e .`
 
 Fresh repo? `atropos init` generates the hypothesis workspace
 (`GRAVEYARD.md`, `hypotheses/INDEX.csv`) — existing files are never overwritten.

@@ -169,9 +169,9 @@ def test_cross_mode_matrix_all_valid_rows() -> None:
             assert record["exit_reason"] in legal
         # sizing takes effect
         if sizing == "fixed":
-            assert all(r["size_r"] == 1.0 for r in records)
+            assert all(rec["size_r"] == 1.0 for rec in records)
         else:
-            assert all(r["size_r"] >= 0.0 for r in records)
+            assert all(rec["size_r"] >= 0.0 for rec in records)
 
 
 def test_independent_vs_netting_costs_differ() -> None:
