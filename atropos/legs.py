@@ -1069,11 +1069,14 @@ def _resolve_target(
 ) -> float:
     """Resolve the target price for the decision bar.
 
-    A missing target uses the far sentinel ``entry +/- 1e9 *
-    risk_ref`` so only stop/time can fire.
+    A missing target uses the far price sentinel ``entry + 1e9 *
+    risk_ref`` -- ABOVE the entry for BOTH directions, so it can
+    never fill (a short profits downward; a never-hit target sits
+    arbitrarily high) while staying a positive, TradeIntent-valid
+    price.
     """
     if target is None:
-        return entry_ref + side * _FAR_TARGET_MULTIPLE * risk_ref
+        return entry_ref + _FAR_TARGET_MULTIPLE * risk_ref
     if target.kind == "price":
         return target.multiple
     distance = target.multiple * _finite_row_value(
