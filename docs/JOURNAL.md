@@ -231,3 +231,25 @@ OVERALL DEAD → DEAD/class DEAD") assumed a no-active-days baseline;
 the corrected classifier reads that world ROBUSTNESS_DEATH /
 NEEDS_ANALYSIS (baseline positive-but-insignificant). The v7
 pre-read was wrong, not the classifier.
+
+
+## Coverage baseline (wave v15, V-0 — 2026-11-08)
+
+First measured baseline (pytest-cov 7.1.0, branch mode, full suite):
+
+* **line 87.78%** (10730 stmts, 1233 missed), **branch 85.4%**
+  (2791/3268 covered, 389 partial).
+* Top-10 missed: feature_scan 172, backtesting 137 (maker variants),
+  portfolio 115 (replay internals), ranking 88, data_contract 81
+  (validation ladders), predictive_model_eval 70, legs 69
+  (validation ladders), monte_carlo 69, ml_ensemble 61,
+  walkforward_framework 56.
+
+**Conditional target** (the honest version — baseline is BELOW the
+95/90 aspiration, so the goal is improvement, not the aspiration
+itself): 100% of raise/warn/fatal lines covered (wave v15 V-2,
+coverage-driven), then line >= 92%, branch >= 89%; anything beyond
+is best-effort.  The misses are concentrated in validation ladders
+and the maker/backtest variants -- exactly the error paths V-2
+targets -- NOT in the verdict-critical chain (cli.py is 99%,
+cross_sectional 96%, ml_training 98%).

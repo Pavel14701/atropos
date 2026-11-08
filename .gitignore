@@ -10,3 +10,4 @@ dist/
 build/
 .zcode
 .atropos/
+coverage.json
