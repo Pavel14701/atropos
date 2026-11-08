@@ -26,6 +26,7 @@ ASSERTING_DEMO_MODULES = [
     "cross_sectional",
     "ensemble_pipeline",
     "evaluation_metrics",
+    "feature_scan",
     "incremental_regression",
     "kill_chain",
     "monte_carlo",

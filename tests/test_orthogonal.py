@@ -39,6 +39,7 @@ _REPORT_KEYS = frozenset(
         "full",
         "delta_r2_block",
         "per_feature_delta_r2",
+        "per_feature_detected",
         "permutation",
         "facts",
     }
@@ -398,5 +399,12 @@ def test_orthogonal_report_schema(kind: str) -> None:
     assert frozenset(report["full"]) == _BLOCK_KEYS
     assert frozenset(report["controls_only"]) == _BLOCK_KEYS
     assert frozenset(report["correlation"]) == _CORR_KEYS
+    # per-feature verdicts surfaced for feature_scan: in this single
+    # feature world the map holds exactly alpha and agrees with facts
+    assert sorted(report["per_feature_detected"]) == ["alpha"]
+    assert (
+        report["per_feature_detected"]["alpha"]
+        is (report["facts"]["detected"])
+    )
     assert report["kind"] == kind
     assert report["label"] == "schema"

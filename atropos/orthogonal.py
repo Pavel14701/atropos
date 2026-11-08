@@ -48,6 +48,13 @@ both kinds); the reading per kind:
 Import note (Minor 1): imports atropos._utils.ols_hc0 (intra-package);
 promote ols_hc0 to a public path if _utils is refactored.
 
+The per-feature gate verdicts are surfaced verbatim under
+``per_feature_detected`` (added for atropos.feature_scan, whose
+classification needs each feature's verdict, not only the aggregate);
+``orthogonal_check`` additionally accepts an explicit ``t_threshold``
+override so a caller can derive the Bonferroni gate from the number
+of tested clusters (``None`` keeps the house 2.5).
+
 Run ``python -m atropos.orthogonal`` for a synthetic demo.
 """
 
@@ -153,6 +160,7 @@ class OrthogonalReport(TypedDict):
     full: FitBlock
     delta_r2_block: float
     per_feature_delta_r2: dict[str, float]
+    per_feature_detected: dict[str, bool]
     permutation: dict[str, float]
     facts: FactsBlock
 
@@ -350,6 +358,7 @@ def _report(
     full: FitBlock,
     delta_r2_block: float,
     per_feature_delta_r2: dict[str, float],
+    per_feature_detected: dict[str, bool],
     permutation: dict[str, float],
     detected: bool,
     sign_consistent: bool,
@@ -381,6 +390,7 @@ def _report(
         full=full,
         delta_r2_block=delta_r2_block,
         per_feature_delta_r2=per_feature_delta_r2,
+        per_feature_detected=per_feature_detected,
         permutation=permutation,
         facts=facts,
     )
@@ -593,6 +603,7 @@ def _no_features_report(
         full=_nan_block(),
         delta_r2_block=float("nan"),
         per_feature_delta_r2={},
+        per_feature_detected={},
         permutation={},
         detected=False,
         sign_consistent=False,
@@ -752,21 +763,25 @@ def _run_check(
         status = _INCONCLUSIVE
         notes.append("outcome is constant after alignment - nothing to fit")
 
-    _, detected, sign_consistent, strongest_feature, strongest_t = (
-        _gate_verdicts(
-            fit_full,
-            correlation,
-            kept_names=kept_names,
-            kept_arrs=kept_arrs,
-            control_names=control_names,
-            control_arrs=control_arrs,
-            outcome_arr=outcome_arr,
-            kind=kind,
-            t_threshold=t_threshold,
-            identifiable=identifiable,
-            n_after=n_after,
-            notes=notes,
-        )
+    (
+        detected_map,
+        detected,
+        sign_consistent,
+        strongest_feature,
+        strongest_t,
+    ) = _gate_verdicts(
+        fit_full,
+        correlation,
+        kept_names=kept_names,
+        kept_arrs=kept_arrs,
+        control_names=control_names,
+        control_arrs=control_arrs,
+        outcome_arr=outcome_arr,
+        kind=kind,
+        t_threshold=t_threshold,
+        identifiable=identifiable,
+        n_after=n_after,
+        notes=notes,
     )
     permutation = _permutation_block(
         fit_full,
@@ -793,6 +808,7 @@ def _run_check(
         full=full,
         delta_r2_block=delta_r2_block,
         per_feature_delta_r2=per_feature_delta_r2,
+        per_feature_detected=dict(detected_map),
         permutation=permutation,
         detected=detected,
         sign_consistent=sign_consistent,
@@ -814,6 +830,7 @@ def orthogonal_check(
     label: str,
     n_perm: int = 200,
     seed: int = 42,
+    t_threshold: float | None = None,
 ) -> OrthogonalReport:
     """Decompose candidate features against a control block.
 
@@ -837,6 +854,11 @@ def orthogonal_check(
         label: free-text tag stored under ``report["label"]``.
         n_perm: permutation draws per feature; at least 1.
         seed: non-negative seed of the pinned permutation rng.
+        t_threshold: |t| gate of the detection rule; ``None`` keeps the
+            house default 2.5.  Callers that derive a Bonferroni gate
+            from the number of tested clusters (feature_scan) pass the
+            derived value explicitly; it is recorded in
+            ``facts["t_threshold"]`` either way.
 
     Returns:
         :class:`OrthogonalReport` with ``kind="orthogonal"``; the
@@ -845,8 +867,9 @@ def orthogonal_check(
 
     Raises:
         ValueError: if ``n_perm`` is not an integer >= 1, ``seed`` is
-            not a non-negative integer, a feature/control value is not
-            a single column, a name collides between the two dicts, or
+            not a non-negative integer, ``t_threshold`` is not a
+            positive finite float, a feature/control value is not a
+            single column, a name collides between the two dicts, or
             a name uses the reserved key ``"outcome"``.
 
     Example::
@@ -872,13 +895,20 @@ def orthogonal_check(
     """
     validate_int("n_perm", n_perm)
     validate_int("seed", seed, minimum=0)
+    if t_threshold is None:
+        t_threshold = _T_STRONG
+    if not np.isfinite(t_threshold) or t_threshold <= 0:
+        raise ValueError(
+            f"t_threshold must be a positive finite float, got"
+            f" {t_threshold!r}"
+        )
     return _run_check(
         outcome,
         features,
         controls,
         label=label,
         kind=_KIND_DECOMP,
-        t_threshold=_T_STRONG,
+        t_threshold=t_threshold,
         n_perm=n_perm,
         seed=seed,
     )
