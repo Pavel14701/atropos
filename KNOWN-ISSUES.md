@@ -599,3 +599,47 @@ Unblocks: formal forward-parity testing for the paper/live phase of
 any deployed system (first application: the 2026-11 DTE post-mortem).
 
 Trigger to close: N/A — permanent protocol.
+
+## 16. Performance metrics are informational — they never gate
+
+Status: shipped (2026-11-09).  `evaluation_metrics.sortino_ratio` /
+`payoff_stats` + `calmar_ratio(period_years=...)`; read-out blocks in
+`run_full_pipeline` (`strategy_metrics`), `paper_protocol`
+(`statistical_report` per-trade sharpe/sortino) and `track_record`
+(`live_sortino`/`live_cagr`).
+
+The law: **a metric never gates, never overrides, never appears in an
+issue.**  Sharpe 2.3 on 71 active days is not an edge — it is an
+insignificant mean with outliers; the kill-protocol answers "can this
+be killed", not "how good is the return" (the A-daily case that
+motivated the verdict taxonomy).
+
+Reading discipline (each pinned by tests):
+
+* `hit_rate` is strategy-class-dependent (mean-reversion can show 80%
+  hit rate with a negative Sharpe); it ships ONLY inside
+  `payoff_stats` next to `avg_win_r`/`avg_loss_r`/`win_loss_ratio` —
+  42% at +3R/−1R is a different strategy than 42% at +1R/−1R.
+  Breakeven trades are excluded from the hit_rate denominator
+  (differs from `win_rate`'s full-n convention on zero-PnL trades;
+  both single-home).
+* `sortino` values are None below 30 observations (downside dev is
+  noise under ~30 points) — in `paper_protocol` that means
+  `n_matched < 30`.
+* `strategy_metrics["n_obs"]` counts ACTIVE periods (finite non-zero
+  returns — the standing active convention `active_days` uses);
+  `period_years` is the CALENDAR span of the full window; CAGR/Calmar
+  use the calendar span (71 active days over 502 calendar days is
+  1.38 years, not 0.28).  Zeros are compounding-neutral, so drawdowns
+  on the filtered series match the full stream.
+* `sharpe_ci` in `strategy_metrics` is omitted below 50 active
+  observations and is a minimum-cost noisy directional interval above
+  — never a significance test.
+* The pipeline block is per-period only: hit_rate / n_trades /
+  profit_factor are trade-stream metrics and live in trade-stream
+  contexts (`payoff_stats` / `profit_factor`).  `paper_protocol`
+  metrics are per-trade (R-multiple) — `per_trade_sharpe` never
+  annualizes; the multi-leg merge POOLS matched arrays across legs
+  (R-normalized).
+
+Trigger to close: N/A — permanent law.

@@ -22,6 +22,15 @@
   options greeks, multi-leg books) via opt-in frozen_spec sections;
   feed-granularity (§12) and sizing-rule checks as hard gates;
   dd numbers reported on every verdict.
+- feat: informational performance metrics — `sortino_ratio`
+  (None below 30 observations), `payoff_stats` (hit_rate only with
+  avg_win_r/avg_loss_r/win_loss_ratio; breakeven excluded from the
+  denominator), `calmar_ratio(period_years=...)` calendar-span mode;
+  read-out blocks: `run_full_pipeline.report["strategy_metrics"]`
+  (per-period; n_obs = active periods, period_years = calendar span,
+  CI omitted below 50 obs), `paper_protocol.statistical_report`
+  (per-trade sharpe/sortino, pooled across legs), `track_record`
+  live_sortino/live_cagr.  §16 law: metrics NEVER gate verdicts.
 
 ## 1.2.1 — verdict taxonomy
 
