@@ -13,10 +13,14 @@ of sample size); the n-gate fires only after they pass:
 1. ``feed_granularity_check`` — the paper log's stamped
    ``bar_delta_min`` must equal the frozen spec's.
 2. ``frozen_window_coverage`` — every paper ``entry_ts`` sits inside
-   the spec's ``paper_window`` and the frozen frame covers it through
-   its exits (1-bar tolerance on both bounds).  An EMPTY
-   ``paper_window`` dict derives the window from the frozen frame's
-   own span.
+   the spec's ``paper_window``, and the frozen frame must OVERLAP the
+   window (``frozen_max_entry >= start`` and ``frozen_min_entry <=
+   end``): an anti-STALE trap for frozen outcomes from a different
+   era.  Coverage is deliberately NOT required — sparse but
+   overlapping frozen sets pass through to parity, because sparse
+   setup density is stage-3 ``unmatched_entry`` territory, not a
+   coverage violation.  An EMPTY ``paper_window`` dict derives the
+   window from the frozen frame's own span.
 3. ``parity_check`` — nearest-entry matching per ``(coin, entry_ts)``
    within one bar, then per-pair comparisons: exit type through the
    frozen ``exit_type_normalization`` map, exit timestamp, ``pnl_r``,
@@ -881,20 +885,27 @@ def _trade_labels(paper_leg: pd.DataFrame) -> list[str]:
 # ---------------------------------------------------------------------------
 # per-leg stage checks
 # ---------------------------------------------------------------------------
-def _window_coverage_issue(
+def _window_overlap_issue(
     paper_leg: pd.DataFrame,
     frozen_leg: pd.DataFrame,
     spec: dict[str, Any],
     labels: list[str],
 ) -> dict[str, dict[str, Any]] | None:
-    """Stage 2: paper entries inside the window, frozen span covers it.
+    """Stage 2: paper entries inside the window, frozen frame OVERLAPS it.
 
-    Both bounds tolerate one bar (the spec's ``bar_delta_min``); the
-    frozen frame must cover the window through its EXITS (frozen min
-    entry at/before the start, frozen max exit at/after the end).  An
-    empty ``paper_window`` derives the window from the frozen frame's
-    own span.  Any out-of-window paper entry or a range that does not
-    span the window becomes the ``frozen_window_gap`` issue.
+    The paper-entries subcheck is exact: every paper ``entry_ts`` must
+    sit in ``[start, end]``.  The frozen-span subcheck demands
+    OVERLAP, not coverage: the frozen trades must merely intersect the
+    window (``frozen_max_entry >= start`` and ``frozen_min_entry <=
+    end``).  Coverage would conflate feed coverage with setup density
+    — a legitimate frozen sim on the correct bars may produce no
+    setups near the window edges, and that sparse population is
+    exactly what stage-3 parity must measure via ``unmatched_entry``,
+    not a coverage violation to kill on.  Only a NON-overlapping
+    frozen frame (frozen outcomes from a different era: the
+    anti-STALE trap) fires ``frozen_window_gap``.  An empty
+    ``paper_window`` derives the window from the frozen frame's own
+    span, so overlap then holds by construction.
     """
     frozen_entries = _timestamp_values(frozen_leg, "entry_ts")
     frozen_exits = _timestamp_values(frozen_leg, "exit_ts")
@@ -906,7 +917,6 @@ def _window_coverage_issue(
         # empty paper_window: the frozen frame's own span IS the window
         window_start = min(frozen_entries)
         window_end = max(frozen_exits)
-    one_bar = pd.Timedelta(minutes=int(spec["bar_delta_min"]))
     paper_entries = _timestamp_values(paper_leg, "entry_ts")
     issues: dict[str, dict[str, Any]] = {}
     for position, entry_stamp in enumerate(paper_entries):
@@ -914,13 +924,14 @@ def _window_coverage_issue(
             _record_issue(issues, "frozen_window_gap", labels[position])
     examples: list[str] = []
     span_violations = 0
-    frozen_min = min(frozen_entries)
-    if frozen_min > window_start + one_bar:
+    frozen_max_entry = max(frozen_entries)
+    frozen_min_entry = min(frozen_entries)
+    if frozen_max_entry < window_start:
         span_violations += 1
-        examples.append(f"frozen_min@{frozen_min}")
-    if max(frozen_exits) < window_end - one_bar:
+        examples.append(f"frozen_max_entry@{frozen_max_entry}")
+    if frozen_min_entry > window_end:
         span_violations += 1
-        examples.append(f"frozen_max_exit@{max(frozen_exits)}")
+        examples.append(f"frozen_min_entry@{frozen_min_entry}")
     if not issues and not span_violations:
         return None
     slot = issues.setdefault(
@@ -1644,10 +1655,8 @@ def _run_leg_stages(  # noqa: PLR0911 (one return per stage gate, house style)
             stage=1,
             n_matched=0,
         )
-    # --- stage 2: frozen window coverage (n-agnostic) -------------------
-    window_issues = _window_coverage_issue(
-        paper_leg, frozen_leg, spec, labels
-    )
+    # --- stage 2: frozen window coverage (overlap, n-agnostic) ----------
+    window_issues = _window_overlap_issue(paper_leg, frozen_leg, spec, labels)
     if window_issues is not None:
         parity_report = {
             "stage_verdict": "PARITY_FAIL",

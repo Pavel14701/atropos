@@ -267,6 +267,27 @@ def test_frozen_window_gap_hard_fail() -> None:
     assert "frozen_window_gap" in _issue_names(verdict)
 
 
+def test_frozen_stale_span_gap() -> None:
+    """Frozen outcomes from another era -> no overlap -> stage-2 kill.
+
+    The anti-STALE trap: frozen outcomes must OVERLAP the declared
+    window (coverage is deliberately NOT required -- a sparse frozen
+    population near the edges is parity's business, not a gate).
+    """
+    rows = _rows(5)
+    paper = _paper_frame(rows)
+    stale_rows = [dict(row) for row in rows]
+    for row in stale_rows:
+        row["entry_ts"] = row["entry_ts"] - pd.Timedelta(days=14)
+        row["exit_ts"] = row["exit_ts"] - pd.Timedelta(days=14)
+    frozen = _frozen_dict({"c_zone": stale_rows}, _spec())
+    verdict = _run(paper, frozen, _spec())
+    assert verdict["overall_verdict"] == "PARITY_FAIL"
+    assert verdict["killed_by_stage"] == 2
+    assert "frozen_window_gap" in _issue_names(verdict)
+    assert verdict["n_frozen_matched"] == 0
+
+
 def test_feed_granularity_mismatch() -> None:
     """Paper feed 1m vs frozen spec 15m -> hard fail, never a tolerance."""
     rows = _rows(5)
