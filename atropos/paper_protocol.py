@@ -63,9 +63,11 @@ The function:
   spec, run the stage machine per leg, and aggregate the severity
   cascade into one :class:`PaperVerdict`.
 
-Issue taxonomy: the parity report carries exactly 10 named issues,
-the statistical report exactly one (``dd_divergence``); the ``facts``
-dict pins the count.
+Issue taxonomy: the parity report carries exactly 11 named issues
+(the 10 pair/stage comparison defects plus ``sizing_activation_stale``:
+the engine claims the composite sizing contract while stuck in
+``neutral_fallback`` past the activation n), the statistical report
+exactly one (``dd_divergence``); the ``facts`` dict pins the count.
 
 Run ``python -m atropos.paper_protocol`` for a synthetic demo.
 """
@@ -186,6 +188,7 @@ _PARITY_ISSUE_ORDER = (
     "pnl_component_mismatch",
     "universe_violation",
     "unmatched_entry",
+    "sizing_activation_stale",
 )
 _OPERATIONAL_ISSUE_ORDER = ("latency_breach", "exit_direction_violation")
 _SEVERITY_CASCADE = (
@@ -197,7 +200,8 @@ _SEVERITY_CASCADE = (
 _SIZE_ABS_TOLERANCE = 1e-9
 _SIZING_NOTE = "live sizing remains a policy decision outside this protocol"
 # the facts note is COMPUTED from the live taxonomy, never literal: a
-# taxonomy growth (a 12th named issue) re-renders it instead of rotting
+# taxonomy growth (sizing_activation_stale landed as the 12th named
+# issue) re-renders it instead of rotting
 _N_PARITY_ISSUE_TYPES = len(_PARITY_ISSUE_ORDER)
 _N_STATISTICAL_ISSUE_TYPES = 1
 _FACTS_NOTES = (
@@ -338,23 +342,35 @@ _VERDICT_META: dict[str, tuple[str, bool, str, str, str]] = {
 # ---------------------------------------------------------------------------
 # validation helpers
 # ---------------------------------------------------------------------------
-def _validate_paper_log(paper_log: pd.DataFrame) -> tuple[int, str]:
+def _validate_paper_log(
+    paper_log: pd.DataFrame,
+) -> tuple[int, str, int | None, str | None]:
     """Contract-check the paper log (columns, attrs, sizing, side).
 
     Required columns: ``leg, coin, entry_ts, exit_ts, exit_type,
     pnl_r, sizing_rule``; required attribute
     ``paper_log.attrs["bar_delta_min"]`` (int minutes).  Optional
     columns are listed in ``_OPTIONAL_COLUMN_NAMES``; their absence
-    sends the related check to ``checks_skipped``.
+    sends the related check to ``checks_skipped``.  Optional
+    attributes: ``paper_log.attrs["n_ob_rows"]`` (int >= 0, count of
+    own resolved trades with features) and
+    ``paper_log.attrs["sizing_mode_active"]`` (non-empty str, the
+    runtime sizing mode, e.g. ``"neutral_fallback"``); their absence
+    sends the stage-3 sizing-activation pre-check to
+    ``checks_skipped``, their wrong types are hard errors.
 
     Returns:
-        The stamped bar granularity in minutes and the global
-        ``sizing_rule`` value (read via ``.iloc[0]``).
+        The stamped bar granularity in minutes, the global
+        ``sizing_rule`` value (read via ``.iloc[0]``), the
+        ``n_ob_rows`` count (``None`` when the attr is absent) and
+        the ``sizing_mode_active`` mode string (``None`` when the
+        attr is absent).
 
     Raises:
         ValueError: on an empty log, missing columns/attr, a
-            non-string ``sizing_rule`` value, or ``side`` values
-            outside ``{"long", "short"}``.
+            non-string ``sizing_rule`` value, ``side`` values
+            outside ``{"long", "short"}``, a non-integer
+            ``n_ob_rows`` or a non-string ``sizing_mode_active``.
     """
     if paper_log.empty:
         raise ValueError("paper_log is empty: nothing to parity-check")
@@ -376,6 +392,23 @@ def _validate_paper_log(paper_log: pd.DataFrame) -> tuple[int, str]:
         paper_log.attrs["bar_delta_min"],
         minimum=1,
     )
+    raw_ob_rows = paper_log.attrs.get("n_ob_rows")
+    n_ob_rows = (
+        None
+        if raw_ob_rows is None
+        else validate_int(
+            "paper_log.attrs['n_ob_rows']", raw_ob_rows, minimum=0
+        )
+    )
+    sizing_mode_active = paper_log.attrs.get("sizing_mode_active")
+    if sizing_mode_active is not None and (
+        not isinstance(sizing_mode_active, str)
+        or not sizing_mode_active.strip()
+    ):
+        raise ValueError(
+            "paper_log.attrs['sizing_mode_active'] must be a "
+            f"non-empty str when present, got {sizing_mode_active!r}"
+        )
     sizing_value = paper_log["sizing_rule"].iloc[0]
     if not isinstance(sizing_value, str) or not sizing_value.strip():
         raise ValueError(
@@ -392,7 +425,7 @@ def _validate_paper_log(paper_log: pd.DataFrame) -> tuple[int, str]:
                 "paper_log['side'] must only contain 'long'/'short', "
                 f"got {unknown_sides}"
             )
-    return bar_delta_min, sizing_value
+    return bar_delta_min, sizing_value, n_ob_rows, sizing_mode_active
 
 
 def _validate_exit_rules(prefix: str, raw_exit_rules: Any) -> None:
@@ -595,8 +628,9 @@ def _validate_frozen_spec(leg: str, spec: dict[str, Any]) -> None:
 
     Required keys: ``exit_rules``, ``exit_type_normalization``,
     ``fee``, ``universe``, ``sizing_rule``, ``bar_delta_min`` and
-    ``paper_window``.  Optional: ``funding`` (carry) and
-    ``pnl_decomposition`` (options).
+    ``paper_window``.  Optional: ``funding`` (carry),
+    ``pnl_decomposition`` (options) and ``composite_activation_n``
+    (int >= 1; drives the stage-3 sizing-activation pre-check).
 
     Raises:
         ValueError: on missing keys, wrong shapes, unknown
@@ -634,6 +668,12 @@ def _validate_frozen_spec(leg: str, spec: dict[str, Any]) -> None:
         f"{prefix}['bar_delta_min']", spec["bar_delta_min"], minimum=1
     )
     _validate_paper_window(prefix, spec["paper_window"])
+    if "composite_activation_n" in spec:
+        validate_int(
+            f"{prefix}['composite_activation_n']",
+            spec["composite_activation_n"],
+            minimum=1,
+        )
     if "funding" in spec:
         _validate_funding_section(prefix, spec["funding"])
     if "pnl_decomposition" in spec:
@@ -1176,6 +1216,8 @@ def _run_parity_stage(
     alias_map: dict[str, str],
     bar_delta_min: int,
     paper_sizing_value: str,
+    n_ob_rows: int | None,
+    sizing_mode_active: str | None,
     parity_tolerance_r: float,
     fee_tolerance_bps: float,
     labels: list[str],
@@ -1193,6 +1235,17 @@ def _run_parity_stage(
     record: normalized exit type, exit timestamp beyond one bar, or a
     ``pnl_r`` difference beyond ``parity_tolerance_r``.
 
+    The sizing-activation pre-check runs beside the sizing-rule
+    compare: with ``n_ob_rows``, ``sizing_mode_active`` and
+    ``composite_activation_n`` ALL present, the engine sitting in
+    ``neutral_fallback`` while ``n_ob_rows >= composite_activation_n``
+    fires ``sizing_activation_stale`` — it claims the composite
+    contract without ever activating it.  Any absent input sends the
+    check to ``checks_skipped`` ("sizing_activation (attrs/spec
+    absent)").  It is the runtime-state defect detector, distinct
+    from the ``sizing_rule_mismatch`` token compare and the
+    per-trade ``sizing_mismatch``.
+
     Returns:
         The ``parity_report`` dict and the matched
         ``(paper_position, frozen_position)`` pairs in paper frame
@@ -1205,6 +1258,23 @@ def _run_parity_stage(
             issues, "sizing_rule_mismatch", len(labels), labels
         )
     inputs = _collect_parity_inputs(spec, paper_leg, frozen_leg)
+    # runtime-state detector: the contract token is claimed but the
+    # composite never switched on despite a full ledger (needs BOTH
+    # attrs and the spec key, else the check is skipped, not inferred)
+    composite_activation_n = spec.get("composite_activation_n")
+    if (
+        n_ob_rows is None
+        or sizing_mode_active is None
+        or composite_activation_n is None
+    ):
+        inputs["checks_skipped"].add("sizing_activation (attrs/spec absent)")
+    elif (
+        sizing_mode_active == "neutral_fallback"
+        and n_ob_rows >= composite_activation_n
+    ):
+        _record_issue_bulk(
+            issues, "sizing_activation_stale", len(labels), labels
+        )
     paper_side = _collect_side_arrays(paper_leg, inputs["spec_components"])
     frozen_side = _collect_side_arrays(frozen_leg, inputs["spec_components"])
     paper_coins = _string_values(paper_leg, "coin")
@@ -1506,6 +1576,8 @@ def _run_leg_stages(  # noqa: PLR0911 (one return per stage gate, house style)
     *,
     bar_delta_min_paper: int,
     paper_sizing_value: str,
+    n_ob_rows: int | None,
+    sizing_mode_active: str | None,
     min_n_trades: int,
     parity_tolerance_r: float,
     fee_tolerance_bps: float,
@@ -1689,6 +1761,8 @@ def _run_leg_stages(  # noqa: PLR0911 (one return per stage gate, house style)
         alias_map=alias_map,
         bar_delta_min=spec_bar_delta,
         paper_sizing_value=paper_sizing_value,
+        n_ob_rows=n_ob_rows,
+        sizing_mode_active=sizing_mode_active,
         parity_tolerance_r=parity_tolerance_r,
         fee_tolerance_bps=fee_tolerance_bps,
         labels=labels,
@@ -2324,7 +2398,12 @@ def run_paper_protocol(
             related check to ``checks_skipped``): ``signal_ts,
             entry_price, exit_price, side`` ("long"/"short"),
             ``fee_r, size, funding_rate, pnl_delta, pnl_gamma,
-            pnl_theta, pnl_vega, pnl_fee``.
+            pnl_theta, pnl_vega, pnl_fee``.  Optional attributes
+            (absence sends the stage-3 sizing-activation pre-check
+            to ``checks_skipped``): ``paper_log.attrs["n_ob_rows"]``
+            (int >= 0, own resolved trades with features) and
+            ``paper_log.attrs["sizing_mode_active"]`` (non-empty
+            str, the runtime sizing mode, e.g. "neutral_fallback").
         frozen_outcomes: per-leg frozen (spec-executed) trade frames.
             Required columns ``coin, entry_ts, exit_ts, exit_type,
             pnl_r``; optional ``fee_r, size, funding_rate, pnl_*``.
@@ -2336,10 +2415,14 @@ def run_paper_protocol(
             check skipped), ``sizing_rule``, ``bar_delta_min`` and
             ``paper_window`` ({start, end}, pd.Timestamp-parseable;
             an empty dict derives the window from the frozen frame's
-            own span).  Optional: ``funding`` ({settlement_interval_hours,
-            rate_tolerance_bps}; carry only) and ``pnl_decomposition``
-            ({enabled, components, tolerance_per_component_r};
-            options only).
+            own span).  Optional: ``funding``
+            ({settlement_interval_hours, rate_tolerance_bps}; carry
+            only), ``pnl_decomposition`` ({enabled, components,
+            tolerance_per_component_r}; options only) and
+            ``composite_activation_n`` (int >= 1; with the paper
+            log's ``n_ob_rows`` / ``sizing_mode_active`` attrs
+            drives the ``sizing_activation_stale`` runtime-state
+            check).
         legs: legs to process (each must exist in ``frozen_outcomes``
             and ``frozen_spec``); None processes every ``paper_log``
             leg in sorted order.
@@ -2364,6 +2447,8 @@ def run_paper_protocol(
     Raises:
         ValueError: on an empty ``paper_log`` or per-leg frames,
             missing required columns or the ``bar_delta_min`` attr,
+            wrong-typed optional attrs (``n_ob_rows`` not an int
+            >= 0, ``sizing_mode_active`` not a non-empty str),
             missing ``frozen_spec`` keys, unknown leg names (requested
             legs absent from ``frozen_outcomes``/``frozen_spec``,
             paper legs without a frozen entry, or any name containing
@@ -2432,7 +2517,12 @@ def run_paper_protocol(
     )
     if not isinstance(label, str) or not label.strip():
         raise ValueError(f"label must be a non-empty str, got {label!r}")
-    bar_delta_min_paper, paper_sizing_value = _validate_paper_log(paper_log)
+    (
+        bar_delta_min_paper,
+        paper_sizing_value,
+        n_ob_rows,
+        sizing_mode_active,
+    ) = _validate_paper_log(paper_log)
     requested_legs = _resolve_requested_legs(
         paper_log, frozen_outcomes, frozen_spec, legs
     )
@@ -2457,6 +2547,8 @@ def run_paper_protocol(
             frozen_spec[leg_name],
             bar_delta_min_paper=bar_delta_min_paper,
             paper_sizing_value=paper_sizing_value,
+            n_ob_rows=n_ob_rows,
+            sizing_mode_active=sizing_mode_active,
             min_n_trades=params["min_n_trades"],
             parity_tolerance_r=params["parity_tolerance_r"],
             fee_tolerance_bps=params["fee_tolerance_bps"],

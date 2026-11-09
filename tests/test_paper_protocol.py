@@ -234,8 +234,10 @@ def test_survives_to_live_happy_path() -> None:
     assert verdict["killed_by_stage"] is None
     assert verdict["per_leg"] is None  # single-leg run
     assert verdict["facts"]["notes"] == (
-        "10 parity + 1 statistical = 11 named issues"
+        "11 parity + 1 statistical = 12 named issues"
     )
+    assert verdict["facts"]["n_parity_issue_types"] == 11
+    assert verdict["facts"]["n_statistical_issue_types"] == 1
     dd = verdict["dd_comparison"]
     assert set(dd) == {"paper_dd_r", "frozen_dd_r", "ratio", "breach"}
     assert dd["breach"] is False
@@ -576,6 +578,66 @@ def test_paper_report_carries_verdict_metadata() -> None:
 def _expect_value_error(case: Callable[[], Any]) -> None:
     with pytest.raises(ValueError):
         case()
+
+
+def test_sizing_activation_stale_fires() -> None:
+    """Ledger large enough but mode still fallback -> runtime defect.
+
+    The contract token matches by construction, yet the composite
+    never activated despite n_ob_rows >= composite_activation_n —
+    exactly the 'fix shipped but never switched on' scenario.
+    """
+    rows = _rows(5)
+    paper = _paper_frame(rows)
+    paper.attrs["n_ob_rows"] = 250
+    paper.attrs["sizing_mode_active"] = "neutral_fallback"
+    spec = _spec()
+    spec["c_zone"]["composite_activation_n"] = 200
+    frozen = _frozen_dict({"c_zone": [dict(row) for row in rows]}, spec)
+    verdict = _run(paper, frozen, spec)
+    assert verdict["overall_verdict"] == "PARITY_FAIL"
+    assert "sizing_activation_stale" in _issue_names(verdict)
+
+
+def test_sizing_activation_not_stale_below_threshold() -> None:
+    """n_ob_rows below activation n -> no issue (healthy fallback)."""
+    rows = _rows(5)
+    paper = _paper_frame(rows)
+    paper.attrs["n_ob_rows"] = 12
+    paper.attrs["sizing_mode_active"] = "neutral_fallback"
+    spec = _spec()
+    spec["c_zone"]["composite_activation_n"] = 200
+    frozen = _frozen_dict({"c_zone": [dict(row) for row in rows]}, spec)
+    verdict = _run(paper, frozen, spec)
+    assert "sizing_activation_stale" not in _issue_names(verdict)
+
+
+def test_sizing_activation_skipped_without_attrs() -> None:
+    """Missing attrs -> check goes to checks_skipped, never fires."""
+    rows = _rows(5)
+    paper = _paper_frame(rows)  # no n_ob_rows / sizing_mode_active attrs
+    spec = _spec()
+    spec["c_zone"]["composite_activation_n"] = 200
+    frozen = _frozen_dict({"c_zone": [dict(row) for row in rows]}, spec)
+    verdict = _run(paper, frozen, spec)
+    skipped = " ".join(verdict["parity_report"].get("checks_skipped", []))
+    assert "sizing_activation" in skipped
+    assert "sizing_activation_stale" not in _issue_names(verdict)
+
+
+def test_issue_taxonomy_boundary() -> None:
+    """B11, structurally: 11 parity + 1 statistical, never mixed.
+
+    The counts come from the module's own taxonomy constants, so a
+    new issue type updates the facts note and this pin together.
+    """
+    from atropos.paper_protocol import (  # noqa: PLC0415  (test-local)
+        _PARITY_ISSUE_ORDER,
+    )
+
+    assert len(_PARITY_ISSUE_ORDER) == 11
+    assert "sizing_activation_stale" in _PARITY_ISSUE_ORDER
+    assert "dd_divergence" not in _PARITY_ISSUE_ORDER
 
 
 def test_error_paths() -> None:
