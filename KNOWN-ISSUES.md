@@ -558,6 +558,31 @@ matches frozen, not that frozen is right (frozen correctness goes
 through ``run_full_pipeline`` on the backtest feed); capital
 authorization (``sizing_note`` in the report — policy, not code).
 
+Evidence semantics (read before quoting numbers):
+
+* ``dd_comparison`` is computed on the FULL leg frames (paper n vs
+  frozen n), not on matched pairs — it is POPULATION-DIRECTIONAL
+  evidence, never a statistically established ratio.
+* Parity issue counts (exit/fee/sizing/universe/...) are
+  DETERMINISTIC per-trade facts — they do not depend on n.
+* ``unmatched_entry`` may be a legitimate POPULATION DIFFERENCE
+  (e.g. a rolling-head live detector vs a fixed-head replay), not a
+  defect; read it together with the run's feed construction.
+* ``SURVIVES_TO_LIVE`` requires execution-quality evidence: the
+  paper log must carry ``side`` + ``entry_price``/``exit_price``
+  (+ ``signal_ts`` for latency).  A paper log without execution
+  columns caps at ``PARITY_PASS`` (parity-only attestation).
+* ``PARITY_PASS``/``SURVIVES_TO_LIVE`` need ``n_matched >=
+  min_n_trades``; below that the verdict is ``INSUFFICIENT_N`` and
+  the fix-verification signal is a CLEAN parity report (issues
+  empty, matched == paper trades), not the token.
+
+Real-data coverage: validated on a tactical/time-exit leg (C'',
+2026-11 DTE post-mortem).  Carry (``funding``) and options
+(``pnl_decomposition``) sections are implemented and unit-tested;
+real-data validation pending — future wave when a deployed system
+runs carry/options paper legs.
+
 Unblocks: formal forward-parity testing for the paper/live phase of
 any deployed system (first application: the 2026-11 DTE post-mortem).
 

@@ -196,7 +196,15 @@ _SEVERITY_CASCADE = (
 )
 _SIZE_ABS_TOLERANCE = 1e-9
 _SIZING_NOTE = "live sizing remains a policy decision outside this protocol"
-_FACTS_NOTES = "10 parity + 1 statistical = 11 named issues"
+# the facts note is COMPUTED from the live taxonomy, never literal: a
+# taxonomy growth (a 12th named issue) re-renders it instead of rotting
+_N_PARITY_ISSUE_TYPES = len(_PARITY_ISSUE_ORDER)
+_N_STATISTICAL_ISSUE_TYPES = 1
+_FACTS_NOTES = (
+    f"{_N_PARITY_ISSUE_TYPES} parity + {_N_STATISTICAL_ISSUE_TYPES} "
+    "statistical = "
+    f"{_N_PARITY_ISSUE_TYPES + _N_STATISTICAL_ISSUE_TYPES} named issues"
+)
 
 # verdict -> (verdict_class, informative, interpretation template,
 # next_step template, what_would_change template).  Placeholders are
@@ -2105,7 +2113,11 @@ def _build_leg_verdict(
         "funding_alignment": result["funding_alignment"],
         "pnl_decomposition": result["pnl_decomposition"],
         "dd_comparison": result["dd_comparison"],
-        "facts": {"notes": _FACTS_NOTES},
+        "facts": {
+            "notes": _FACTS_NOTES,
+            "n_parity_issue_types": _N_PARITY_ISSUE_TYPES,
+            "n_statistical_issue_types": _N_STATISTICAL_ISSUE_TYPES,
+        },
     }
 
 
