@@ -516,3 +516,49 @@ honesty comes from carry INSIDE the equity, not a new gate).
 Unblocks: wave 4 (options).  Waves 5-6 unblocked transitively.
 Trigger to close: N/A — permanent layer; each deferred line graduates
 by its own wave and removes itself here.
+
+## 15. Paper parity protocol (forward test, not a protocol stage)
+
+Status: shipped (2026-11-09).  Separate entry point
+(``atropos/paper_protocol.py``); NOT invoked by ``run_full_pipeline``.
+
+Cause: ``run_paper_protocol(paper_log, frozen_outcomes, frozen_spec,
+*, legs, ...) -> PaperVerdict``.  Six verdicts (PARITY_PASS,
+PARITY_FAIL, OPERATIONAL_FAIL, STATISTICAL_FAIL, INSUFFICIENT_N,
+SURVIVES_TO_LIVE), four classes (PASS / FAIL / NEEDS_ANALYSIS /
+INCONCLUSIVE).  Validates that paper execution matches the frozen
+spec per leg and at portfolio level: 10 parity issue types +
+1 statistical issue type (``dd_divergence``); dd numbers are reported
+on every verdict (the breach gate only rules inside the statistical
+stage).
+
+Supports every strategy class via frozen_spec extension (class-
+specific sections are opt-in via frozen_spec; absence = skipped,
+not inferred):
+
+* ``exit_type_normalization`` (required) — maps class-specific exit
+  names onto normalized tokens (time_exit, stop_exit, tp_exit,
+  funding_payment, rebalance, early_close, exercise); a token
+  outside the map is a ValueError, never a silent mismatch.
+* ``funding`` section (optional) — carry legs: settlement-interval
+  context + funding-rate alignment at tolerance.
+* ``pnl_decomposition`` section (optional) — options legs: per-greek
+  comparison (delta/gamma/theta/vega/fee) with a per-component
+  tolerance; equal totals with opposite greek errors are caught.
+* ``sizing_rule`` + per-trade ``size`` — rule-level AND trade-level
+  sizing checks.
+* ``bar_delta_min`` in ``paper_log.attrs`` + frozen_spec — the §12
+  feed-granularity rule as a hard gate (1m paper vs 15m frozen is a
+  fail, never a tolerance).
+* ``dd_breach_ratio`` — drawdown-divergence gate independent of mean
+  pnl (frame-order cumsum; ordering differences are the signal).
+
+Out of scope: SPEC CORRECTNESS — the protocol validates that paper
+matches frozen, not that frozen is right (frozen correctness goes
+through ``run_full_pipeline`` on the backtest feed); capital
+authorization (``sizing_note`` in the report — policy, not code).
+
+Unblocks: formal forward-parity testing for the paper/live phase of
+any deployed system (first application: the 2026-11 DTE post-mortem).
+
+Trigger to close: N/A — permanent protocol.

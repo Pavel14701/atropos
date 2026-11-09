@@ -118,7 +118,7 @@ jobs:
             atropos.incremental_regression atropos.kill_chain \
             atropos.legs atropos.ml_ensemble atropos.ml_training \
             atropos.monte_carlo atropos.null_control_suite \
-            atropos.orthogonal atropos.portfolio \
+            atropos.orthogonal atropos.paper_protocol atropos.portfolio \
             atropos.portfolio_protocol atropos.power_calculator \
             atropos.predictive_model_eval atropos.prereg_generator \
             atropos.robustness_battery atropos.ranking atropos.strategy \

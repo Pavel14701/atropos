@@ -13,6 +13,15 @@
   v15: pytest-cov baseline (87.78% line / 85.4% branch),
   coverage-driven error-path tests, property tests, cross-mode
   matrix, pdoc API-regen freshness check in CI.
+- feat: paper parity protocol (`atropos/paper_protocol.py`) —
+  forward test of implementation vs frozen spec; 6 verdicts
+  (PARITY_PASS, PARITY_FAIL, OPERATIONAL_FAIL, STATISTICAL_FAIL,
+  INSUFFICIENT_N, SURVIVES_TO_LIVE), 10 parity + 1 statistical
+  named issue types, per-leg + portfolio cascade; generic across
+  strategy classes (time-based exits, stop/tp, funding settlement,
+  options greeks, multi-leg books) via opt-in frozen_spec sections;
+  feed-granularity (§12) and sizing-rule checks as hard gates;
+  dd numbers reported on every verdict.
 
 ## 1.2.1 — verdict taxonomy
 
