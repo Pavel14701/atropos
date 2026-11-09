@@ -650,9 +650,7 @@ def _build_parser() -> argparse.ArgumentParser:
     """Build the argparse tree for the five CLI subcommands."""
     parser = argparse.ArgumentParser(
         prog=PROG,
-        description=(
-            "Atropos hypothesis-killing framework: agent context tools."
-        ),
+        description=("Atropos falsification toolkit: agent context tools."),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -827,6 +825,9 @@ def main(
         16-walkforward-calendar
         17-backtest-pipeline
         18-read-portfolio-results
+        19-instrument-routing
+        20-paper-parity
+        21-units-and-identities
         0
     """
     parser = _build_parser()

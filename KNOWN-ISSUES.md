@@ -643,3 +643,59 @@ Reading discipline (each pinned by tests):
   (R-normalized).
 
 Trigger to close: N/A — permanent law.
+
+## 17. Instrument routing is a prereg decision
+
+Status: shipped (2026-11-10).  Machine-checkable mapping in
+`atropos/instrument_map.py` (`PLAN_REGISTRY`, six families); pipeline
+enforcement is opt-in, audit fallback otherwise.
+
+Cause: a strategy family dictates WHICH instruments — battery tools
+and pipeline stages — may judge it.  The family is declared in the
+prereg/config as `strategy_family` (explicitly, before data; the
+`run_full_pipeline` kwarg overrides `hypothesis_config["strategy_family"]`,
+and both set and differing is a loud ValueError).  Declared, the run
+is ENFORCE mode: before each stage executes, a plan forbidden entry
+whose concrete `stage` matches that stage's number (1-7) raises
+ValueError, and `report["instrument_audit"]["violations"]` repeats the
+post-hoc `atropos.instrument_map.audit_report` findings for the stages
+that did run.  Not declared, the run is AUDIT mode: nothing is
+enforced, `instrument_audit` records `mode: "audit"` with
+`family: None`.
+
+The PLAN_REGISTRY forbidden table (six families — rule_based_tactical,
+per_trade_tactical, ml_predictive, cross_sectional_factor, carry,
+options; four carry forbidden cells, `ml_predictive` and `options`
+none; authoritative machine-checkable source: `PLAN_REGISTRY` in
+`atropos/instrument_map.py` — the rows below are a frozen snapshot):
+
+| Family | Forbidden tool (stage) | Reason |
+|---|---|---|
+| rule_based_tactical | `ml_stage_4` (stage 4) | rule-based strategies have no predictive feature stream; ML on zero-heavy streams gives CONSTANT_PREDICTIONS by construction |
+| rule_based_tactical | `daily_aggregate_for_sub_daily` (declaration-level) | feed granularity must match decision granularity (§12) |
+| per_trade_tactical | `daily_aggregate_for_sub_daily` (declaration-level) | feed granularity must match decision granularity (§12) |
+| cross_sectional_factor | `trade_battery` (declaration-level) | factor construction is not trade-level |
+| carry | `book_momentum_signal` (declaration-level) | funding is settlement, not momentum |
+
+Paper-protocol side: the frozen spec may declare `family` and
+`tools_used` (the DECLARED measurement tools).  Neither declared — no
+instrument audit; exactly one declared — audit mode (the declaration
+is recorded, not validated, nothing fails — the honest skip); both
+declared — enforce: the declared tools intersecting the family's
+forbidden set is an operational `instrument_violation` (the 3rd
+operational issue type, alongside latency_breach and
+exit_direction_violation; a FAMILY-CONTRACT violation class, never a
+parity issue) and the leg dies `OPERATIONAL_FAIL` before any stage
+runs (`killed_by_stage=4` semantics).
+
+**U9.** `tools_used` is a declaration, not a measurement; enforcement
+validates the declaration against the family, not against actual
+execution.  Actual execution verification requires engine-level
+instrumentation (future, if needed).
+
+Positioning note: Atropos is a falsification toolkit, not a compiler —
+routing constrains what may JUDGE a family, it does not produce
+strategies.  The compiler returns when a real-data paper run reaches
+SURVIVES_TO_LIVE — trigger, not vibe.
+
+Trigger to close: N/A — permanent law.

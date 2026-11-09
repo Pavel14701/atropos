@@ -31,6 +31,24 @@
   CI omitted below 50 obs), `paper_protocol.statistical_report`
   (per-trade sharpe/sortino, pooled across legs), `track_record`
   live_sortino/live_cagr.  §16 law: metrics NEVER gate verdicts.
+- repositioning: Atropos is a falsification toolkit for trading
+  hypotheses — backtest kill protocol, feature decomposition, paper
+  parity, with machine-checkable instrument routing.  Honest scope
+  expansion, not rebranding: the kill protocol stays the core of the
+  backtest tier, SURVIVED/KILLED verdicts remain the product, and the
+  out-of-scope list is explicit (data ingestion, execution engine,
+  capital allocation).  Still not a "compiler": the compiler returns
+  when a real-data paper run reaches SURVIVES_TO_LIVE — trigger, not
+  vibe.
+- feat: machine-checkable instrument routing
+  (`atropos/instrument_map.py`, `PLAN_REGISTRY`, six strategy
+  families) — families map to allowed/forbidden battery tools and
+  stages; opt-in enforcement in `run_full_pipeline` (`strategy_family`
+  kwarg/config: a forbidden stage raises) with audit-mode fallback
+  when no family is declared (`report["instrument_audit"]`); and
+  `paper_protocol` enforces the frozen spec's declared `tools_used` +
+  `family` — a forbidden intersection is an operational
+  `instrument_violation` (the 3rd operational issue type).
 
 ## 1.2.1 — verdict taxonomy
 

@@ -1,72 +1,102 @@
 # Positioning
 
-One page on what Atropos is, what it is not, and how its two halves
-relate. Read this before building on top of it.
+One page on what Atropos is, what it is not, and why it is a
+falsification toolkit and not a compiler. Read this before building on
+top of it.
 
-**What Atropos does.** Atropos is a hypothesis-killing framework: a
-library you point at your own candidate signal and that returns exactly
-one verdict. The kill-protocol is the product: freeze a preregistration,
-run the 7-stage adversarial pipeline (null controls, specification
-curve, robustness battery, walk-forward, Monte Carlo risk, predictive
-evaluation, cross-sectional tests), read the verdict — from `SURVIVES`
-to `COST_DEATH` — and write the tombstone. Plain `SURVIVES` says every
-executed attack missed; a panel-only run (only the cross-sectional
-stage has data) reports `SURVIVES_CS_ONLY` /
-`SURVIVES_CS_ONLY_WITH_WARNINGS` instead, so the evidence scope stays
-in the verdict, and an undersized walk-forward configuration reads
-`INCONCLUSIVE` (undecided), not `NO_OOS_EDGE`. The ML chain
-(`run_ml_kill_protocol`) runs the same doctrine on a feature dataset:
-expanding-block walk-forward (purge + embargo) and four gates. For the
-rare signal that survives, Atropos also ships a reference backtest
-pipeline — simulate → rank → admission → metrics
-(`atropos.backtesting`, `atropos.ranking`, `atropos.backtest_metrics`)
-— which asks the next question: is the survivor *tradeable* at all
-once one slot at a time, real taker costs, and a past-only ranking
-oracle are imposed on it? The portfolio layer (`atropos.portfolio`)
-asks the question after that: does the book still hold up with
-concurrent positions — slot admission with replacement,
-correlation-aware admission (a candidate whose recent return proxy is
-|Spearman|-correlated with a SAME-INSTRUMENT open position above the
-cap never enters), and portfolio-level gates (deflated Sharpe on the
-daily EV stream, drawdown floor, same-side concentration) over the
-realized equity.
+**What Atropos is.** Atropos — falsification toolkit for trading
+hypotheses: backtest kill protocol, feature decomposition, paper
+parity, with machine-checkable instrument routing. Three tiers, one
+doctrine — a hypothesis is guilty until it survives every attack, and
+the product is VERDICTS, not strategies.
 
-**What Atropos does not do.** It does not optimize strategy parameters
-or search the space of profitable configurations — a candidate that
-survived is not tuned here, and tuning after a verdict would start a
-new hypothesis anyway. The backtest pipeline IS a backtester — but not a general-purpose
-one.  It is a falsification-first replay of the survivor under one
-fixed, documented cost model: bar-level stop/target/time exits with a
-gap-through-stop scratch contract, a one-slot state machine, and
-slot-admission policies.  What it deliberately does not provide: no
-portfolio construction, no brokerage integration, no parameter sweeps,
-no market data handling — those live in general-purpose engines
-(vectorbt / backtrader / qlib), and mixing the two roles would
-compromise the falsification-first contract. The portfolio layer
-sharpens rather than weakens this line: portfolio SIMULATION is not
-portfolio CONSTRUCTION — `atropos.portfolio` replays a fixed slot cap
-to gate a stream; it does not optimize weights, allocate capital, or
-trade live, and every position enters at exactly one risk unit. And nothing here guarantees
-profit: `SURVIVES` means "not killed by every attack we ran", never
-"trading-ready", and a passing backtest is one more non-kill, not a
-promise.
+- **Backtest kill protocol** — `atropos.ensemble_pipeline`
+  (`run_full_pipeline`), the core of the backtest tier: a candidate
+  signal enters a 7-stage adversarial pipeline (null controls,
+  specification curve, robustness battery, walk-forward, Monte Carlo
+  risk, predictive evaluation, cross-sectional tests) and leaves with
+  exactly one verdict. Thresholds are frozen in a preregistration
+  before the data is touched; the authoritative verdict list lives in
+  the module docstring — docs must not re-enumerate it. The ML chain
+  (`atropos.ml_training.run_ml_kill_protocol`) runs the same doctrine
+  on a feature dataset; `atropos.kill_chain.run_full_kill_chain`
+  unifies both. Survival is not the end: for the rare survivor the
+  reference backtest pipeline (`atropos.backtesting`,
+  `atropos.ranking`, `atropos.backtest_metrics`) asks whether it is
+  *tradeable* at all, and `atropos.portfolio` asks whether the book
+  holds up with concurrent positions.
+- **Feature decomposition** — `atropos.orthogonal.orthogonal_check`,
+  orchestrated by `atropos.feature_scan.feature_analysis`: does the
+  candidate carry information beyond known controls? Orthogonal to
+  the kill chain, not a stage of it.
+- **Paper parity** — `atropos.paper_protocol.run_paper_protocol`: the
+  forward test of the IMPLEMENTATION — does paper execution match the
+  frozen spec? A `PARITY_FAIL` indicts the paper engine or its feed;
+  it never indicts the hypothesis.
+- **Instrument routing** — `atropos.instrument_map` (`PLAN_REGISTRY`):
+  strategy families map to batteries. The family is declared in the
+  prereg/config as `strategy_family`; machine-checkable — enforced in
+  the pipeline when declared (a forbidden tool or stage raises),
+  flagged in audit mode otherwise.
 
-**How the two halves relate.** The kill-protocol is the methodological
-core (falsification first); the backtest pipeline is the reference
-check of the survivor's tradeability and nothing more. Both are a
-library: Atropos ships functions, not an app — you import them into
-YOUR pipeline and keep your own data, execution and sizing layers.
+**What Atropos is not.** Three explicit out-of-scope surfaces:
+
+- **Data ingestion** — no market-data handling, no live feeds; the
+  data contract (`atropos.data_contract`) verifies and aligns data
+  YOU supply.
+- **Execution engine** — no brokerage integration, no order routing,
+  no live trading; the replay is a falsification-first reference
+  under one fixed cost model (general-purpose engines — vectorbt /
+  backtrader / qlib — live on the other side of that line).
+- **Capital allocation** — no portfolio construction, no weights, no
+  capital deployment; every position enters at exactly one risk unit
+  (portfolio SIMULATION is not portfolio CONSTRUCTION).
+
+It also does not optimize strategy parameters or search the space of
+profitable configurations — tuning after a verdict starts a new
+hypothesis anyway. And nothing here guarantees profit: `SURVIVES`
+means "not killed by every attack we ran", never "trading-ready".
+
+**Why "falsification toolkit" and not "compiler".** A compiler turns
+an idea into a running strategy — it claims strategy production and
+live deployment. Atropos claims neither: it produces VERDICTS
+(SURVIVED / KILLED are the product), and every tier after the kill
+protocol only sharpens the evidence. The re-entry condition is
+explicit, not rhetorical: **"compiler" returns when a real-data paper
+run reaches SURVIVES_TO_LIVE — trigger, not vibe.** Until then the
+honest name is falsification toolkit.
+
+**The four honest limits of the paper protocol** (read before quoting
+its outputs):
+
+1. `tools_used` is a declaration, not a measurement — parity validates
+   the declaration against the family, not against actual execution.
+2. `audit_report` on runner outputs without saved stages returns `[]`.
+3. `SURVIVES_TO_LIVE` has not yet been achieved on real data — the
+   token exists, the evidence does not.
+4. Spec correctness is out of scope — the protocol validates that
+   paper matches frozen, not that frozen is right (frozen correctness
+   goes through `run_full_pipeline` on the backtest feed).
+
+**How the tiers relate.** The kill protocol is the methodological core
+(falsification first); feature decomposition and paper parity widen
+the evidence, not the claims. All of it is a library: Atropos ships
+functions, not an app — you import them into YOUR pipeline and keep
+your own data, execution and sizing layers.
 
 | Task | Use |
 |---|---|
 | Kill a rule-based hypothesis | `run_full_pipeline` — how-to 02 |
 | Kill an ML hypothesis | `run_ml_kill_protocol` — how-to 05 |
 | Judge rule + ML in one verdict | `atropos.kill_chain.run_full_kill_chain` |
-| Check a survivor's tradeability | `docs/examples/backtest_pipeline.py` (simulate → rank → admission → metrics) — how-to 06 |
+| Decompose a candidate's information | `atropos.orthogonal.orthogonal_check` — KNOWN-ISSUES §11 |
+| Check a survivor's tradeability | `docs/examples/backtest_pipeline.py` — how-to 06 |
 | Compare rankers honestly | `atropos.ranking` + `RANKING_METRICS` — how-to 07 |
 | Choose a slot admission policy | `atropos.backtesting.run_admission_policy` — how-to 08 |
-| Compare portfolio admission policies / portfolio gates | `atropos.portfolio` (`run_portfolio_replay`, `run_portfolio`) — how-to 09 |
-| Portfolio kill protocol calibration | `docs/calibration.md` — public-data gate progression, prereg hash, blind-run protocol |
+| Compare portfolio policies / gates | `atropos.portfolio` — how-to 09 |
+| Route a strategy family to its instruments | `atropos.instrument_map.PLAN_REGISTRY` (`strategy_family`) — skill 19 |
+| Forward-test paper execution vs frozen spec | `atropos.paper_protocol.run_paper_protocol` — skill 20 |
+| Portfolio kill protocol calibration | `docs/calibration.md` — public-data progression, blind-run protocol |
 
 **The one-paragraph pitch** (and the honest version of it):
 
@@ -80,22 +110,9 @@ YOUR pipeline and keep your own data, execution and sizing layers.
 > Game-changing? No. Closing a real gap? Yes."
 
 Do not upgrade "closing a real gap" to "game-changing" in any pitch:
-falsification is hygiene, not discovery.  It makes research more
-honest, but it does not create new alpha — that is a different class
-of contribution (a new methodology like DSR, a new data class, new
-infrastructure).
-
-**What would have to happen to earn "game-changing"** (all three are
-earned by adoption and time, none by code):
-
-1. One external case where Atropos killed a hypothesis that
-   competitors passed — proof of value.
-2. One external case where Atropos confirmed a hypothesis that
-   competitors killed falsely — proof of calibration (it can refuse
-   to kill live edges, not only kill everything).
-3. A community that adopts the verdict language — "my signal did not
-   pass the DSR gate in Atropos" as a phrase other people use.
-
-Until all three exist, the honest sentence is: **"It does not change
-the rules of the game — it makes the game more honest."**
-
+falsification is hygiene, not discovery — it makes research more
+honest, but it does not create new alpha. Until external adoption
+earns it (a kill competitors passed, a calibration competitors got
+wrong, a community using the verdict language), the honest sentence
+is: **"It does not change the rules of the game — it makes the game
+more honest."**

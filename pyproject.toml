@@ -1,7 +1,7 @@
 [project]
 name = "atropos-quant"
 version = "1.2.0"
-description = "Atropos — hypothesis-killing framework: preregistration, null controls, incremental tests, robustness batteries, walk-forward and Monte Carlo verdicts."
+description = "Atropos — falsification toolkit for trading hypotheses: backtest kill protocol, feature decomposition, paper parity, with machine-checkable instrument routing."
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [{ name = "Pavel14701" }]

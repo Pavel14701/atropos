@@ -1,6 +1,6 @@
-# Atropos — Hypothesis-Killing Framework — Deployment Methodology
+# Atropos — Falsification Toolkit — Deployment Methodology
 
-A portable document: how to deploy the hypothesis-killing framework in any project that works with hypotheses and data. The document is self-contained — an analyst or an AI agent with zero context deploys everything from scratch using it alone. Project-specific values are marked with placeholders: `[PROJECT_ROOT]`, `[DATA_DIR]`, etc.
+A portable document: how to deploy the falsification toolkit in any project that works with hypotheses and data. The document is self-contained — an analyst or an AI agent with zero context deploys everything from scratch using it alone. Project-specific values are marked with placeholders: `[PROJECT_ROOT]`, `[DATA_DIR]`, etc.
 
 The core of the framework: every hypothesis runs a 7-stage pipeline with kill criteria fixed in advance. Possible outcomes: `KILLED` (dead — to the graveyard), `SURVIVED` (alive — may back a decision), `INCONCLUSIVE` (not enough data — reopen on a new snapshot).
 

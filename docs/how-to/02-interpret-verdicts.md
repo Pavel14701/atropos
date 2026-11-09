@@ -33,14 +33,20 @@ The output is a dict with keys:
 
 | Key | Contents |
 |-----|----------|
-| `overall_verdict` | one of the 9 verdicts (table below) |
+| `overall_verdict` | one of the pipeline's verdict tokens — the authoritative list lives in the `atropos.ensemble_pipeline` module docstring (docs must not re-enumerate it); the table below decodes the tokens a first run most often returns |
 | `killed_by_stage` | the killing stage number, or `None` |
 | `kill_reason` | the reason in one line (or `None`) |
 | `stages` | a list of 7 dicts `{stage, name, status, summary, results}` |
 | `config` | a JSON-compatible copy of the actual config |
 | `n_obs`, `date_range`, `hypothesis`, `runtime_seconds` | run context |
 
-## The 9 verdicts
+## The verdicts, decoded
+
+The authoritative verdict list — including the panel-only
+`SURVIVES_CS_ONLY` forms and the non-informative tokens — lives in
+exactly one place, the `atropos.ensemble_pipeline` module docstring;
+docs must not re-enumerate it. This table is a decoder for the tokens
+a first run most often returns, not the enumeration.
 
 | Verdict | Issued by | What it means | What to do next |
 |---------|-----------|---------------|-----------------|
@@ -85,7 +91,8 @@ The seven stages in order: 1 `null_control_suite` (6 null controls),
 
 The framework has a second kill chain — a walk-forward ML engine over a
 feature dataset (`features` → binary `target`), not `signal` → outcome.
-It has its own verdict vocabulary: three, not nine. How to assemble the
+It has its own verdict vocabulary: `SURVIVES`, `DEAD(<gate>)`,
+`UNDERPOWERED`. How to assemble the
 dataset and run it — how-to 05
 (`docs/how-to/05-run-ml-kill-protocol.md`); this section is the decoder.
 

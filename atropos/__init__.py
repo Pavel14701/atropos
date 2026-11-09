@@ -1,4 +1,7 @@
-"""Atropos — a hypothesis-killing framework for quantitative research.
+"""Atropos — falsification toolkit for trading hypotheses.
+
+Backtest kill protocol, feature decomposition, paper parity, with
+machine-checkable instrument routing.
 
 Atropos is the Fate who cuts the thread of life: every candidate
 hypothesis enters the pipeline alive and leaves it with exactly one verdict —

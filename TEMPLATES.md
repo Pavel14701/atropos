@@ -1,4 +1,4 @@
-# TEMPLATES.md — the 5 Atropos templates (the hypothesis-killing system)
+# TEMPLATES.md — the 5 Atropos templates (the falsification toolkit)
 
 Five copyable templates: a prereg before the data, a diagnostic screen
 without gates, a robustness battery, a post-mortem after death, a

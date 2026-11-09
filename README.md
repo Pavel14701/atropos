@@ -1,37 +1,47 @@
 # Atropos
 
-Atropos is a hypothesis-killing framework for quantitative research: a
-portable, falsification-first toolkit you run against your own
-hypotheses — preregister, run the kill chain, read the verdict. A
-candidate signal enters a 7-stage adversarial pipeline — null controls,
-specification curve, robustness battery, walk-forward, Monte Carlo risk,
-predictive evaluation, cross-sectional tests — and leaves with exactly
-one verdict. The goal is not to confirm your idea but to kill it
-cheaply: thresholds are frozen in a preregistration before the data is
-touched, and every verdict is written down. Verdicts: `SURVIVES`,
-`SURVIVES_WITH_WARNINGS`, `REPACKAGING`, `ARTIFACT`, `DEAD`,
-`ROBUSTNESS_DEATH`, `PLACEBO_VIOLATION`, `OVERFIT_DEATH`,
-`NO_OOS_EDGE`, `COST_DEATH`, `DEGENERATE_FEED`, `CONSTANT_PREDICTIONS`,
-`RISK`, `CS_NO_EDGE`; every report also carries `verdict_class`
-(DEAD / NEEDS_ANALYSIS / INCONCLUSIVE / SURVIVES), `informative`,
-`interpretation`, `next_step`; stages report
-`PASS`/`WARN`/`FAIL`/`SKIPPED`/`INCONCLUSIVE`. Survival is not the end:
-`atropos.track_record.live_verdict` judges live PnL against the prereg.
+**Atropos — falsification toolkit for trading hypotheses: backtest kill
+protocol, feature decomposition, paper parity, with machine-checkable
+instrument routing.**
 
-When a signal survives the kill-protocol, the next question is whether
-it is *tradeable*. Atropos ships a reference backtest pipeline for that
-— simulate → rank → admission → metrics (`atropos.backtesting`,
-`atropos.ranking`, `atropos.backtest_metrics`): replay candidates
-through a taker cost model with stop-first pessimism, rank them within
-groups with a past-only oracle, replay slot admission
-(FCFS vs REPLACE), and read per-trade metrics
-(`per_trade_sharpe`, `pooled_stats`). `atropos.portfolio` extends the
-same discipline to concurrent positions: multi-slot replay with
-correlation-aware admission and portfolio-level gates (deflated
-Sharpe, drawdown floor, same-side concentration) on the daily EV
-stream. The kill-protocol is the product;
-the backtest pipeline is its reference companion, not the other way
-around — see `POSITIONING.md`.
+Three tiers, one doctrine — a hypothesis is guilty until it survives
+every attack:
+
+- **Backtest kill protocol** (`atropos.ensemble_pipeline.run_full_pipeline`):
+  a candidate signal enters a 7-stage adversarial pipeline — null
+  controls, specification curve, robustness battery, walk-forward,
+  Monte Carlo risk, predictive evaluation, cross-sectional tests — and
+  leaves with exactly one verdict. Thresholds are frozen in a
+  preregistration before the data is touched; the kill protocol is the
+  core of the backtest tier, and survival is not the end:
+  `atropos.track_record.live_verdict` judges live PnL against the
+  prereg. For the rare survivor, the reference backtest pipeline
+  (`atropos.backtesting`, `atropos.ranking`, `atropos.backtest_metrics`)
+  and the portfolio layer (`atropos.portfolio`) ask the next questions —
+  tradeable at all, and does the book hold up with concurrent positions.
+  The authoritative verdict list lives in
+  `atropos/ensemble_pipeline.py`'s module docstring — docs must not
+  re-enumerate it; every report also carries `verdict_class`
+  (DEAD / NEEDS_ANALYSIS / INCONCLUSIVE / SURVIVES), `informative`,
+  `interpretation`, `next_step`.
+- **Feature decomposition** (`atropos.orthogonal.orthogonal_check`,
+  orchestrated by `atropos.feature_scan.feature_analysis`): does the
+  candidate carry information beyond known controls — decomposition
+  orthogonal to the kill chain, not a stage of it.
+- **Paper parity** (`atropos.paper_protocol.run_paper_protocol`): the
+  forward test of the IMPLEMENTATION — does paper execution match the
+  frozen spec? A `PARITY_FAIL` indicts the paper engine or its feed,
+  never the hypothesis.
+
+## Instrument routing
+
+A strategy family dictates which instruments — battery tools and
+pipeline stages — may judge it. Strategy families map to batteries in
+`atropos/instrument_map.py`; the family is declared in the prereg/config
+as `strategy_family`, and the mapping is machine-checkable: enforced in
+the pipeline when declared (a forbidden tool or stage raises), flagged
+in audit mode otherwise. See skill 19
+(`atropos agent-context --skill=19-instrument-routing`).
 
 ## Install
 
@@ -145,24 +155,33 @@ random, deterministic seed).
 
 ## Read next
 
-1. `POSITIONING.md` — what Atropos does, what it does not, how the
-   kill-protocol and the backtest pipeline relate.
-2. `docs/how-to/` — step-by-step guides, including the ML kill
+1. `POSITIONING.md` — what Atropos is, what it is not, why
+   "falsification toolkit" and not "compiler".
+2. `docs/methodology.md` — the method → single-home table: every
+   statistical claim the docs make lives in exactly one function.
+3. `docs/how-to/` — step-by-step guides, including the ML kill
    protocol (`run_ml_kill_protocol`), the backtest pipeline
    (how-to 06-08) and the portfolio layer (how-to 09).
-3. `GLOSSARY.md` — prereg, kill criteria, COD, graveyard, the backtest
+4. `GLOSSARY.md` — prereg, kill criteria, COD, graveyard, the backtest
    pipeline's vocabulary.
-4. `FRAMEWORK.md` §1-3 — philosophy, pipeline, six laws.
-5. `docs/calibration.md` — how the portfolio kill gates are calibrated
+5. `FRAMEWORK.md` §1-3 — philosophy, pipeline, six laws.
+6. `docs/calibration.md` — how the portfolio kill gates are calibrated
    on public data, and the blind-run protocol for private systems.
 
 Committed demo transcripts (what the demos actually print) live in
 `docs/examples/`.
 
+A note on STRATEGY_MAP: the shipped `atropos/instrument_map.py` registry
+covers the shipped families; a deployed system carries its own map —
+declare its family in the prereg/config (`strategy_family`) and route
+against its own registry.
+
 ## For AI agents
 
 `atropos agent-setup` installs the agent context (AGENTS.md + skills);
 `atropos agent-context` prints it; `atropos agent-doctor` verifies it.
+Skills 19-21 cover instrument routing, paper parity and units — see
+`atropos agent-context --list-skills`.
 
 ## Contributing
 

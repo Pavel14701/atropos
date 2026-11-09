@@ -736,202 +736,203 @@ through argparse (exit code 2); command failures return non-zero from
 </span><span id="L-650"><a href="#L-650"><span class="linenos">650</span></a><span class="w">    </span><span class="sd">"""Build the argparse tree for the five CLI subcommands."""</span>
 </span><span id="L-651"><a href="#L-651"><span class="linenos">651</span></a>    <span class="n">parser</span> <span class="o">=</span> <span class="n">argparse</span><span class="o">.</span><span class="n">ArgumentParser</span><span class="p">(</span>
 </span><span id="L-652"><a href="#L-652"><span class="linenos">652</span></a>        <span class="n">prog</span><span class="o">=</span><span class="n">PROG</span><span class="p">,</span>
-</span><span id="L-653"><a href="#L-653"><span class="linenos">653</span></a>        <span class="n">description</span><span class="o">=</span><span class="p">(</span>
-</span><span id="L-654"><a href="#L-654"><span class="linenos">654</span></a>            <span class="s2">"Atropos hypothesis-killing framework: agent context tools."</span>
-</span><span id="L-655"><a href="#L-655"><span class="linenos">655</span></a>        <span class="p">),</span>
-</span><span id="L-656"><a href="#L-656"><span class="linenos">656</span></a>    <span class="p">)</span>
-</span><span id="L-657"><a href="#L-657"><span class="linenos">657</span></a>    <span class="n">subparsers</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">add_subparsers</span><span class="p">(</span><span class="n">dest</span><span class="o">=</span><span class="s2">"command"</span><span class="p">,</span> <span class="n">required</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</span><span id="L-658"><a href="#L-658"><span class="linenos">658</span></a>
-</span><span id="L-659"><a href="#L-659"><span class="linenos">659</span></a>    <span class="n">context_parser</span> <span class="o">=</span> <span class="n">subparsers</span><span class="o">.</span><span class="n">add_parser</span><span class="p">(</span>
-</span><span id="L-660"><a href="#L-660"><span class="linenos">660</span></a>        <span class="s2">"agent-context"</span><span class="p">,</span>
-</span><span id="L-661"><a href="#L-661"><span class="linenos">661</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"print the resolved agent context (files and skills)"</span><span class="p">,</span>
-</span><span id="L-662"><a href="#L-662"><span class="linenos">662</span></a>    <span class="p">)</span>
-</span><span id="L-663"><a href="#L-663"><span class="linenos">663</span></a>    <span class="n">context_group</span> <span class="o">=</span> <span class="n">context_parser</span><span class="o">.</span><span class="n">add_mutually_exclusive_group</span><span class="p">()</span>
-</span><span id="L-664"><a href="#L-664"><span class="linenos">664</span></a>    <span class="n">context_group</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
-</span><span id="L-665"><a href="#L-665"><span class="linenos">665</span></a>        <span class="s2">"--content"</span><span class="p">,</span>
-</span><span id="L-666"><a href="#L-666"><span class="linenos">666</span></a>        <span class="n">action</span><span class="o">=</span><span class="s2">"store_true"</span><span class="p">,</span>
-</span><span id="L-667"><a href="#L-667"><span class="linenos">667</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"resolved AGENTS.md + CLAUDE.md text (default)"</span><span class="p">,</span>
-</span><span id="L-668"><a href="#L-668"><span class="linenos">668</span></a>    <span class="p">)</span>
-</span><span id="L-669"><a href="#L-669"><span class="linenos">669</span></a>    <span class="n">context_group</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
-</span><span id="L-670"><a href="#L-670"><span class="linenos">670</span></a>        <span class="s2">"--path"</span><span class="p">,</span>
-</span><span id="L-671"><a href="#L-671"><span class="linenos">671</span></a>        <span class="n">action</span><span class="o">=</span><span class="s2">"store_true"</span><span class="p">,</span>
-</span><span id="L-672"><a href="#L-672"><span class="linenos">672</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"contributing file path(s) per context file"</span><span class="p">,</span>
-</span><span id="L-673"><a href="#L-673"><span class="linenos">673</span></a>    <span class="p">)</span>
-</span><span id="L-674"><a href="#L-674"><span class="linenos">674</span></a>    <span class="n">context_group</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
-</span><span id="L-675"><a href="#L-675"><span class="linenos">675</span></a>        <span class="s2">"--show-sources"</span><span class="p">,</span>
-</span><span id="L-676"><a href="#L-676"><span class="linenos">676</span></a>        <span class="n">action</span><span class="o">=</span><span class="s2">"store_true"</span><span class="p">,</span>
-</span><span id="L-677"><a href="#L-677"><span class="linenos">677</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"layer/file/skill source report with statuses"</span><span class="p">,</span>
-</span><span id="L-678"><a href="#L-678"><span class="linenos">678</span></a>    <span class="p">)</span>
-</span><span id="L-679"><a href="#L-679"><span class="linenos">679</span></a>    <span class="n">context_group</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
-</span><span id="L-680"><a href="#L-680"><span class="linenos">680</span></a>        <span class="s2">"--skill"</span><span class="p">,</span>
-</span><span id="L-681"><a href="#L-681"><span class="linenos">681</span></a>        <span class="n">metavar</span><span class="o">=</span><span class="s2">"NAME"</span><span class="p">,</span>
-</span><span id="L-682"><a href="#L-682"><span class="linenos">682</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"resolved text of one skill"</span><span class="p">,</span>
-</span><span id="L-683"><a href="#L-683"><span class="linenos">683</span></a>    <span class="p">)</span>
-</span><span id="L-684"><a href="#L-684"><span class="linenos">684</span></a>    <span class="n">context_group</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
-</span><span id="L-685"><a href="#L-685"><span class="linenos">685</span></a>        <span class="s2">"--skills-only"</span><span class="p">,</span>
-</span><span id="L-686"><a href="#L-686"><span class="linenos">686</span></a>        <span class="n">action</span><span class="o">=</span><span class="s2">"store_true"</span><span class="p">,</span>
-</span><span id="L-687"><a href="#L-687"><span class="linenos">687</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"resolved text of every active skill"</span><span class="p">,</span>
-</span><span id="L-688"><a href="#L-688"><span class="linenos">688</span></a>    <span class="p">)</span>
-</span><span id="L-689"><a href="#L-689"><span class="linenos">689</span></a>    <span class="n">context_group</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
-</span><span id="L-690"><a href="#L-690"><span class="linenos">690</span></a>        <span class="s2">"--list-skills"</span><span class="p">,</span>
-</span><span id="L-691"><a href="#L-691"><span class="linenos">691</span></a>        <span class="n">action</span><span class="o">=</span><span class="s2">"store_true"</span><span class="p">,</span>
-</span><span id="L-692"><a href="#L-692"><span class="linenos">692</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"active skill names, one per line"</span><span class="p">,</span>
-</span><span id="L-693"><a href="#L-693"><span class="linenos">693</span></a>    <span class="p">)</span>
-</span><span id="L-694"><a href="#L-694"><span class="linenos">694</span></a>
-</span><span id="L-695"><a href="#L-695"><span class="linenos">695</span></a>    <span class="n">setup_parser</span> <span class="o">=</span> <span class="n">subparsers</span><span class="o">.</span><span class="n">add_parser</span><span class="p">(</span>
-</span><span id="L-696"><a href="#L-696"><span class="linenos">696</span></a>        <span class="s2">"agent-setup"</span><span class="p">,</span>
-</span><span id="L-697"><a href="#L-697"><span class="linenos">697</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"scaffold a user/project override layer"</span><span class="p">,</span>
-</span><span id="L-698"><a href="#L-698"><span class="linenos">698</span></a>    <span class="p">)</span>
-</span><span id="L-699"><a href="#L-699"><span class="linenos">699</span></a>    <span class="n">setup_parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
-</span><span id="L-700"><a href="#L-700"><span class="linenos">700</span></a>        <span class="s2">"--scope"</span><span class="p">,</span>
-</span><span id="L-701"><a href="#L-701"><span class="linenos">701</span></a>        <span class="n">choices</span><span class="o">=</span><span class="p">[</span><span class="s2">"project"</span><span class="p">,</span> <span class="s2">"user"</span><span class="p">],</span>
-</span><span id="L-702"><a href="#L-702"><span class="linenos">702</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"which layer to write (asked interactively when omitted)"</span><span class="p">,</span>
-</span><span id="L-703"><a href="#L-703"><span class="linenos">703</span></a>    <span class="p">)</span>
-</span><span id="L-704"><a href="#L-704"><span class="linenos">704</span></a>    <span class="n">setup_parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
-</span><span id="L-705"><a href="#L-705"><span class="linenos">705</span></a>        <span class="s2">"--mode"</span><span class="p">,</span>
-</span><span id="L-706"><a href="#L-706"><span class="linenos">706</span></a>        <span class="n">choices</span><span class="o">=</span><span class="p">[</span><span class="s2">"default"</span><span class="p">,</span> <span class="s2">"append"</span><span class="p">,</span> <span class="s2">"replace"</span><span class="p">,</span> <span class="s2">"disable"</span><span class="p">],</span>
-</span><span id="L-707"><a href="#L-707"><span class="linenos">707</span></a>        <span class="n">default</span><span class="o">=</span><span class="s2">"default"</span><span class="p">,</span>
-</span><span id="L-708"><a href="#L-708"><span class="linenos">708</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"override stub for AGENTS.md/CLAUDE.md (default: none)"</span><span class="p">,</span>
-</span><span id="L-709"><a href="#L-709"><span class="linenos">709</span></a>    <span class="p">)</span>
-</span><span id="L-710"><a href="#L-710"><span class="linenos">710</span></a>    <span class="n">setup_parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
-</span><span id="L-711"><a href="#L-711"><span class="linenos">711</span></a>        <span class="s2">"--file"</span><span class="p">,</span>
-</span><span id="L-712"><a href="#L-712"><span class="linenos">712</span></a>        <span class="n">choices</span><span class="o">=</span><span class="p">[</span><span class="s2">"AGENTS.md"</span><span class="p">,</span> <span class="s2">"CLAUDE.md"</span><span class="p">],</span>
-</span><span id="L-713"><a href="#L-713"><span class="linenos">713</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"restrict the file stubs to one context file"</span><span class="p">,</span>
-</span><span id="L-714"><a href="#L-714"><span class="linenos">714</span></a>    <span class="p">)</span>
-</span><span id="L-715"><a href="#L-715"><span class="linenos">715</span></a>    <span class="n">setup_parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
-</span><span id="L-716"><a href="#L-716"><span class="linenos">716</span></a>        <span class="s2">"--skills"</span><span class="p">,</span>
-</span><span id="L-717"><a href="#L-717"><span class="linenos">717</span></a>        <span class="n">choices</span><span class="o">=</span><span class="p">[</span><span class="s2">"all"</span><span class="p">,</span> <span class="s2">"none"</span><span class="p">],</span>
-</span><span id="L-718"><a href="#L-718"><span class="linenos">718</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"all: keep defaults; none: write skills/.disabled-all"</span><span class="p">,</span>
-</span><span id="L-719"><a href="#L-719"><span class="linenos">719</span></a>    <span class="p">)</span>
-</span><span id="L-720"><a href="#L-720"><span class="linenos">720</span></a>    <span class="n">setup_parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
-</span><span id="L-721"><a href="#L-721"><span class="linenos">721</span></a>        <span class="s2">"--disable"</span><span class="p">,</span>
-</span><span id="L-722"><a href="#L-722"><span class="linenos">722</span></a>        <span class="n">metavar</span><span class="o">=</span><span class="s2">"NAME"</span><span class="p">,</span>
-</span><span id="L-723"><a href="#L-723"><span class="linenos">723</span></a>        <span class="n">action</span><span class="o">=</span><span class="s2">"append"</span><span class="p">,</span>
-</span><span id="L-724"><a href="#L-724"><span class="linenos">724</span></a>        <span class="n">default</span><span class="o">=</span><span class="p">[],</span>
-</span><span id="L-725"><a href="#L-725"><span class="linenos">725</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"add a skill name to skills/.disabled (repeatable)"</span><span class="p">,</span>
-</span><span id="L-726"><a href="#L-726"><span class="linenos">726</span></a>    <span class="p">)</span>
-</span><span id="L-727"><a href="#L-727"><span class="linenos">727</span></a>    <span class="n">setup_parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
-</span><span id="L-728"><a href="#L-728"><span class="linenos">728</span></a>        <span class="s2">"--dry-run"</span><span class="p">,</span>
-</span><span id="L-729"><a href="#L-729"><span class="linenos">729</span></a>        <span class="n">action</span><span class="o">=</span><span class="s2">"store_true"</span><span class="p">,</span>
-</span><span id="L-730"><a href="#L-730"><span class="linenos">730</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"print the plan without writing anything"</span><span class="p">,</span>
-</span><span id="L-731"><a href="#L-731"><span class="linenos">731</span></a>    <span class="p">)</span>
-</span><span id="L-732"><a href="#L-732"><span class="linenos">732</span></a>    <span class="n">setup_parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
-</span><span id="L-733"><a href="#L-733"><span class="linenos">733</span></a>        <span class="s2">"--yes"</span><span class="p">,</span>
-</span><span id="L-734"><a href="#L-734"><span class="linenos">734</span></a>        <span class="n">action</span><span class="o">=</span><span class="s2">"store_true"</span><span class="p">,</span>
-</span><span id="L-735"><a href="#L-735"><span class="linenos">735</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"apply the plan without asking"</span><span class="p">,</span>
-</span><span id="L-736"><a href="#L-736"><span class="linenos">736</span></a>    <span class="p">)</span>
-</span><span id="L-737"><a href="#L-737"><span class="linenos">737</span></a>
-</span><span id="L-738"><a href="#L-738"><span class="linenos">738</span></a>    <span class="n">subparsers</span><span class="o">.</span><span class="n">add_parser</span><span class="p">(</span>
-</span><span id="L-739"><a href="#L-739"><span class="linenos">739</span></a>        <span class="s2">"agent-doctor"</span><span class="p">,</span>
-</span><span id="L-740"><a href="#L-740"><span class="linenos">740</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"verify the agent context layers and overrides"</span><span class="p">,</span>
-</span><span id="L-741"><a href="#L-741"><span class="linenos">741</span></a>    <span class="p">)</span>
-</span><span id="L-742"><a href="#L-742"><span class="linenos">742</span></a>
-</span><span id="L-743"><a href="#L-743"><span class="linenos">743</span></a>    <span class="n">init_parser</span> <span class="o">=</span> <span class="n">subparsers</span><span class="o">.</span><span class="n">add_parser</span><span class="p">(</span>
-</span><span id="L-744"><a href="#L-744"><span class="linenos">744</span></a>        <span class="s2">"init"</span><span class="p">,</span>
-</span><span id="L-745"><a href="#L-745"><span class="linenos">745</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"create the hypothesis workspace skeleton (never overwrites)"</span><span class="p">,</span>
-</span><span id="L-746"><a href="#L-746"><span class="linenos">746</span></a>    <span class="p">)</span>
-</span><span id="L-747"><a href="#L-747"><span class="linenos">747</span></a>    <span class="n">init_parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
-</span><span id="L-748"><a href="#L-748"><span class="linenos">748</span></a>        <span class="s2">"--root"</span><span class="p">,</span>
-</span><span id="L-749"><a href="#L-749"><span class="linenos">749</span></a>        <span class="n">metavar</span><span class="o">=</span><span class="s2">"PATH"</span><span class="p">,</span>
-</span><span id="L-750"><a href="#L-750"><span class="linenos">750</span></a>        <span class="n">default</span><span class="o">=</span><span class="s2">"."</span><span class="p">,</span>
-</span><span id="L-751"><a href="#L-751"><span class="linenos">751</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"workspace root directory (default: current directory)"</span><span class="p">,</span>
-</span><span id="L-752"><a href="#L-752"><span class="linenos">752</span></a>    <span class="p">)</span>
-</span><span id="L-753"><a href="#L-753"><span class="linenos">753</span></a>    <span class="n">init_parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
-</span><span id="L-754"><a href="#L-754"><span class="linenos">754</span></a>        <span class="s2">"--dry-run"</span><span class="p">,</span>
-</span><span id="L-755"><a href="#L-755"><span class="linenos">755</span></a>        <span class="n">action</span><span class="o">=</span><span class="s2">"store_true"</span><span class="p">,</span>
-</span><span id="L-756"><a href="#L-756"><span class="linenos">756</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"print the plan without writing anything"</span><span class="p">,</span>
-</span><span id="L-757"><a href="#L-757"><span class="linenos">757</span></a>    <span class="p">)</span>
-</span><span id="L-758"><a href="#L-758"><span class="linenos">758</span></a>
-</span><span id="L-759"><a href="#L-759"><span class="linenos">759</span></a>    <span class="n">demo_parser</span> <span class="o">=</span> <span class="n">subparsers</span><span class="o">.</span><span class="n">add_parser</span><span class="p">(</span>
-</span><span id="L-760"><a href="#L-760"><span class="linenos">760</span></a>        <span class="s2">"demo"</span><span class="p">,</span>
-</span><span id="L-761"><a href="#L-761"><span class="linenos">761</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"run the packaged backtest demo end to end (synthetic)"</span><span class="p">,</span>
-</span><span id="L-762"><a href="#L-762"><span class="linenos">762</span></a>    <span class="p">)</span>
-</span><span id="L-763"><a href="#L-763"><span class="linenos">763</span></a>    <span class="n">demo_parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
-</span><span id="L-764"><a href="#L-764"><span class="linenos">764</span></a>        <span class="s2">"--mode"</span><span class="p">,</span>
-</span><span id="L-765"><a href="#L-765"><span class="linenos">765</span></a>        <span class="n">choices</span><span class="o">=</span><span class="p">[</span><span class="s2">"quick"</span><span class="p">,</span> <span class="s2">"full"</span><span class="p">],</span>
-</span><span id="L-766"><a href="#L-766"><span class="linenos">766</span></a>        <span class="n">default</span><span class="o">=</span><span class="s2">"quick"</span><span class="p">,</span>
-</span><span id="L-767"><a href="#L-767"><span class="linenos">767</span></a>        <span class="n">help</span><span class="o">=</span><span class="p">(</span>
-</span><span id="L-768"><a href="#L-768"><span class="linenos">768</span></a>            <span class="s2">"quick: reduced model budget, seconds (default); "</span>
-</span><span id="L-769"><a href="#L-769"><span class="linenos">769</span></a>            <span class="s2">"full: the docs transcript budget, about a minute"</span>
-</span><span id="L-770"><a href="#L-770"><span class="linenos">770</span></a>        <span class="p">),</span>
-</span><span id="L-771"><a href="#L-771"><span class="linenos">771</span></a>    <span class="p">)</span>
-</span><span id="L-772"><a href="#L-772"><span class="linenos">772</span></a>    <span class="n">demo_parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
-</span><span id="L-773"><a href="#L-773"><span class="linenos">773</span></a>        <span class="s2">"--seed"</span><span class="p">,</span>
-</span><span id="L-774"><a href="#L-774"><span class="linenos">774</span></a>        <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span>
-</span><span id="L-775"><a href="#L-775"><span class="linenos">775</span></a>        <span class="n">default</span><span class="o">=</span><span class="mi">41</span><span class="p">,</span>
-</span><span id="L-776"><a href="#L-776"><span class="linenos">776</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"RNG seed of the synthetic OHLC world (default: 41)"</span><span class="p">,</span>
-</span><span id="L-777"><a href="#L-777"><span class="linenos">777</span></a>    <span class="p">)</span>
-</span><span id="L-778"><a href="#L-778"><span class="linenos">778</span></a>    <span class="k">return</span> <span class="n">parser</span>
-</span><span id="L-779"><a href="#L-779"><span class="linenos">779</span></a>
-</span><span id="L-780"><a href="#L-780"><span class="linenos">780</span></a>
-</span><span id="L-781"><a href="#L-781"><span class="linenos">781</span></a><span class="k">def</span><span class="w"> </span><span class="nf">_force_utf8_stdout</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="L-782"><a href="#L-782"><span class="linenos">782</span></a><span class="w">    </span><span class="sd">"""Best-effort UTF-8 stdout (cp1251 consoles mangle skill text).</span>
-</span><span id="L-783"><a href="#L-783"><span class="linenos">783</span></a>
-</span><span id="L-784"><a href="#L-784"><span class="linenos">784</span></a><span class="sd">    ``--skill`` prints Cyrillic text with arrows/sigmas; on a Windows</span>
-</span><span id="L-785"><a href="#L-785"><span class="linenos">785</span></a><span class="sd">    cp1251/cp866 console the strict stream encoding raises</span>
-</span><span id="L-786"><a href="#L-786"><span class="linenos">786</span></a><span class="sd">    ``UnicodeEncodeError`` mid-print.  Best effort only: exotic or</span>
-</span><span id="L-787"><a href="#L-787"><span class="linenos">787</span></a><span class="sd">    already-safe streams keep their configuration.</span>
-</span><span id="L-788"><a href="#L-788"><span class="linenos">788</span></a><span class="sd">    """</span>
-</span><span id="L-789"><a href="#L-789"><span class="linenos">789</span></a>    <span class="n">reconfigure</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">sys</span><span class="o">.</span><span class="n">stdout</span><span class="p">,</span> <span class="s2">"reconfigure"</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
-</span><span id="L-790"><a href="#L-790"><span class="linenos">790</span></a>    <span class="k">if</span> <span class="nb">callable</span><span class="p">(</span><span class="n">reconfigure</span><span class="p">):</span>
-</span><span id="L-791"><a href="#L-791"><span class="linenos">791</span></a>        <span class="k">with</span> <span class="n">contextlib</span><span class="o">.</span><span class="n">suppress</span><span class="p">(</span><span class="ne">AttributeError</span><span class="p">,</span> <span class="ne">OSError</span><span class="p">,</span> <span class="ne">ValueError</span><span class="p">):</span>
-</span><span id="L-792"><a href="#L-792"><span class="linenos">792</span></a>            <span class="n">reconfigure</span><span class="p">(</span><span class="n">encoding</span><span class="o">=</span><span class="s2">"utf-8"</span><span class="p">,</span> <span class="n">errors</span><span class="o">=</span><span class="s2">"replace"</span><span class="p">)</span>
-</span><span id="L-793"><a href="#L-793"><span class="linenos">793</span></a>
-</span><span id="L-794"><a href="#L-794"><span class="linenos">794</span></a>
-</span><span id="L-795"><a href="#L-795"><span class="linenos">795</span></a><span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">(</span>
-</span><span id="L-796"><a href="#L-796"><span class="linenos">796</span></a>    <span class="n">argv</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="L-797"><a href="#L-797"><span class="linenos">797</span></a>    <span class="o">*</span><span class="p">,</span>
-</span><span id="L-798"><a href="#L-798"><span class="linenos">798</span></a>    <span class="n">user_dir</span><span class="p">:</span> <span class="n">Path</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="L-799"><a href="#L-799"><span class="linenos">799</span></a>    <span class="n">project_dir</span><span class="p">:</span> <span class="n">Path</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="L-800"><a href="#L-800"><span class="linenos">800</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
-</span><span id="L-801"><a href="#L-801"><span class="linenos">801</span></a><span class="w">    </span><span class="sd">"""CLI entry point; returns the process exit code.</span>
-</span><span id="L-802"><a href="#L-802"><span class="linenos">802</span></a>
-</span><span id="L-803"><a href="#L-803"><span class="linenos">803</span></a><span class="sd">    ``argv`` defaults to ``sys.argv[1:]``; ``user_dir`` / ``project_dir``</span>
-</span><span id="L-804"><a href="#L-804"><span class="linenos">804</span></a><span class="sd">    pin the override layers (``None`` = platform defaults) so tests and</span>
-</span><span id="L-805"><a href="#L-805"><span class="linenos">805</span></a><span class="sd">    embedding code stay deterministic.  Before dispatch, stdout is</span>
-</span><span id="L-806"><a href="#L-806"><span class="linenos">806</span></a><span class="sd">    reconfigured to UTF-8 best-effort (cp1251 consoles would otherwise</span>
-</span><span id="L-807"><a href="#L-807"><span class="linenos">807</span></a><span class="sd">    crash on non-ASCII skill text).</span>
+</span><span id="L-653"><a href="#L-653"><span class="linenos">653</span></a>        <span class="n">description</span><span class="o">=</span><span class="p">(</span><span class="s2">"Atropos falsification toolkit: agent context tools."</span><span class="p">),</span>
+</span><span id="L-654"><a href="#L-654"><span class="linenos">654</span></a>    <span class="p">)</span>
+</span><span id="L-655"><a href="#L-655"><span class="linenos">655</span></a>    <span class="n">subparsers</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">add_subparsers</span><span class="p">(</span><span class="n">dest</span><span class="o">=</span><span class="s2">"command"</span><span class="p">,</span> <span class="n">required</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="L-656"><a href="#L-656"><span class="linenos">656</span></a>
+</span><span id="L-657"><a href="#L-657"><span class="linenos">657</span></a>    <span class="n">context_parser</span> <span class="o">=</span> <span class="n">subparsers</span><span class="o">.</span><span class="n">add_parser</span><span class="p">(</span>
+</span><span id="L-658"><a href="#L-658"><span class="linenos">658</span></a>        <span class="s2">"agent-context"</span><span class="p">,</span>
+</span><span id="L-659"><a href="#L-659"><span class="linenos">659</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"print the resolved agent context (files and skills)"</span><span class="p">,</span>
+</span><span id="L-660"><a href="#L-660"><span class="linenos">660</span></a>    <span class="p">)</span>
+</span><span id="L-661"><a href="#L-661"><span class="linenos">661</span></a>    <span class="n">context_group</span> <span class="o">=</span> <span class="n">context_parser</span><span class="o">.</span><span class="n">add_mutually_exclusive_group</span><span class="p">()</span>
+</span><span id="L-662"><a href="#L-662"><span class="linenos">662</span></a>    <span class="n">context_group</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+</span><span id="L-663"><a href="#L-663"><span class="linenos">663</span></a>        <span class="s2">"--content"</span><span class="p">,</span>
+</span><span id="L-664"><a href="#L-664"><span class="linenos">664</span></a>        <span class="n">action</span><span class="o">=</span><span class="s2">"store_true"</span><span class="p">,</span>
+</span><span id="L-665"><a href="#L-665"><span class="linenos">665</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"resolved AGENTS.md + CLAUDE.md text (default)"</span><span class="p">,</span>
+</span><span id="L-666"><a href="#L-666"><span class="linenos">666</span></a>    <span class="p">)</span>
+</span><span id="L-667"><a href="#L-667"><span class="linenos">667</span></a>    <span class="n">context_group</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+</span><span id="L-668"><a href="#L-668"><span class="linenos">668</span></a>        <span class="s2">"--path"</span><span class="p">,</span>
+</span><span id="L-669"><a href="#L-669"><span class="linenos">669</span></a>        <span class="n">action</span><span class="o">=</span><span class="s2">"store_true"</span><span class="p">,</span>
+</span><span id="L-670"><a href="#L-670"><span class="linenos">670</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"contributing file path(s) per context file"</span><span class="p">,</span>
+</span><span id="L-671"><a href="#L-671"><span class="linenos">671</span></a>    <span class="p">)</span>
+</span><span id="L-672"><a href="#L-672"><span class="linenos">672</span></a>    <span class="n">context_group</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+</span><span id="L-673"><a href="#L-673"><span class="linenos">673</span></a>        <span class="s2">"--show-sources"</span><span class="p">,</span>
+</span><span id="L-674"><a href="#L-674"><span class="linenos">674</span></a>        <span class="n">action</span><span class="o">=</span><span class="s2">"store_true"</span><span class="p">,</span>
+</span><span id="L-675"><a href="#L-675"><span class="linenos">675</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"layer/file/skill source report with statuses"</span><span class="p">,</span>
+</span><span id="L-676"><a href="#L-676"><span class="linenos">676</span></a>    <span class="p">)</span>
+</span><span id="L-677"><a href="#L-677"><span class="linenos">677</span></a>    <span class="n">context_group</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+</span><span id="L-678"><a href="#L-678"><span class="linenos">678</span></a>        <span class="s2">"--skill"</span><span class="p">,</span>
+</span><span id="L-679"><a href="#L-679"><span class="linenos">679</span></a>        <span class="n">metavar</span><span class="o">=</span><span class="s2">"NAME"</span><span class="p">,</span>
+</span><span id="L-680"><a href="#L-680"><span class="linenos">680</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"resolved text of one skill"</span><span class="p">,</span>
+</span><span id="L-681"><a href="#L-681"><span class="linenos">681</span></a>    <span class="p">)</span>
+</span><span id="L-682"><a href="#L-682"><span class="linenos">682</span></a>    <span class="n">context_group</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+</span><span id="L-683"><a href="#L-683"><span class="linenos">683</span></a>        <span class="s2">"--skills-only"</span><span class="p">,</span>
+</span><span id="L-684"><a href="#L-684"><span class="linenos">684</span></a>        <span class="n">action</span><span class="o">=</span><span class="s2">"store_true"</span><span class="p">,</span>
+</span><span id="L-685"><a href="#L-685"><span class="linenos">685</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"resolved text of every active skill"</span><span class="p">,</span>
+</span><span id="L-686"><a href="#L-686"><span class="linenos">686</span></a>    <span class="p">)</span>
+</span><span id="L-687"><a href="#L-687"><span class="linenos">687</span></a>    <span class="n">context_group</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+</span><span id="L-688"><a href="#L-688"><span class="linenos">688</span></a>        <span class="s2">"--list-skills"</span><span class="p">,</span>
+</span><span id="L-689"><a href="#L-689"><span class="linenos">689</span></a>        <span class="n">action</span><span class="o">=</span><span class="s2">"store_true"</span><span class="p">,</span>
+</span><span id="L-690"><a href="#L-690"><span class="linenos">690</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"active skill names, one per line"</span><span class="p">,</span>
+</span><span id="L-691"><a href="#L-691"><span class="linenos">691</span></a>    <span class="p">)</span>
+</span><span id="L-692"><a href="#L-692"><span class="linenos">692</span></a>
+</span><span id="L-693"><a href="#L-693"><span class="linenos">693</span></a>    <span class="n">setup_parser</span> <span class="o">=</span> <span class="n">subparsers</span><span class="o">.</span><span class="n">add_parser</span><span class="p">(</span>
+</span><span id="L-694"><a href="#L-694"><span class="linenos">694</span></a>        <span class="s2">"agent-setup"</span><span class="p">,</span>
+</span><span id="L-695"><a href="#L-695"><span class="linenos">695</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"scaffold a user/project override layer"</span><span class="p">,</span>
+</span><span id="L-696"><a href="#L-696"><span class="linenos">696</span></a>    <span class="p">)</span>
+</span><span id="L-697"><a href="#L-697"><span class="linenos">697</span></a>    <span class="n">setup_parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+</span><span id="L-698"><a href="#L-698"><span class="linenos">698</span></a>        <span class="s2">"--scope"</span><span class="p">,</span>
+</span><span id="L-699"><a href="#L-699"><span class="linenos">699</span></a>        <span class="n">choices</span><span class="o">=</span><span class="p">[</span><span class="s2">"project"</span><span class="p">,</span> <span class="s2">"user"</span><span class="p">],</span>
+</span><span id="L-700"><a href="#L-700"><span class="linenos">700</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"which layer to write (asked interactively when omitted)"</span><span class="p">,</span>
+</span><span id="L-701"><a href="#L-701"><span class="linenos">701</span></a>    <span class="p">)</span>
+</span><span id="L-702"><a href="#L-702"><span class="linenos">702</span></a>    <span class="n">setup_parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+</span><span id="L-703"><a href="#L-703"><span class="linenos">703</span></a>        <span class="s2">"--mode"</span><span class="p">,</span>
+</span><span id="L-704"><a href="#L-704"><span class="linenos">704</span></a>        <span class="n">choices</span><span class="o">=</span><span class="p">[</span><span class="s2">"default"</span><span class="p">,</span> <span class="s2">"append"</span><span class="p">,</span> <span class="s2">"replace"</span><span class="p">,</span> <span class="s2">"disable"</span><span class="p">],</span>
+</span><span id="L-705"><a href="#L-705"><span class="linenos">705</span></a>        <span class="n">default</span><span class="o">=</span><span class="s2">"default"</span><span class="p">,</span>
+</span><span id="L-706"><a href="#L-706"><span class="linenos">706</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"override stub for AGENTS.md/CLAUDE.md (default: none)"</span><span class="p">,</span>
+</span><span id="L-707"><a href="#L-707"><span class="linenos">707</span></a>    <span class="p">)</span>
+</span><span id="L-708"><a href="#L-708"><span class="linenos">708</span></a>    <span class="n">setup_parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+</span><span id="L-709"><a href="#L-709"><span class="linenos">709</span></a>        <span class="s2">"--file"</span><span class="p">,</span>
+</span><span id="L-710"><a href="#L-710"><span class="linenos">710</span></a>        <span class="n">choices</span><span class="o">=</span><span class="p">[</span><span class="s2">"AGENTS.md"</span><span class="p">,</span> <span class="s2">"CLAUDE.md"</span><span class="p">],</span>
+</span><span id="L-711"><a href="#L-711"><span class="linenos">711</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"restrict the file stubs to one context file"</span><span class="p">,</span>
+</span><span id="L-712"><a href="#L-712"><span class="linenos">712</span></a>    <span class="p">)</span>
+</span><span id="L-713"><a href="#L-713"><span class="linenos">713</span></a>    <span class="n">setup_parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+</span><span id="L-714"><a href="#L-714"><span class="linenos">714</span></a>        <span class="s2">"--skills"</span><span class="p">,</span>
+</span><span id="L-715"><a href="#L-715"><span class="linenos">715</span></a>        <span class="n">choices</span><span class="o">=</span><span class="p">[</span><span class="s2">"all"</span><span class="p">,</span> <span class="s2">"none"</span><span class="p">],</span>
+</span><span id="L-716"><a href="#L-716"><span class="linenos">716</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"all: keep defaults; none: write skills/.disabled-all"</span><span class="p">,</span>
+</span><span id="L-717"><a href="#L-717"><span class="linenos">717</span></a>    <span class="p">)</span>
+</span><span id="L-718"><a href="#L-718"><span class="linenos">718</span></a>    <span class="n">setup_parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+</span><span id="L-719"><a href="#L-719"><span class="linenos">719</span></a>        <span class="s2">"--disable"</span><span class="p">,</span>
+</span><span id="L-720"><a href="#L-720"><span class="linenos">720</span></a>        <span class="n">metavar</span><span class="o">=</span><span class="s2">"NAME"</span><span class="p">,</span>
+</span><span id="L-721"><a href="#L-721"><span class="linenos">721</span></a>        <span class="n">action</span><span class="o">=</span><span class="s2">"append"</span><span class="p">,</span>
+</span><span id="L-722"><a href="#L-722"><span class="linenos">722</span></a>        <span class="n">default</span><span class="o">=</span><span class="p">[],</span>
+</span><span id="L-723"><a href="#L-723"><span class="linenos">723</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"add a skill name to skills/.disabled (repeatable)"</span><span class="p">,</span>
+</span><span id="L-724"><a href="#L-724"><span class="linenos">724</span></a>    <span class="p">)</span>
+</span><span id="L-725"><a href="#L-725"><span class="linenos">725</span></a>    <span class="n">setup_parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+</span><span id="L-726"><a href="#L-726"><span class="linenos">726</span></a>        <span class="s2">"--dry-run"</span><span class="p">,</span>
+</span><span id="L-727"><a href="#L-727"><span class="linenos">727</span></a>        <span class="n">action</span><span class="o">=</span><span class="s2">"store_true"</span><span class="p">,</span>
+</span><span id="L-728"><a href="#L-728"><span class="linenos">728</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"print the plan without writing anything"</span><span class="p">,</span>
+</span><span id="L-729"><a href="#L-729"><span class="linenos">729</span></a>    <span class="p">)</span>
+</span><span id="L-730"><a href="#L-730"><span class="linenos">730</span></a>    <span class="n">setup_parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+</span><span id="L-731"><a href="#L-731"><span class="linenos">731</span></a>        <span class="s2">"--yes"</span><span class="p">,</span>
+</span><span id="L-732"><a href="#L-732"><span class="linenos">732</span></a>        <span class="n">action</span><span class="o">=</span><span class="s2">"store_true"</span><span class="p">,</span>
+</span><span id="L-733"><a href="#L-733"><span class="linenos">733</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"apply the plan without asking"</span><span class="p">,</span>
+</span><span id="L-734"><a href="#L-734"><span class="linenos">734</span></a>    <span class="p">)</span>
+</span><span id="L-735"><a href="#L-735"><span class="linenos">735</span></a>
+</span><span id="L-736"><a href="#L-736"><span class="linenos">736</span></a>    <span class="n">subparsers</span><span class="o">.</span><span class="n">add_parser</span><span class="p">(</span>
+</span><span id="L-737"><a href="#L-737"><span class="linenos">737</span></a>        <span class="s2">"agent-doctor"</span><span class="p">,</span>
+</span><span id="L-738"><a href="#L-738"><span class="linenos">738</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"verify the agent context layers and overrides"</span><span class="p">,</span>
+</span><span id="L-739"><a href="#L-739"><span class="linenos">739</span></a>    <span class="p">)</span>
+</span><span id="L-740"><a href="#L-740"><span class="linenos">740</span></a>
+</span><span id="L-741"><a href="#L-741"><span class="linenos">741</span></a>    <span class="n">init_parser</span> <span class="o">=</span> <span class="n">subparsers</span><span class="o">.</span><span class="n">add_parser</span><span class="p">(</span>
+</span><span id="L-742"><a href="#L-742"><span class="linenos">742</span></a>        <span class="s2">"init"</span><span class="p">,</span>
+</span><span id="L-743"><a href="#L-743"><span class="linenos">743</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"create the hypothesis workspace skeleton (never overwrites)"</span><span class="p">,</span>
+</span><span id="L-744"><a href="#L-744"><span class="linenos">744</span></a>    <span class="p">)</span>
+</span><span id="L-745"><a href="#L-745"><span class="linenos">745</span></a>    <span class="n">init_parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+</span><span id="L-746"><a href="#L-746"><span class="linenos">746</span></a>        <span class="s2">"--root"</span><span class="p">,</span>
+</span><span id="L-747"><a href="#L-747"><span class="linenos">747</span></a>        <span class="n">metavar</span><span class="o">=</span><span class="s2">"PATH"</span><span class="p">,</span>
+</span><span id="L-748"><a href="#L-748"><span class="linenos">748</span></a>        <span class="n">default</span><span class="o">=</span><span class="s2">"."</span><span class="p">,</span>
+</span><span id="L-749"><a href="#L-749"><span class="linenos">749</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"workspace root directory (default: current directory)"</span><span class="p">,</span>
+</span><span id="L-750"><a href="#L-750"><span class="linenos">750</span></a>    <span class="p">)</span>
+</span><span id="L-751"><a href="#L-751"><span class="linenos">751</span></a>    <span class="n">init_parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+</span><span id="L-752"><a href="#L-752"><span class="linenos">752</span></a>        <span class="s2">"--dry-run"</span><span class="p">,</span>
+</span><span id="L-753"><a href="#L-753"><span class="linenos">753</span></a>        <span class="n">action</span><span class="o">=</span><span class="s2">"store_true"</span><span class="p">,</span>
+</span><span id="L-754"><a href="#L-754"><span class="linenos">754</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"print the plan without writing anything"</span><span class="p">,</span>
+</span><span id="L-755"><a href="#L-755"><span class="linenos">755</span></a>    <span class="p">)</span>
+</span><span id="L-756"><a href="#L-756"><span class="linenos">756</span></a>
+</span><span id="L-757"><a href="#L-757"><span class="linenos">757</span></a>    <span class="n">demo_parser</span> <span class="o">=</span> <span class="n">subparsers</span><span class="o">.</span><span class="n">add_parser</span><span class="p">(</span>
+</span><span id="L-758"><a href="#L-758"><span class="linenos">758</span></a>        <span class="s2">"demo"</span><span class="p">,</span>
+</span><span id="L-759"><a href="#L-759"><span class="linenos">759</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"run the packaged backtest demo end to end (synthetic)"</span><span class="p">,</span>
+</span><span id="L-760"><a href="#L-760"><span class="linenos">760</span></a>    <span class="p">)</span>
+</span><span id="L-761"><a href="#L-761"><span class="linenos">761</span></a>    <span class="n">demo_parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+</span><span id="L-762"><a href="#L-762"><span class="linenos">762</span></a>        <span class="s2">"--mode"</span><span class="p">,</span>
+</span><span id="L-763"><a href="#L-763"><span class="linenos">763</span></a>        <span class="n">choices</span><span class="o">=</span><span class="p">[</span><span class="s2">"quick"</span><span class="p">,</span> <span class="s2">"full"</span><span class="p">],</span>
+</span><span id="L-764"><a href="#L-764"><span class="linenos">764</span></a>        <span class="n">default</span><span class="o">=</span><span class="s2">"quick"</span><span class="p">,</span>
+</span><span id="L-765"><a href="#L-765"><span class="linenos">765</span></a>        <span class="n">help</span><span class="o">=</span><span class="p">(</span>
+</span><span id="L-766"><a href="#L-766"><span class="linenos">766</span></a>            <span class="s2">"quick: reduced model budget, seconds (default); "</span>
+</span><span id="L-767"><a href="#L-767"><span class="linenos">767</span></a>            <span class="s2">"full: the docs transcript budget, about a minute"</span>
+</span><span id="L-768"><a href="#L-768"><span class="linenos">768</span></a>        <span class="p">),</span>
+</span><span id="L-769"><a href="#L-769"><span class="linenos">769</span></a>    <span class="p">)</span>
+</span><span id="L-770"><a href="#L-770"><span class="linenos">770</span></a>    <span class="n">demo_parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+</span><span id="L-771"><a href="#L-771"><span class="linenos">771</span></a>        <span class="s2">"--seed"</span><span class="p">,</span>
+</span><span id="L-772"><a href="#L-772"><span class="linenos">772</span></a>        <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span>
+</span><span id="L-773"><a href="#L-773"><span class="linenos">773</span></a>        <span class="n">default</span><span class="o">=</span><span class="mi">41</span><span class="p">,</span>
+</span><span id="L-774"><a href="#L-774"><span class="linenos">774</span></a>        <span class="n">help</span><span class="o">=</span><span class="s2">"RNG seed of the synthetic OHLC world (default: 41)"</span><span class="p">,</span>
+</span><span id="L-775"><a href="#L-775"><span class="linenos">775</span></a>    <span class="p">)</span>
+</span><span id="L-776"><a href="#L-776"><span class="linenos">776</span></a>    <span class="k">return</span> <span class="n">parser</span>
+</span><span id="L-777"><a href="#L-777"><span class="linenos">777</span></a>
+</span><span id="L-778"><a href="#L-778"><span class="linenos">778</span></a>
+</span><span id="L-779"><a href="#L-779"><span class="linenos">779</span></a><span class="k">def</span><span class="w"> </span><span class="nf">_force_utf8_stdout</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="L-780"><a href="#L-780"><span class="linenos">780</span></a><span class="w">    </span><span class="sd">"""Best-effort UTF-8 stdout (cp1251 consoles mangle skill text).</span>
+</span><span id="L-781"><a href="#L-781"><span class="linenos">781</span></a>
+</span><span id="L-782"><a href="#L-782"><span class="linenos">782</span></a><span class="sd">    ``--skill`` prints Cyrillic text with arrows/sigmas; on a Windows</span>
+</span><span id="L-783"><a href="#L-783"><span class="linenos">783</span></a><span class="sd">    cp1251/cp866 console the strict stream encoding raises</span>
+</span><span id="L-784"><a href="#L-784"><span class="linenos">784</span></a><span class="sd">    ``UnicodeEncodeError`` mid-print.  Best effort only: exotic or</span>
+</span><span id="L-785"><a href="#L-785"><span class="linenos">785</span></a><span class="sd">    already-safe streams keep their configuration.</span>
+</span><span id="L-786"><a href="#L-786"><span class="linenos">786</span></a><span class="sd">    """</span>
+</span><span id="L-787"><a href="#L-787"><span class="linenos">787</span></a>    <span class="n">reconfigure</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">sys</span><span class="o">.</span><span class="n">stdout</span><span class="p">,</span> <span class="s2">"reconfigure"</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+</span><span id="L-788"><a href="#L-788"><span class="linenos">788</span></a>    <span class="k">if</span> <span class="nb">callable</span><span class="p">(</span><span class="n">reconfigure</span><span class="p">):</span>
+</span><span id="L-789"><a href="#L-789"><span class="linenos">789</span></a>        <span class="k">with</span> <span class="n">contextlib</span><span class="o">.</span><span class="n">suppress</span><span class="p">(</span><span class="ne">AttributeError</span><span class="p">,</span> <span class="ne">OSError</span><span class="p">,</span> <span class="ne">ValueError</span><span class="p">):</span>
+</span><span id="L-790"><a href="#L-790"><span class="linenos">790</span></a>            <span class="n">reconfigure</span><span class="p">(</span><span class="n">encoding</span><span class="o">=</span><span class="s2">"utf-8"</span><span class="p">,</span> <span class="n">errors</span><span class="o">=</span><span class="s2">"replace"</span><span class="p">)</span>
+</span><span id="L-791"><a href="#L-791"><span class="linenos">791</span></a>
+</span><span id="L-792"><a href="#L-792"><span class="linenos">792</span></a>
+</span><span id="L-793"><a href="#L-793"><span class="linenos">793</span></a><span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">(</span>
+</span><span id="L-794"><a href="#L-794"><span class="linenos">794</span></a>    <span class="n">argv</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="L-795"><a href="#L-795"><span class="linenos">795</span></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="L-796"><a href="#L-796"><span class="linenos">796</span></a>    <span class="n">user_dir</span><span class="p">:</span> <span class="n">Path</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="L-797"><a href="#L-797"><span class="linenos">797</span></a>    <span class="n">project_dir</span><span class="p">:</span> <span class="n">Path</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="L-798"><a href="#L-798"><span class="linenos">798</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+</span><span id="L-799"><a href="#L-799"><span class="linenos">799</span></a><span class="w">    </span><span class="sd">"""CLI entry point; returns the process exit code.</span>
+</span><span id="L-800"><a href="#L-800"><span class="linenos">800</span></a>
+</span><span id="L-801"><a href="#L-801"><span class="linenos">801</span></a><span class="sd">    ``argv`` defaults to ``sys.argv[1:]``; ``user_dir`` / ``project_dir``</span>
+</span><span id="L-802"><a href="#L-802"><span class="linenos">802</span></a><span class="sd">    pin the override layers (``None`` = platform defaults) so tests and</span>
+</span><span id="L-803"><a href="#L-803"><span class="linenos">803</span></a><span class="sd">    embedding code stay deterministic.  Before dispatch, stdout is</span>
+</span><span id="L-804"><a href="#L-804"><span class="linenos">804</span></a><span class="sd">    reconfigured to UTF-8 best-effort (cp1251 consoles would otherwise</span>
+</span><span id="L-805"><a href="#L-805"><span class="linenos">805</span></a><span class="sd">    crash on non-ASCII skill text).</span>
+</span><span id="L-806"><a href="#L-806"><span class="linenos">806</span></a>
+</span><span id="L-807"><a href="#L-807"><span class="linenos">807</span></a><span class="sd">    Example::</span>
 </span><span id="L-808"><a href="#L-808"><span class="linenos">808</span></a>
-</span><span id="L-809"><a href="#L-809"><span class="linenos">809</span></a><span class="sd">    Example::</span>
-</span><span id="L-810"><a href="#L-810"><span class="linenos">810</span></a>
-</span><span id="L-811"><a href="#L-811"><span class="linenos">811</span></a><span class="sd">        &gt;&gt;&gt; from pathlib import Path</span>
-</span><span id="L-812"><a href="#L-812"><span class="linenos">812</span></a><span class="sd">        &gt;&gt;&gt; nowhere = Path("atropos-cli-no-such-layer")</span>
-</span><span id="L-813"><a href="#L-813"><span class="linenos">813</span></a><span class="sd">        &gt;&gt;&gt; main(</span>
-</span><span id="L-814"><a href="#L-814"><span class="linenos">814</span></a><span class="sd">        ...     ["agent-context", "--list-skills"],</span>
-</span><span id="L-815"><a href="#L-815"><span class="linenos">815</span></a><span class="sd">        ...     user_dir=nowhere,</span>
-</span><span id="L-816"><a href="#L-816"><span class="linenos">816</span></a><span class="sd">        ...     project_dir=nowhere,</span>
-</span><span id="L-817"><a href="#L-817"><span class="linenos">817</span></a><span class="sd">        ... )</span>
-</span><span id="L-818"><a href="#L-818"><span class="linenos">818</span></a><span class="sd">        01-preregister</span>
-</span><span id="L-819"><a href="#L-819"><span class="linenos">819</span></a><span class="sd">        02-run-pipeline</span>
-</span><span id="L-820"><a href="#L-820"><span class="linenos">820</span></a><span class="sd">        03-read-graveyard</span>
-</span><span id="L-821"><a href="#L-821"><span class="linenos">821</span></a><span class="sd">        04-run-ml-kill-protocol</span>
-</span><span id="L-822"><a href="#L-822"><span class="linenos">822</span></a><span class="sd">        11-premise-check</span>
-</span><span id="L-823"><a href="#L-823"><span class="linenos">823</span></a><span class="sd">        12-null-control</span>
-</span><span id="L-824"><a href="#L-824"><span class="linenos">824</span></a><span class="sd">        13-signal-test</span>
-</span><span id="L-825"><a href="#L-825"><span class="linenos">825</span></a><span class="sd">        14-incremental-test</span>
-</span><span id="L-826"><a href="#L-826"><span class="linenos">826</span></a><span class="sd">        15-robustness-battery</span>
-</span><span id="L-827"><a href="#L-827"><span class="linenos">827</span></a><span class="sd">        16-walkforward-calendar</span>
-</span><span id="L-828"><a href="#L-828"><span class="linenos">828</span></a><span class="sd">        17-backtest-pipeline</span>
-</span><span id="L-829"><a href="#L-829"><span class="linenos">829</span></a><span class="sd">        18-read-portfolio-results</span>
-</span><span id="L-830"><a href="#L-830"><span class="linenos">830</span></a><span class="sd">        0</span>
-</span><span id="L-831"><a href="#L-831"><span class="linenos">831</span></a><span class="sd">    """</span>
-</span><span id="L-832"><a href="#L-832"><span class="linenos">832</span></a>    <span class="n">parser</span> <span class="o">=</span> <span class="n">_build_parser</span><span class="p">()</span>
-</span><span id="L-833"><a href="#L-833"><span class="linenos">833</span></a>    <span class="n">args</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_args</span><span class="p">(</span><span class="n">argv</span><span class="p">)</span>
-</span><span id="L-834"><a href="#L-834"><span class="linenos">834</span></a>    <span class="n">_force_utf8_stdout</span><span class="p">()</span>
-</span><span id="L-835"><a href="#L-835"><span class="linenos">835</span></a>    <span class="n">command</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">command</span><span class="p">)</span>
-</span><span id="L-836"><a href="#L-836"><span class="linenos">836</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"agent-context"</span><span class="p">:</span>
-</span><span id="L-837"><a href="#L-837"><span class="linenos">837</span></a>        <span class="k">return</span> <span class="n">_cmd_agent_context</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">user_dir</span><span class="p">,</span> <span class="n">project_dir</span><span class="p">)</span>
-</span><span id="L-838"><a href="#L-838"><span class="linenos">838</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"agent-setup"</span><span class="p">:</span>
-</span><span id="L-839"><a href="#L-839"><span class="linenos">839</span></a>        <span class="k">return</span> <span class="n">_cmd_agent_setup</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">user_dir</span><span class="p">,</span> <span class="n">project_dir</span><span class="p">)</span>
-</span><span id="L-840"><a href="#L-840"><span class="linenos">840</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"init"</span><span class="p">:</span>
-</span><span id="L-841"><a href="#L-841"><span class="linenos">841</span></a>        <span class="k">return</span> <span class="n">_cmd_init</span><span class="p">(</span><span class="n">args</span><span class="p">)</span>
-</span><span id="L-842"><a href="#L-842"><span class="linenos">842</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"demo"</span><span class="p">:</span>
-</span><span id="L-843"><a href="#L-843"><span class="linenos">843</span></a>        <span class="k">return</span> <span class="n">_cmd_demo</span><span class="p">(</span><span class="n">args</span><span class="p">)</span>
-</span><span id="L-844"><a href="#L-844"><span class="linenos">844</span></a>    <span class="k">return</span> <span class="n">_cmd_agent_doctor</span><span class="p">(</span><span class="n">user_dir</span><span class="p">,</span> <span class="n">project_dir</span><span class="p">)</span>
-</span><span id="L-845"><a href="#L-845"><span class="linenos">845</span></a>
+</span><span id="L-809"><a href="#L-809"><span class="linenos">809</span></a><span class="sd">        &gt;&gt;&gt; from pathlib import Path</span>
+</span><span id="L-810"><a href="#L-810"><span class="linenos">810</span></a><span class="sd">        &gt;&gt;&gt; nowhere = Path("atropos-cli-no-such-layer")</span>
+</span><span id="L-811"><a href="#L-811"><span class="linenos">811</span></a><span class="sd">        &gt;&gt;&gt; main(</span>
+</span><span id="L-812"><a href="#L-812"><span class="linenos">812</span></a><span class="sd">        ...     ["agent-context", "--list-skills"],</span>
+</span><span id="L-813"><a href="#L-813"><span class="linenos">813</span></a><span class="sd">        ...     user_dir=nowhere,</span>
+</span><span id="L-814"><a href="#L-814"><span class="linenos">814</span></a><span class="sd">        ...     project_dir=nowhere,</span>
+</span><span id="L-815"><a href="#L-815"><span class="linenos">815</span></a><span class="sd">        ... )</span>
+</span><span id="L-816"><a href="#L-816"><span class="linenos">816</span></a><span class="sd">        01-preregister</span>
+</span><span id="L-817"><a href="#L-817"><span class="linenos">817</span></a><span class="sd">        02-run-pipeline</span>
+</span><span id="L-818"><a href="#L-818"><span class="linenos">818</span></a><span class="sd">        03-read-graveyard</span>
+</span><span id="L-819"><a href="#L-819"><span class="linenos">819</span></a><span class="sd">        04-run-ml-kill-protocol</span>
+</span><span id="L-820"><a href="#L-820"><span class="linenos">820</span></a><span class="sd">        11-premise-check</span>
+</span><span id="L-821"><a href="#L-821"><span class="linenos">821</span></a><span class="sd">        12-null-control</span>
+</span><span id="L-822"><a href="#L-822"><span class="linenos">822</span></a><span class="sd">        13-signal-test</span>
+</span><span id="L-823"><a href="#L-823"><span class="linenos">823</span></a><span class="sd">        14-incremental-test</span>
+</span><span id="L-824"><a href="#L-824"><span class="linenos">824</span></a><span class="sd">        15-robustness-battery</span>
+</span><span id="L-825"><a href="#L-825"><span class="linenos">825</span></a><span class="sd">        16-walkforward-calendar</span>
+</span><span id="L-826"><a href="#L-826"><span class="linenos">826</span></a><span class="sd">        17-backtest-pipeline</span>
+</span><span id="L-827"><a href="#L-827"><span class="linenos">827</span></a><span class="sd">        18-read-portfolio-results</span>
+</span><span id="L-828"><a href="#L-828"><span class="linenos">828</span></a><span class="sd">        19-instrument-routing</span>
+</span><span id="L-829"><a href="#L-829"><span class="linenos">829</span></a><span class="sd">        20-paper-parity</span>
+</span><span id="L-830"><a href="#L-830"><span class="linenos">830</span></a><span class="sd">        21-units-and-identities</span>
+</span><span id="L-831"><a href="#L-831"><span class="linenos">831</span></a><span class="sd">        0</span>
+</span><span id="L-832"><a href="#L-832"><span class="linenos">832</span></a><span class="sd">    """</span>
+</span><span id="L-833"><a href="#L-833"><span class="linenos">833</span></a>    <span class="n">parser</span> <span class="o">=</span> <span class="n">_build_parser</span><span class="p">()</span>
+</span><span id="L-834"><a href="#L-834"><span class="linenos">834</span></a>    <span class="n">args</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_args</span><span class="p">(</span><span class="n">argv</span><span class="p">)</span>
+</span><span id="L-835"><a href="#L-835"><span class="linenos">835</span></a>    <span class="n">_force_utf8_stdout</span><span class="p">()</span>
+</span><span id="L-836"><a href="#L-836"><span class="linenos">836</span></a>    <span class="n">command</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">command</span><span class="p">)</span>
+</span><span id="L-837"><a href="#L-837"><span class="linenos">837</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"agent-context"</span><span class="p">:</span>
+</span><span id="L-838"><a href="#L-838"><span class="linenos">838</span></a>        <span class="k">return</span> <span class="n">_cmd_agent_context</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">user_dir</span><span class="p">,</span> <span class="n">project_dir</span><span class="p">)</span>
+</span><span id="L-839"><a href="#L-839"><span class="linenos">839</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"agent-setup"</span><span class="p">:</span>
+</span><span id="L-840"><a href="#L-840"><span class="linenos">840</span></a>        <span class="k">return</span> <span class="n">_cmd_agent_setup</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">user_dir</span><span class="p">,</span> <span class="n">project_dir</span><span class="p">)</span>
+</span><span id="L-841"><a href="#L-841"><span class="linenos">841</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"init"</span><span class="p">:</span>
+</span><span id="L-842"><a href="#L-842"><span class="linenos">842</span></a>        <span class="k">return</span> <span class="n">_cmd_init</span><span class="p">(</span><span class="n">args</span><span class="p">)</span>
+</span><span id="L-843"><a href="#L-843"><span class="linenos">843</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"demo"</span><span class="p">:</span>
+</span><span id="L-844"><a href="#L-844"><span class="linenos">844</span></a>        <span class="k">return</span> <span class="n">_cmd_demo</span><span class="p">(</span><span class="n">args</span><span class="p">)</span>
+</span><span id="L-845"><a href="#L-845"><span class="linenos">845</span></a>    <span class="k">return</span> <span class="n">_cmd_agent_doctor</span><span class="p">(</span><span class="n">user_dir</span><span class="p">,</span> <span class="n">project_dir</span><span class="p">)</span>
 </span><span id="L-846"><a href="#L-846"><span class="linenos">846</span></a>
-</span><span id="L-847"><a href="#L-847"><span class="linenos">847</span></a><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">"__main__"</span><span class="p">:</span>  <span class="c1"># pragma: no cover</span>
-</span><span id="L-848"><a href="#L-848"><span class="linenos">848</span></a>    <span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span><span class="n">main</span><span class="p">())</span>
+</span><span id="L-847"><a href="#L-847"><span class="linenos">847</span></a>
+</span><span id="L-848"><a href="#L-848"><span class="linenos">848</span></a><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">"__main__"</span><span class="p">:</span>  <span class="c1"># pragma: no cover</span>
+</span><span id="L-849"><a href="#L-849"><span class="linenos">849</span></a>    <span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span><span class="n">main</span><span class="p">())</span>
 </span></pre></div>
 
 
@@ -947,56 +948,59 @@ through argparse (exit code 2); command failures return non-zero from
 
     </div>
     <a class="headerlink" href="#main"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="main-796"><a href="#main-796"><span class="linenos">796</span></a><span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">(</span>
-</span><span id="main-797"><a href="#main-797"><span class="linenos">797</span></a>    <span class="n">argv</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="main-798"><a href="#main-798"><span class="linenos">798</span></a>    <span class="o">*</span><span class="p">,</span>
-</span><span id="main-799"><a href="#main-799"><span class="linenos">799</span></a>    <span class="n">user_dir</span><span class="p">:</span> <span class="n">Path</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="main-800"><a href="#main-800"><span class="linenos">800</span></a>    <span class="n">project_dir</span><span class="p">:</span> <span class="n">Path</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="main-801"><a href="#main-801"><span class="linenos">801</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
-</span><span id="main-802"><a href="#main-802"><span class="linenos">802</span></a><span class="w">    </span><span class="sd">"""CLI entry point; returns the process exit code.</span>
-</span><span id="main-803"><a href="#main-803"><span class="linenos">803</span></a>
-</span><span id="main-804"><a href="#main-804"><span class="linenos">804</span></a><span class="sd">    ``argv`` defaults to ``sys.argv[1:]``; ``user_dir`` / ``project_dir``</span>
-</span><span id="main-805"><a href="#main-805"><span class="linenos">805</span></a><span class="sd">    pin the override layers (``None`` = platform defaults) so tests and</span>
-</span><span id="main-806"><a href="#main-806"><span class="linenos">806</span></a><span class="sd">    embedding code stay deterministic.  Before dispatch, stdout is</span>
-</span><span id="main-807"><a href="#main-807"><span class="linenos">807</span></a><span class="sd">    reconfigured to UTF-8 best-effort (cp1251 consoles would otherwise</span>
-</span><span id="main-808"><a href="#main-808"><span class="linenos">808</span></a><span class="sd">    crash on non-ASCII skill text).</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="main-794"><a href="#main-794"><span class="linenos">794</span></a><span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">(</span>
+</span><span id="main-795"><a href="#main-795"><span class="linenos">795</span></a>    <span class="n">argv</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="main-796"><a href="#main-796"><span class="linenos">796</span></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="main-797"><a href="#main-797"><span class="linenos">797</span></a>    <span class="n">user_dir</span><span class="p">:</span> <span class="n">Path</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="main-798"><a href="#main-798"><span class="linenos">798</span></a>    <span class="n">project_dir</span><span class="p">:</span> <span class="n">Path</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="main-799"><a href="#main-799"><span class="linenos">799</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+</span><span id="main-800"><a href="#main-800"><span class="linenos">800</span></a><span class="w">    </span><span class="sd">"""CLI entry point; returns the process exit code.</span>
+</span><span id="main-801"><a href="#main-801"><span class="linenos">801</span></a>
+</span><span id="main-802"><a href="#main-802"><span class="linenos">802</span></a><span class="sd">    ``argv`` defaults to ``sys.argv[1:]``; ``user_dir`` / ``project_dir``</span>
+</span><span id="main-803"><a href="#main-803"><span class="linenos">803</span></a><span class="sd">    pin the override layers (``None`` = platform defaults) so tests and</span>
+</span><span id="main-804"><a href="#main-804"><span class="linenos">804</span></a><span class="sd">    embedding code stay deterministic.  Before dispatch, stdout is</span>
+</span><span id="main-805"><a href="#main-805"><span class="linenos">805</span></a><span class="sd">    reconfigured to UTF-8 best-effort (cp1251 consoles would otherwise</span>
+</span><span id="main-806"><a href="#main-806"><span class="linenos">806</span></a><span class="sd">    crash on non-ASCII skill text).</span>
+</span><span id="main-807"><a href="#main-807"><span class="linenos">807</span></a>
+</span><span id="main-808"><a href="#main-808"><span class="linenos">808</span></a><span class="sd">    Example::</span>
 </span><span id="main-809"><a href="#main-809"><span class="linenos">809</span></a>
-</span><span id="main-810"><a href="#main-810"><span class="linenos">810</span></a><span class="sd">    Example::</span>
-</span><span id="main-811"><a href="#main-811"><span class="linenos">811</span></a>
-</span><span id="main-812"><a href="#main-812"><span class="linenos">812</span></a><span class="sd">        &gt;&gt;&gt; from pathlib import Path</span>
-</span><span id="main-813"><a href="#main-813"><span class="linenos">813</span></a><span class="sd">        &gt;&gt;&gt; nowhere = Path("atropos-cli-no-such-layer")</span>
-</span><span id="main-814"><a href="#main-814"><span class="linenos">814</span></a><span class="sd">        &gt;&gt;&gt; main(</span>
-</span><span id="main-815"><a href="#main-815"><span class="linenos">815</span></a><span class="sd">        ...     ["agent-context", "--list-skills"],</span>
-</span><span id="main-816"><a href="#main-816"><span class="linenos">816</span></a><span class="sd">        ...     user_dir=nowhere,</span>
-</span><span id="main-817"><a href="#main-817"><span class="linenos">817</span></a><span class="sd">        ...     project_dir=nowhere,</span>
-</span><span id="main-818"><a href="#main-818"><span class="linenos">818</span></a><span class="sd">        ... )</span>
-</span><span id="main-819"><a href="#main-819"><span class="linenos">819</span></a><span class="sd">        01-preregister</span>
-</span><span id="main-820"><a href="#main-820"><span class="linenos">820</span></a><span class="sd">        02-run-pipeline</span>
-</span><span id="main-821"><a href="#main-821"><span class="linenos">821</span></a><span class="sd">        03-read-graveyard</span>
-</span><span id="main-822"><a href="#main-822"><span class="linenos">822</span></a><span class="sd">        04-run-ml-kill-protocol</span>
-</span><span id="main-823"><a href="#main-823"><span class="linenos">823</span></a><span class="sd">        11-premise-check</span>
-</span><span id="main-824"><a href="#main-824"><span class="linenos">824</span></a><span class="sd">        12-null-control</span>
-</span><span id="main-825"><a href="#main-825"><span class="linenos">825</span></a><span class="sd">        13-signal-test</span>
-</span><span id="main-826"><a href="#main-826"><span class="linenos">826</span></a><span class="sd">        14-incremental-test</span>
-</span><span id="main-827"><a href="#main-827"><span class="linenos">827</span></a><span class="sd">        15-robustness-battery</span>
-</span><span id="main-828"><a href="#main-828"><span class="linenos">828</span></a><span class="sd">        16-walkforward-calendar</span>
-</span><span id="main-829"><a href="#main-829"><span class="linenos">829</span></a><span class="sd">        17-backtest-pipeline</span>
-</span><span id="main-830"><a href="#main-830"><span class="linenos">830</span></a><span class="sd">        18-read-portfolio-results</span>
-</span><span id="main-831"><a href="#main-831"><span class="linenos">831</span></a><span class="sd">        0</span>
-</span><span id="main-832"><a href="#main-832"><span class="linenos">832</span></a><span class="sd">    """</span>
-</span><span id="main-833"><a href="#main-833"><span class="linenos">833</span></a>    <span class="n">parser</span> <span class="o">=</span> <span class="n">_build_parser</span><span class="p">()</span>
-</span><span id="main-834"><a href="#main-834"><span class="linenos">834</span></a>    <span class="n">args</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_args</span><span class="p">(</span><span class="n">argv</span><span class="p">)</span>
-</span><span id="main-835"><a href="#main-835"><span class="linenos">835</span></a>    <span class="n">_force_utf8_stdout</span><span class="p">()</span>
-</span><span id="main-836"><a href="#main-836"><span class="linenos">836</span></a>    <span class="n">command</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">command</span><span class="p">)</span>
-</span><span id="main-837"><a href="#main-837"><span class="linenos">837</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"agent-context"</span><span class="p">:</span>
-</span><span id="main-838"><a href="#main-838"><span class="linenos">838</span></a>        <span class="k">return</span> <span class="n">_cmd_agent_context</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">user_dir</span><span class="p">,</span> <span class="n">project_dir</span><span class="p">)</span>
-</span><span id="main-839"><a href="#main-839"><span class="linenos">839</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"agent-setup"</span><span class="p">:</span>
-</span><span id="main-840"><a href="#main-840"><span class="linenos">840</span></a>        <span class="k">return</span> <span class="n">_cmd_agent_setup</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">user_dir</span><span class="p">,</span> <span class="n">project_dir</span><span class="p">)</span>
-</span><span id="main-841"><a href="#main-841"><span class="linenos">841</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"init"</span><span class="p">:</span>
-</span><span id="main-842"><a href="#main-842"><span class="linenos">842</span></a>        <span class="k">return</span> <span class="n">_cmd_init</span><span class="p">(</span><span class="n">args</span><span class="p">)</span>
-</span><span id="main-843"><a href="#main-843"><span class="linenos">843</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"demo"</span><span class="p">:</span>
-</span><span id="main-844"><a href="#main-844"><span class="linenos">844</span></a>        <span class="k">return</span> <span class="n">_cmd_demo</span><span class="p">(</span><span class="n">args</span><span class="p">)</span>
-</span><span id="main-845"><a href="#main-845"><span class="linenos">845</span></a>    <span class="k">return</span> <span class="n">_cmd_agent_doctor</span><span class="p">(</span><span class="n">user_dir</span><span class="p">,</span> <span class="n">project_dir</span><span class="p">)</span>
+</span><span id="main-810"><a href="#main-810"><span class="linenos">810</span></a><span class="sd">        &gt;&gt;&gt; from pathlib import Path</span>
+</span><span id="main-811"><a href="#main-811"><span class="linenos">811</span></a><span class="sd">        &gt;&gt;&gt; nowhere = Path("atropos-cli-no-such-layer")</span>
+</span><span id="main-812"><a href="#main-812"><span class="linenos">812</span></a><span class="sd">        &gt;&gt;&gt; main(</span>
+</span><span id="main-813"><a href="#main-813"><span class="linenos">813</span></a><span class="sd">        ...     ["agent-context", "--list-skills"],</span>
+</span><span id="main-814"><a href="#main-814"><span class="linenos">814</span></a><span class="sd">        ...     user_dir=nowhere,</span>
+</span><span id="main-815"><a href="#main-815"><span class="linenos">815</span></a><span class="sd">        ...     project_dir=nowhere,</span>
+</span><span id="main-816"><a href="#main-816"><span class="linenos">816</span></a><span class="sd">        ... )</span>
+</span><span id="main-817"><a href="#main-817"><span class="linenos">817</span></a><span class="sd">        01-preregister</span>
+</span><span id="main-818"><a href="#main-818"><span class="linenos">818</span></a><span class="sd">        02-run-pipeline</span>
+</span><span id="main-819"><a href="#main-819"><span class="linenos">819</span></a><span class="sd">        03-read-graveyard</span>
+</span><span id="main-820"><a href="#main-820"><span class="linenos">820</span></a><span class="sd">        04-run-ml-kill-protocol</span>
+</span><span id="main-821"><a href="#main-821"><span class="linenos">821</span></a><span class="sd">        11-premise-check</span>
+</span><span id="main-822"><a href="#main-822"><span class="linenos">822</span></a><span class="sd">        12-null-control</span>
+</span><span id="main-823"><a href="#main-823"><span class="linenos">823</span></a><span class="sd">        13-signal-test</span>
+</span><span id="main-824"><a href="#main-824"><span class="linenos">824</span></a><span class="sd">        14-incremental-test</span>
+</span><span id="main-825"><a href="#main-825"><span class="linenos">825</span></a><span class="sd">        15-robustness-battery</span>
+</span><span id="main-826"><a href="#main-826"><span class="linenos">826</span></a><span class="sd">        16-walkforward-calendar</span>
+</span><span id="main-827"><a href="#main-827"><span class="linenos">827</span></a><span class="sd">        17-backtest-pipeline</span>
+</span><span id="main-828"><a href="#main-828"><span class="linenos">828</span></a><span class="sd">        18-read-portfolio-results</span>
+</span><span id="main-829"><a href="#main-829"><span class="linenos">829</span></a><span class="sd">        19-instrument-routing</span>
+</span><span id="main-830"><a href="#main-830"><span class="linenos">830</span></a><span class="sd">        20-paper-parity</span>
+</span><span id="main-831"><a href="#main-831"><span class="linenos">831</span></a><span class="sd">        21-units-and-identities</span>
+</span><span id="main-832"><a href="#main-832"><span class="linenos">832</span></a><span class="sd">        0</span>
+</span><span id="main-833"><a href="#main-833"><span class="linenos">833</span></a><span class="sd">    """</span>
+</span><span id="main-834"><a href="#main-834"><span class="linenos">834</span></a>    <span class="n">parser</span> <span class="o">=</span> <span class="n">_build_parser</span><span class="p">()</span>
+</span><span id="main-835"><a href="#main-835"><span class="linenos">835</span></a>    <span class="n">args</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_args</span><span class="p">(</span><span class="n">argv</span><span class="p">)</span>
+</span><span id="main-836"><a href="#main-836"><span class="linenos">836</span></a>    <span class="n">_force_utf8_stdout</span><span class="p">()</span>
+</span><span id="main-837"><a href="#main-837"><span class="linenos">837</span></a>    <span class="n">command</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">command</span><span class="p">)</span>
+</span><span id="main-838"><a href="#main-838"><span class="linenos">838</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"agent-context"</span><span class="p">:</span>
+</span><span id="main-839"><a href="#main-839"><span class="linenos">839</span></a>        <span class="k">return</span> <span class="n">_cmd_agent_context</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">user_dir</span><span class="p">,</span> <span class="n">project_dir</span><span class="p">)</span>
+</span><span id="main-840"><a href="#main-840"><span class="linenos">840</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"agent-setup"</span><span class="p">:</span>
+</span><span id="main-841"><a href="#main-841"><span class="linenos">841</span></a>        <span class="k">return</span> <span class="n">_cmd_agent_setup</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">user_dir</span><span class="p">,</span> <span class="n">project_dir</span><span class="p">)</span>
+</span><span id="main-842"><a href="#main-842"><span class="linenos">842</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"init"</span><span class="p">:</span>
+</span><span id="main-843"><a href="#main-843"><span class="linenos">843</span></a>        <span class="k">return</span> <span class="n">_cmd_init</span><span class="p">(</span><span class="n">args</span><span class="p">)</span>
+</span><span id="main-844"><a href="#main-844"><span class="linenos">844</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"demo"</span><span class="p">:</span>
+</span><span id="main-845"><a href="#main-845"><span class="linenos">845</span></a>        <span class="k">return</span> <span class="n">_cmd_demo</span><span class="p">(</span><span class="n">args</span><span class="p">)</span>
+</span><span id="main-846"><a href="#main-846"><span class="linenos">846</span></a>    <span class="k">return</span> <span class="n">_cmd_agent_doctor</span><span class="p">(</span><span class="n">user_dir</span><span class="p">,</span> <span class="n">project_dir</span><span class="p">)</span>
 </span></pre></div>
 
 
@@ -1029,6 +1033,9 @@ crash on non-ASCII skill text).</p>
 16-walkforward-calendar
 17-backtest-pipeline
 18-read-portfolio-results
+19-instrument-routing
+20-paper-parity
+21-units-and-identities
 0
 </code></pre>
 </div>

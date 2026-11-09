@@ -115,7 +115,8 @@ jobs:
             atropos.cli atropos.cost_model atropos.cross_sectional \
             atropos.data_contract atropos.ensemble_pipeline \
             atropos.evaluation_metrics atropos.feature_scan \
-            atropos.incremental_regression atropos.kill_chain \
+            atropos.incremental_regression atropos.instrument_map \
+            atropos.kill_chain \
             atropos.legs atropos.ml_ensemble atropos.ml_training \
             atropos.monte_carlo atropos.null_control_suite \
             atropos.orthogonal atropos.paper_protocol atropos.portfolio \

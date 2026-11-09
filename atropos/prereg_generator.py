@@ -1,4 +1,4 @@
-"""Preregistration generator for the hypothesis-killing pipeline.
+"""Preregistration generator for the falsification-toolkit pipeline.
 
 Turns a parameter dict into a frozen markdown prereg document.  Validates
 that all required fields are present and that every kill criterion is a
