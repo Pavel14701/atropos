@@ -583,6 +583,18 @@ Real-data coverage: validated on a tactical/time-exit leg (C'',
 real-data validation pending — future wave when a deployed system
 runs carry/options paper legs.
 
+DTE fee-model ledger (2026-11 fix wave): per-leg fee conventions are
+VERIFIED only where the leg's frozen sim was read — C'' =
+``split_5bp_5bp`` (5bp entry + 5bp exit = 10bp RT, ob_zone_sizing),
+E = ``maker_half_rt`` (funding_carry_v2, maker distinct by design).
+A/BAB/BAC remain ``taker_rt_at_entry`` named-current with UNAUDITED
+conventions: any fee change outside C''/E requires reading that
+leg's sim load_trades first.  Sizing is a CONTRACT token
+(``composite_primary_neutral_fallback_until_n200``, §4 amendment
+2026-11-09): parity never compares runtime mode
+(``sizing_mode_active``), the ``sizing_activation_stale`` issue
+catches fallback still active at ``n_ob_rows >= composite_activation_n``.
+
 Unblocks: formal forward-parity testing for the paper/live phase of
 any deployed system (first application: the 2026-11 DTE post-mortem).
 
