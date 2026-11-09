@@ -156,8 +156,7 @@ def _mini_data() -> dict[str, Any]:
         sum(returns[index - 7 : index]) for index in range(7, rows_total)
     ]
     mom30 = [0.0] * 30 + [
-        sum(returns[index - 30 : index])
-        for index in range(30, rows_total)
+        sum(returns[index - 30 : index]) for index in range(30, rows_total)
     ]
     return {
         "returns": returns,

@@ -11,3 +11,4 @@ build/
 .zcode
 .atropos/
 coverage.json
+*.log

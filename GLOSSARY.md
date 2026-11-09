@@ -46,12 +46,19 @@ if a new venue cuts costs below 2 bps" for a COST_DEATH tombstone.
 ## Verdicts
 
 **SURVIVED / KILLED / INCONCLUSIVE** — the three abstract outcomes. The
-pipeline emits concrete tokens: `SURVIVES`, `SURVIVES_WITH_WARNINGS`
-(the survived family), twelve kill tokens (`DEAD`, `ROBUSTNESS_DEATH`,
-`PLACEBO_VIOLATION`, `OVERFIT_DEATH`, `NO_OOS_EDGE`, `COST_DEATH`,
-`DEGENERATE_FEED`, `CONSTANT_PREDICTIONS`, `CS_NO_EDGE`, `RISK`,
-`ARTIFACT`, `REPACKAGING`), and `INCONCLUSIVE` when the data cannot
-decide. The generic `DEAD` is retired as a catch-all: it survives only
+pipeline emits concrete tokens, and the authoritative token list lives
+in exactly ONE place — the module docstring of
+`atropos.ensemble_pipeline`; docs must not re-enumerate it (hardcoded
+counts drifted 14/15/16/18 across README, GLOSSARY and how-tos — the
+reference kills the drift). Shape of the set as of this writing: the
+survived family (`SURVIVES`, `SURVIVES_WITH_WARNINGS`, plus the
+panel-only forms `SURVIVES_CS_ONLY` /
+`SURVIVES_CS_ONLY_WITH_WARNINGS`), the kill tokens (`DEAD`,
+`ROBUSTNESS_DEATH`, `PLACEBO_VIOLATION`, `OVERFIT_DEATH`,
+`NO_OOS_EDGE`, `COST_DEATH`, `DEGENERATE_FEED`,
+`CONSTANT_PREDICTIONS`, `CS_NO_EDGE`, `RISK`, `ARTIFACT`,
+`REPACKAGING`), and `INCONCLUSIVE` when the data cannot decide. The
+generic `DEAD` is retired as a catch-all: it survives only
 as the proven-absence token (battery baseline catastrophically dead, or
 `CS_NO_EDGE` with config target `"xs"`). Every report also carries
 `verdict_class` (DEAD / NEEDS_ANALYSIS / INCONCLUSIVE / SURVIVES),
@@ -185,6 +192,36 @@ class)
   a valid exposure, claimed novelty is a misrepresentation.
 - **What would change:** evidence of information orthogonal to the
   parent factor.
+
+**The survives family, one by one** (PASS-class; the distinctions are
+evidence scope, not correctness):
+
+**SURVIVES**
+- **Means:** every executed attack missed on this feed.
+- **Why fired:** all series stages PASS, no warnings.
+- **Next step:** the preregistered forward test (`live_verdict`) —
+  never immediate capital.
+- **What would change:** a new snapshot, a new feed, a new run —
+  survival is not transferable.
+
+**SURVIVES_WITH_WARNINGS**
+- **Means:** survived with caveats — undecided checks rode along.
+- **Why fired:** all stages PASS with WARNs present (undecided
+  controls, turnover, deflated Sharpe).
+- **Next step:** write the WARNs into the tombstone; decide whether
+  the caveats are compatible with the decision.
+- **What would change:** a run where the warned checks decide.
+
+**SURVIVES_CS_ONLY** / **SURVIVES_CS_ONLY_WITH_WARNINGS**
+- **Means:** only the cross-sectional stage ran (panel-only mode) and
+  passed — the evidence scope stays in the verdict instead of
+  borrowing the stronger all-stages label.
+- **Why fired:** stage 7 PASS (with/without warnings) on a panel
+  alone; stages 1-6 SKIPPED for lack of series data.
+- **Next step:** a series feed is needed before any stronger survival
+  claim; do not read CS-only as all-stages `SURVIVES`.
+- **What would change:** series data supplied — the full pipeline
+  runs and a new verdict is earned.
 
 **The five-facts rule.** Every kill reports (1) which gate fired, (2)
 on what feed (anchor, n_obs, active_days), (3) which specific test

@@ -1,6 +1,7 @@
 ---
 name: 02-run-pipeline
-description: Run the hypothesis through atropos.ensemble_pipeline.run_full_pipeline and read one of the 14 verdicts correctly.
+description: Run the hypothesis through atropos.ensemble_pipeline.run_full_pipeline and read the verdict correctly (the authoritative token list lives
+in the ensemble_pipeline module docstring).
 when_to_use: When the prereg is frozen and the data is pulled; for any decisive run on the frozen spec.
 version: 0.1.0
 ---

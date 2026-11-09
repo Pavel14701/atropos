@@ -391,7 +391,13 @@ benchmark sizing, after costs. Forecast accuracy by itself is not success.
 
 ---
 
-## §4 The Death Taxonomy — 18 Terms
+## §4 The Death Taxonomy
+
+The doctrine terms below are THIS document's vocabulary. The code's
+verdict tokens are enumerated in exactly one place — the module
+docstring of `atropos.ensemble_pipeline` — and docs must not
+re-enumerate them; the mapping after the table covers only the tokens
+whose doctrine name differs.
 
 | Term | Definition | Example (one line) |
 |---|---|---|
