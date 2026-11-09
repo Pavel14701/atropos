@@ -669,3 +669,146 @@ def test_demo_run_all_examples_smoke(
     assert "profit_factor: " in out
     assert "win_rate     : " in out
     assert "turnover     : " in out
+
+
+# --- informational metrics wave: sortino / payoff / calendar calmar ---------
+
+
+def test_sortino_known_answer() -> None:
+    """Hand-computed sortino on a deterministic 30-observation series.
+
+    r = 10x(+0.01) + 10x(-0.005) + 10x(+0.02): mean = 0.25/30,
+    downside_dev = sqrt(10 * 0.005^2 / 30).  periods=1 keeps the
+    per-period flavor; the annualized value is per_period * sqrt(1).
+    Mutation: a doubled downside_dev halves the ratio -> caught.
+    """
+    from atropos.evaluation_metrics import (  # noqa: PLC0415 (test-local)
+        sortino_ratio,
+    )
+
+    values = [0.01] * 10 + [-0.005] * 10 + [0.02] * 10
+    out = sortino_ratio(values, periods=1)
+    assert out["n"] == 30
+    assert out["min_observations"] == 30
+    expected_dev = math.sqrt(10 * 0.005**2 / 30)
+    assert out["downside_dev"] == pytest.approx(expected_dev)
+    expected = (0.25 / 30) / expected_dev
+    assert out["sortino_per_period"] == pytest.approx(expected)
+    assert out["sortino"] == pytest.approx(expected)
+
+
+def test_sortino_none_below_threshold() -> None:
+    """Below min_observations both values are None, dev reported.
+
+    n < min_observations -> sortino/sortino_per_period None.
+
+    Mutation: the None gate removed -> numbers appear at n=12 -> the
+    None asserts fail -> caught.
+    """
+    from atropos.evaluation_metrics import (  # noqa: PLC0415 (test-local)
+        sortino_ratio,
+    )
+
+    out = sortino_ratio([0.01, -0.005] * 6, periods=1)
+    assert out["n"] == 12
+    assert out["sortino"] is None
+    assert out["sortino_per_period"] is None
+    assert out["downside_dev"] >= 0.0
+    filled = sortino_ratio([0.01, -0.005] * 15, periods=1)
+    assert filled["n"] == 30
+    assert filled["sortino"] is not None
+
+
+def test_payoff_stats_known_answer() -> None:
+    """Hand-computed payoff quadruple, breakeven cases, degenerate edges.
+
+    U3: [+3, 0, -1] -> hit_rate 0.5 (breakeven EXCLUDED from the
+    denominator), n_breakeven=1, ratio 3.0.
+    U6: [0, 0, 0] -> hit_rate NaN (0/0 guarded, never
+    ZeroDivisionError), every average NaN.
+    Mutation: avg_loss_r without the abs() -> sign flips -> caught.
+    """
+    from atropos.evaluation_metrics import (  # noqa: PLC0415 (test-local)
+        payoff_stats,
+    )
+
+    base = payoff_stats([3, 3, -1, -1, 1])
+    assert base["n"] == 5
+    assert base["hit_rate"] == pytest.approx(0.6)
+    assert base["n_winners"] == 3 and base["n_losers"] == 2
+    assert base["avg_win_r"] == pytest.approx(7.0 / 3.0)
+    assert base["avg_loss_r"] == pytest.approx(1.0)
+    assert base["win_loss_ratio"] == pytest.approx(7.0 / 3.0)
+
+    breakeven_mix = payoff_stats([3, 0, -1])
+    assert breakeven_mix["hit_rate"] == pytest.approx(0.5)
+    assert breakeven_mix["n_breakeven"] == 1
+    assert breakeven_mix["avg_win_r"] == pytest.approx(3.0)
+    assert breakeven_mix["avg_loss_r"] == pytest.approx(1.0)
+    assert breakeven_mix["win_loss_ratio"] == pytest.approx(3.0)
+
+    flat = payoff_stats([0, 0, 0])
+    assert flat["n_breakeven"] == 3
+    assert math.isnan(flat["hit_rate"])
+    assert math.isnan(flat["avg_win_r"])
+    assert math.isnan(flat["avg_loss_r"])
+    assert math.isnan(flat["win_loss_ratio"])
+
+    all_loss = payoff_stats([-1, -2])
+    assert all_loss["hit_rate"] == 0.0
+    assert math.isnan(all_loss["avg_win_r"])
+    assert math.isnan(all_loss["win_loss_ratio"])
+
+    all_win = payoff_stats([1, 2])
+    assert all_win["avg_loss_r"] == pytest.approx(0.0)
+    assert all_win["win_loss_ratio"] == math.inf
+
+
+def test_payoff_stats_all_four_together() -> None:
+    """Structural pin: the payoff quadruple is ONE call.
+
+    hit_rate is never reachable without avg_win_r/avg_loss_r/
+    win_loss_ratio (the review's 'all four or none' law) because they
+    live in a single return dict.
+    """
+    from atropos.evaluation_metrics import (  # noqa: PLC0415 (test-local)
+        payoff_stats,
+    )
+
+    out = payoff_stats([2, -1, 0])
+    required = {
+        "hit_rate",
+        "avg_win_r",
+        "avg_loss_r",
+        "win_loss_ratio",
+    }
+    assert required <= set(out)
+
+
+def test_calmar_ratio_period_years() -> None:
+    """U7: period_years switches CAGR to the calendar span in-place.
+
+    period_years=None keeps the active-period convention (regression:
+    cagr == final ** (periods / n) - 1 on a zero-free series);
+    period_years=<span> gives final ** (1 / span) - 1; calmar tracks
+    cagr / |mdd| in both modes.  Mutation: the branch inverted or the
+    calendar path dropped -> the None-assert or the value assert
+    fails -> caught.
+    """
+    from atropos.evaluation_metrics import (  # noqa: PLC0415 (test-local)
+        calmar_ratio,
+    )
+
+    values = [0.01, 0.02, -0.005, 0.03, 0.01]
+    final = float(np.prod([1.0 + value for value in values]))
+
+    active = calmar_ratio(values)
+    assert active["cagr"] == pytest.approx(final ** (252 / 5) - 1.0)
+
+    calendar = calmar_ratio(values, period_years=2.0)
+    assert calendar["cagr"] == pytest.approx(final**0.5 - 1.0)
+    assert calendar["calmar"] == pytest.approx(
+        calendar["cagr"] / abs(calendar["mdd"])
+    )
+    assert calendar["mdd"] == active["mdd"]  # mdd convention unchanged
+    assert calendar["cagr"] < active["cagr"]  # 5 obs vs 2 calendar years

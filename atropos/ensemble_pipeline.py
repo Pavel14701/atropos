@@ -147,6 +147,13 @@ from atropos.cost_model import (
     breakeven_cost_bps,
 )
 from atropos.cross_sectional import run_cross_sectional_tests
+from atropos.evaluation_metrics import (
+    calmar_ratio,
+    equity_from_returns,
+    max_drawdown,
+    sharpe_ratio,
+    sortino_ratio,
+)
 from atropos.incremental_regression import curve_summary, specification_curve
 from atropos.monte_carlo import max_drawdown_distribution, sharpe_distribution
 from atropos.null_control_suite import (
@@ -1647,6 +1654,114 @@ def _json_safe_value(value: Any) -> Any:
     return value
 
 
+def _strategy_metrics_block(
+    active_returns: np.ndarray,
+    report_index: pd.Index,
+    periods: int = 252,
+) -> dict[str, Any]:
+    """Informational return-metrics block for the report (never a gate).
+
+    Reads ONLY the hoisted feed facts, so the block is present on every
+    verdict path (early kills included) and nothing here can affect the
+    verdict, the issues or any template fill.  The standing "active"
+    convention of this codebase is FINITE NON-ZERO returns -- exactly
+    what ``active_days`` counts -- so the metrics run on
+    ``active_returns[np.isfinite(active_returns) & (active_returns !=
+    0.0)]`` and ``n_obs`` equals ``active_days`` by construction
+    (test-pinned).  Zeros are compounding-neutral: dropping them
+    removes exact-1.0 factors from ``cumprod(1 + r)``, so the filtered
+    equity path is the same subsequence as the full path and the
+    filtered-vs-full drawdown is identical.
+
+    ``period_years`` is the CALENDAR span of ``report_index`` -- the
+    full window, active days or not; CAGR/Calmar annualize with it (71
+    active days over 502 calendar days is 1.38 years, not 0.28).  A
+    non-datetime (or empty) index yields ``period_years=None`` and
+    ``cagr`` / ``calmar`` ``None``: an unknowable span is not guessed
+    (fail-honest), while ``sharpe`` / ``sortino`` / ``max_dd`` need no
+    span and are still computed.  ``calmar_ratio`` is the single home
+    of the CAGR / drawdown arithmetic, so the block delegates to it
+    once instead of re-deriving the curve.
+
+    The Sharpe CI is a minimum-cost noisy directional interval, not a
+    significance test: below 50 active observations it is not computed
+    at all (an early kill must not pay for an unreadable CI).
+    """
+    metrics_returns = active_returns[
+        np.isfinite(active_returns) & (active_returns != 0.0)
+    ]
+    n_obs = int(metrics_returns.size)
+    period_years: float | None = None
+    if isinstance(report_index, pd.DatetimeIndex) and len(report_index) > 0:
+        period_years = (
+            float((report_index.max() - report_index.min()).days) / 365.25
+        )
+    if n_obs == 0:
+        # early-kill honesty: no active periods, no metrics -- the
+        # block reports the emptiness instead of fabricated numbers
+        return {
+            "cagr": None,
+            "sharpe": None,
+            "sharpe_ci_low": None,
+            "sharpe_ci_high": None,
+            "sortino": None,
+            "max_dd": None,
+            "calmar": None,
+            "n_obs": 0,
+            "period_years": None,
+        }
+    if n_obs < 50:
+        # point estimate only: the bootstrap CI is unreadable here and
+        # an early kill must not pay for it (n_boot=1 skips the
+        # resampling; the CI keys stay None)
+        sharpe_out = sharpe_ratio(
+            metrics_returns, periods=periods, n_boot=1, block=1, seed=0
+        )
+        sharpe_ci_low: float | None = None
+        sharpe_ci_high: float | None = None
+    else:
+        sharpe_out = sharpe_ratio(
+            metrics_returns, periods=periods, n_boot=200, block=20, seed=42
+        )
+        sharpe_ci_low = float(sharpe_out["sr_ci"][0])
+        sharpe_ci_high = float(sharpe_out["sr_ci"][1])
+    sortino_value: float | None = sortino_ratio(
+        metrics_returns, periods=periods
+    )["sortino"]
+    eq = equity_from_returns(metrics_returns)
+    cagr_value: float | None = None
+    calmar_value: float | None = None
+    mdd_value: float | None
+    if not bool(np.all(eq > 0.0)):
+        # a single period of -100% or worse destroys multiplicative
+        # compounding: no positive equity peak exists, so the
+        # drawdown/CAGR family is undefined -- fail-honest None instead
+        # of a raise from a report block
+        mdd_value = None
+    elif period_years is not None and n_obs >= 2:
+        calmar_out = calmar_ratio(
+            metrics_returns, periods=periods, period_years=period_years
+        )
+        cagr_value = float(calmar_out["cagr"])
+        calmar_value = float(calmar_out["calmar"])
+        mdd_value = float(calmar_out["mdd"])
+    else:
+        # no usable calendar span (or a single observation): the
+        # drawdown itself is still a span-free fact
+        mdd_value = float(max_drawdown(eq)["mdd"])
+    return {
+        "cagr": cagr_value,
+        "sharpe": float(sharpe_out["sr"]),
+        "sharpe_ci_low": sharpe_ci_low,
+        "sharpe_ci_high": sharpe_ci_high,
+        "sortino": sortino_value,
+        "max_dd": mdd_value,
+        "calmar": calmar_value,
+        "n_obs": n_obs,
+        "period_years": period_years,
+    }
+
+
 # PLR0911 waived: one return per pipeline-stage verdict (stages 1-7, the
 # panel-only branch, and the all-survived return), mirroring the
 # kill-on-first-FAIL decision tree.  Intentionally NOT refactored into a
@@ -1694,9 +1809,9 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
     Returns:
         One dict: ``{hypothesis, n_obs, date_range, overall_verdict,
         verdict_class, informative, interpretation, next_step,
-        what_would_change, failed_test, active_days, killed_by_stage,
-        kill_reason, stages (list of per-stage dicts), config,
-        runtime_seconds, prereg_hash}``.
+        what_would_change, failed_test, active_days, strategy_metrics,
+        killed_by_stage, kill_reason, stages (list of per-stage dicts),
+        config, runtime_seconds, prereg_hash}``.
 
         ``overall_verdict`` tokens - kills: ``DEGENERATE_FEED``
         (stage-0 pre-flight: a degenerate feed column), ``ARTIFACT``,
@@ -1734,6 +1849,21 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
         ``killed_by_stage`` is ``0`` for the pre-flight
         (``DEGENERATE_FEED``), ``1..7`` for a stage kill, ``None``
         when no stage killed.
+
+        The ``strategy_metrics`` block is informational: they are
+        read-outs.  They do not affect the verdict. A high Sharpe
+        does not override ``ROBUSTNESS_DEATH``. The kill-protocol
+        answers "can this be killed", not "how good is the return".
+        Sharpe 2.3 on 71 active days is not an edge -- it is an
+        insignificant mean with outliers. Metrics help the principal
+        read the report; they do not decide it. ``n_obs`` counts
+        ACTIVE periods (finite non-zero returns -- the standing
+        active convention, matching ``active_days``); ``period_years``
+        is the CALENDAR span of the full window; CAGR/Calmar use the
+        calendar span (71 active days over 502 calendar days is 1.38
+        years, not 0.28). The block is per-period only:
+        hit_rate/n_trades/profit_factor are trade-stream metrics and
+        live in trade-stream contexts (payoff_stats / profit_factor).
 
     Raises:
         ValueError: if ``data`` lacks a usable ``returns`` stream,
@@ -2085,6 +2215,12 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
             if len(report_index) > 0
             else (None, None)
         )
+        # informational metrics layer: reads only the hoisted facts, so
+        # it is present on EVERY verdict path (early kills included);
+        # it never gates -- a high Sharpe does not override any verdict
+        strategy_metrics = _strategy_metrics_block(
+            active_returns, report_index
+        )
         return {
             "hypothesis": hypothesis,
             "n_obs": n_obs,
@@ -2097,6 +2233,7 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
             "what_would_change": wwc_tpl.format(**fill_values),
             "failed_test": failed_test,
             "active_days": active_days,
+            "strategy_metrics": strategy_metrics,
             "killed_by_stage": killed_stage,
             "kill_reason": reason,
             "stages": stages,

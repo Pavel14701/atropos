@@ -2124,3 +2124,87 @@ def test_demo_stage5_maker_leg_uses_banner_half_atr_offset() -> None:
     # caught the live double-offset bug before the stage-2 fix)
     assert summary["maker_r_pess"] == pytest.approx(at_banner)
     assert summary["maker_r_pess"] != pytest.approx(at_double)
+
+
+# -- informational metrics wave: strategy_metrics, never a gate --------------
+
+
+def test_strategy_metrics_block_unit() -> None:
+    """_strategy_metrics_block: active convention + calendar span (U5).
+
+    metrics on finite NON-ZERO returns (the standing active convention
+    active_days uses); n_obs == the active count; period_years from
+    the full calendar window; zeros are compounding-neutral so max_dd
+    matches the full stream.  Mutation: the key dropped from the
+    report or the filter inverted -> caught here and in the
+    integration pin below.
+    """
+    from atropos.ensemble_pipeline import (  # noqa: PLC0415 (test-local)
+        _strategy_metrics_block,
+    )
+
+    index = pd.date_range("2026-01-01", periods=10, freq="D", tz="UTC")
+    values = np.array(
+        [0.01, 0.0, -0.005, 0.0, 0.02, 0.005, 0.0, 0.0, -0.002, 0.01]
+    )
+    block = _strategy_metrics_block(values, index)
+    assert block["n_obs"] == 6  # finite non-zero only
+    assert block["period_years"] == pytest.approx(9 / 365.25)
+    for key in (
+        "cagr",
+        "sharpe",
+        "sharpe_ci_low",
+        "sharpe_ci_high",
+        "sortino",
+        "max_dd",
+        "calmar",
+    ):
+        assert key in block
+    # n_obs < 50 -> CI omitted without a bootstrap (U4)
+    assert block["sharpe_ci_low"] is None
+    assert block["sharpe_ci_high"] is None
+    # n_obs < 30 -> sortino None (U3/rev-2 gate)
+    assert block["sortino"] is None
+    # equity/mdd computable regardless
+    assert block["max_dd"] is not None and block["max_dd"] <= 0.0
+
+
+def test_strategy_metrics_empty_is_all_none() -> None:
+    """An empty series (early kill) -> all None, n_obs 0, no crash."""
+    from atropos.ensemble_pipeline import (  # noqa: PLC0415 (test-local)
+        _strategy_metrics_block,
+    )
+
+    block = _strategy_metrics_block(np.empty(0), pd.DatetimeIndex([]))
+    assert block["n_obs"] == 0
+    assert block["cagr"] is None and block["sharpe"] is None
+    assert block["sortino"] is None and block["max_dd"] is None
+    assert block["calmar"] is None and block["period_years"] is None
+
+
+def test_strategy_metrics_in_report_matches_active_days() -> None:
+    """Integration: the block rides EVERY verdict path.
+
+    n_obs mirrors active_days (U5); the verdict contract is
+    untouched.
+    """
+    result = run_full_pipeline(
+        _make_synthetic("genuine_edge", n_obs=SERIES_N_OBS, seed=4),
+        REDUCED_CONFIG,
+    )
+    block = result["strategy_metrics"]
+    assert block["n_obs"] == result["active_days"]
+    assert result["overall_verdict"] in {"SURVIVES", "SURVIVES_WITH_WARNINGS"}
+    assert result["killed_by_stage"] is None
+
+
+def test_run_full_pipeline_docstring_warning() -> None:
+    """The ratchet against reading numbers as salvation.
+
+    "Sharpe 2.3 at ROBUSTNESS_DEATH - why dead?" is answered by the
+    docstring: run_full_pipeline must carry the informational law.
+    """
+    doc = run_full_pipeline.__doc__ or ""
+    assert "informational" in doc
+    assert "do not affect the verdict" in doc
+    assert "not an edge" in doc

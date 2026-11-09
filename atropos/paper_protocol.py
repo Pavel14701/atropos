@@ -81,6 +81,8 @@ import numpy as np
 import pandas as pd
 
 from atropos._utils import validate_int, validate_number
+from atropos.backtest_metrics import per_trade_sharpe
+from atropos.evaluation_metrics import sortino_ratio
 
 __all__ = ["LegVerdict", "PaperVerdict", "run_paper_protocol"]
 
@@ -138,6 +140,13 @@ class _LegStageResult(TypedDict):
     sizing_rule: dict[str, Any]
     funding_alignment: dict[str, Any] | None
     pnl_decomposition: dict[str, Any] | None
+    # private side-channel, NEVER copied into the public LegVerdict:
+    # the stage-6 matched R arrays are retained here so the portfolio
+    # merge can pool them into one series per side (the merge site has
+    # no access to the pairing inputs, only to these payloads); None
+    # when stage 6 never ran for the leg
+    matched_paper_r: np.ndarray | None
+    matched_frozen_r: np.ndarray | None
 
 
 class PaperVerdict(LegVerdict):
@@ -1458,9 +1467,8 @@ def _exit_direction_issues(
 
 
 def _run_statistical_stage(
-    matched_pairs: list[tuple[int, int]],
-    paper_pnls: list[float],
-    frozen_pnls: list[float],
+    matched_paper: np.ndarray,
+    matched_frozen: np.ndarray,
     *,
     paper_streak: int,
     frozen_streak: int,
@@ -1478,22 +1486,35 @@ def _run_statistical_stage(
     positive).  Mean drift is reported through ``mean_drift_p_le0`` —
     it is the p-value path, NOT a named issue; ``dd_divergence`` is
     the only named statistical issue.
+
+    Four informational per-trade metrics ride on the report and NEVER
+    affect the verdict or the issues: ``paper_sharpe_per_trade`` /
+    ``frozen_sharpe_per_trade`` via
+    :func:`atropos.backtest_metrics.per_trade_sharpe` (mean/std of the
+    matched R arrays, never annualized; NaN below two finite matched
+    trades) and ``paper_sortino_per_trade`` /
+    ``frozen_sortino_per_trade`` via the per-period value of
+    :func:`atropos.evaluation_metrics.sortino_ratio` (``periods=1``;
+    ``None`` below 30 matched trades).  A parity book with ugly
+    metrics is still a parity book.
     """
-    matched_paper = [
-        paper_pnls[paper_position] for paper_position, _ in matched_pairs
-    ]
-    matched_frozen = [
-        frozen_pnls[frozen_position] for _, frozen_position in matched_pairs
-    ]
     drift_p = _paired_bootstrap_p(
-        np.asarray(matched_frozen, dtype=np.float64),
-        np.asarray(matched_paper, dtype=np.float64),
+        matched_frozen,
+        matched_paper,
         n_boot=n_bootstrap,
         seed=seed,
     )
     dd_breach = bool(dd_comparison["breach"])
     return {
         "mean_drift_p_le0": drift_p,
+        "paper_sharpe_per_trade": per_trade_sharpe(matched_paper),
+        "frozen_sharpe_per_trade": per_trade_sharpe(matched_frozen),
+        "paper_sortino_per_trade": sortino_ratio(
+            matched_paper, periods=1, min_observations=30
+        )["sortino_per_period"],
+        "frozen_sortino_per_trade": sortino_ratio(
+            matched_frozen, periods=1, min_observations=30
+        )["sortino_per_period"],
         "n_matched": n_matched,
         "paper_max_streak": paper_streak,
         "frozen_max_streak": frozen_streak,
@@ -1612,6 +1633,10 @@ def _run_leg_stages(  # noqa: PLR0911 (one return per stage gate, house style)
         _max_drawdown_r(frozen_pnls_all),
         dd_breach_ratio,
     )
+    # side-channel for the portfolio pooling (informational keys only):
+    # the stage-6 matched arrays, None until stage 6 actually runs
+    matched_paper_r: np.ndarray | None = None
+    matched_frozen_r: np.ndarray | None = None
     spec_bar_delta = int(spec["bar_delta_min"])
     feed_granularity = {
         "paper": bar_delta_min_paper,
@@ -1650,9 +1675,18 @@ def _run_leg_stages(  # noqa: PLR0911 (one return per stage gate, house style)
         }
 
     def statistical_scaffold(n_matched: int) -> dict[str, Any]:
-        """Report shape for runs where stage 6 never executed."""
+        """Report shape for runs where stage 6 never executed.
+
+        The four per-trade informational keys are ``None`` (not NaN):
+        stage 6 never ran, so the matched arrays were never assembled
+        and there is nothing honest to report for them.
+        """
         return {
             "mean_drift_p_le0": float("nan"),
+            "paper_sharpe_per_trade": None,
+            "frozen_sharpe_per_trade": None,
+            "paper_sortino_per_trade": None,
+            "frozen_sortino_per_trade": None,
             "n_matched": n_matched,
             "paper_max_streak": paper_streak,
             "frozen_max_streak": frozen_streak,
@@ -1698,6 +1732,11 @@ def _run_leg_stages(  # noqa: PLR0911 (one return per stage gate, house style)
             "operational_report": operational_report,
             "statistical_report": statistical_report,
             "dd_comparison": dd_comparison,
+            # private side-channel (dropped by _build_leg_verdict, so it
+            # never reaches the public LegVerdict): retained matched
+            # arrays for the portfolio pooling; None before stage 6
+            "matched_paper_r": matched_paper_r,
+            "matched_frozen_r": matched_frozen_r,
             "feed_granularity": feed_granularity,
             "sizing_rule": sizing_rule,
             "funding_alignment": (
@@ -1805,10 +1844,25 @@ def _run_leg_stages(  # noqa: PLR0911 (one return per stage gate, house style)
             n_matched=n_matched,
         )
     # --- stage 6: statistics --------------------------------------------
+    # single pairing extraction: the matched R arrays feed the stage-6
+    # report AND ride on the private side-channel for portfolio pooling
+    matched_paper_r = np.asarray(
+        [
+            paper_pnls_all[paper_position]
+            for paper_position, _ in matched_pairs
+        ],
+        dtype=np.float64,
+    )
+    matched_frozen_r = np.asarray(
+        [
+            frozen_pnls_all[frozen_position]
+            for _, frozen_position in matched_pairs
+        ],
+        dtype=np.float64,
+    )
     statistical_report = _run_statistical_stage(
-        matched_pairs,
-        paper_pnls_all.tolist(),
-        frozen_pnls_all.tolist(),
+        matched_paper_r,
+        matched_frozen_r,
         paper_streak=paper_streak,
         frozen_streak=frozen_streak,
         n_matched=n_matched,
@@ -1907,7 +1961,16 @@ def _aggregate_stage_results(
     """Merge per-leg stage results into the portfolio-level payload.
 
     The drawdown comparison keeps the WORST leg's ratio; the drift
-    p-value keeps the most significant (smallest finite) one.
+    p-value keeps the most significant (smallest finite) one; the four
+    informational per-trade metrics are POOLED: the per-leg matched R
+    arrays (retained on the private ``matched_paper_r`` /
+    ``matched_frozen_r`` side-channel -- chosen over recomputing the
+    pairing here, which is impossible at merge time since only the
+    per-leg payloads are reachable, and over pooling the per-leg
+    scalars, which is not a statistic) are concatenated into one
+    series per side and the metrics run on the pooled series.  Legs
+    killed before stage 6 retain no arrays and contribute nothing --
+    honest, matching their ``None`` per-leg keys.
     """
     result_values = list(results.values())
     parity_reports = [result["parity_report"] for result in result_values]
@@ -1977,8 +2040,47 @@ def _aggregate_stage_results(
     frozen_streak = max(
         int(entry["frozen_max_streak"]) for entry in statistical_reports
     )
+    # pooling of the informational per-trade keys: paper values pooled
+    # across legs into one series; sharpe/sortino on the pooled series
+    # (R-normalized).  Only legs that ran stage 6 retain their matched
+    # arrays on the private side-channel
+    paper_arrays: list[np.ndarray] = []
+    frozen_arrays: list[np.ndarray] = []
+    for result in result_values:
+        paper_side = result["matched_paper_r"]
+        if paper_side is not None:
+            paper_arrays.append(paper_side)
+        frozen_side = result["matched_frozen_r"]
+        if frozen_side is not None:
+            frozen_arrays.append(frozen_side)
+    pooled_paper = np.concatenate(paper_arrays) if paper_arrays else None
+    pooled_frozen = np.concatenate(frozen_arrays) if frozen_arrays else None
     merged_statistical = {
         "mean_drift_p_le0": merged_drift_p,
+        "paper_sharpe_per_trade": (
+            per_trade_sharpe(pooled_paper)
+            if pooled_paper is not None
+            else None
+        ),
+        "frozen_sharpe_per_trade": (
+            per_trade_sharpe(pooled_frozen)
+            if pooled_frozen is not None
+            else None
+        ),
+        "paper_sortino_per_trade": (
+            sortino_ratio(pooled_paper, periods=1, min_observations=30)[
+                "sortino_per_period"
+            ]
+            if pooled_paper is not None
+            else None
+        ),
+        "frozen_sortino_per_trade": (
+            sortino_ratio(pooled_frozen, periods=1, min_observations=30)[
+                "sortino_per_period"
+            ]
+            if pooled_frozen is not None
+            else None
+        ),
         "n_matched": sum(
             int(entry["n_matched"]) for entry in statistical_reports
         ),
@@ -2051,6 +2153,10 @@ def _aggregate_stage_results(
         "operational_report": merged_operational,
         "statistical_report": merged_statistical,
         "dd_comparison": dict(worst_dd["dd_comparison"]),
+        # private side-channel continuity (pooled series; unused by the
+        # metadata builders, which construct their dicts explicitly)
+        "matched_paper_r": pooled_paper,
+        "matched_frozen_r": pooled_frozen,
         "feed_granularity": merged_feed,
         "sizing_rule": merged_sizing,
         "funding_alignment": merged_funding,
@@ -2384,7 +2490,9 @@ def run_paper_protocol(
     trade-level match when both data-checks were skipped — a
     parity-only attestation, never proof the edge is real.
     ``dd_comparison`` is populated on EVERY verdict, including
-    ``PARITY_FAIL`` killed at any stage.
+    ``PARITY_FAIL`` killed at any stage.  sharpe/sortino in
+    ``statistical_report`` are informational; they never affect the
+    verdict or issues.
 
     Class-specific sections (``funding``, ``pnl_decomposition``) are
     opt-in via ``frozen_spec``: absence = skipped, not inferred.

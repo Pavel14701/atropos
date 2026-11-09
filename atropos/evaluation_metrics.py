@@ -10,11 +10,13 @@ the probabilistic Sharpe ratio).
 Functions
 ---------
 ``sharpe_ratio``     annualized SR + block-bootstrap CI
+``sortino_ratio``    annualized Sortino + downside deviation
 ``max_drawdown``     max peak-to-trough drawdown + underwater duration
 ``calmar_ratio``     CAGR / |max drawdown|
 ``deflated_sharpe``  DSR + p-value under ``n_trials`` strategy trials
 ``profit_factor``    gross wins / gross losses
 ``win_rate``         win rate + Wilson score CI
+``payoff_stats``     hit rate + avg win / avg loss payoff table
 ``turnover``         annualized total (two-sided) turnover of positions
 
 Run ``python -m atropos.evaluation_metrics`` for a synthetic demo.
@@ -42,8 +44,10 @@ __all__ = [
     "deflated_sharpe_from_moments",
     "equity_from_returns",
     "max_drawdown",
+    "payoff_stats",
     "profit_factor",
     "sharpe_ratio",
+    "sortino_ratio",
     "turnover",
     "win_rate",
 ]
@@ -170,6 +174,105 @@ def sharpe_ratio(
 
 
 # ----------------------------------------------------------------------------
+# Sortino
+# ----------------------------------------------------------------------------
+def sortino_ratio(
+    returns: Any,
+    *,
+    target: float = 0.0,
+    periods: int = 252,
+    min_observations: int = 30,
+) -> dict[str, Any]:
+    """Annualized Sortino ratio: excess mean over downside deviation.
+
+    ``target`` is an ANNUAL rate (decimal); it is de-periodized
+    internally exactly like :func:`sharpe_ratio` de-periodizes ``rf``
+    (``target_per_period = target / periods``).  The downside
+    deviation is the root mean square of the BELOW-TARGET excess
+    returns with a FULL-SAMPLE denominator (every observation enters,
+    above-target ones as an exact zero): the second moment of the loss
+    tail measured on the whole sample, not on the tail alone, so the
+    figure is comparable across books with different loss frequencies.
+
+    None gate: below ``min_observations`` observations BOTH ratio
+    values are ``None`` -- downside deviation on fewer than
+    ``min_observations`` observations is noise -- while ``downside_dev``
+    is still computed and returned (it is the raw input statistic).
+    Zero downside deviation is never divided through: a stream that
+    never fell below the target with a positive mean excess reads
+    ``inf``; the zero-upside degenerate (all excess exactly at target)
+    reads NaN -- documented, not a fabricated finite value.
+
+    Returns ``{sortino, sortino_per_period, downside_dev, target, n,
+    min_observations}``.
+
+    Raises:
+        ValueError: if ``periods`` / ``min_observations`` is not an
+            integer >= 1 or ``target`` is not a finite number; raised
+            before the data is touched.
+
+    Example::
+
+        >>> stream = [0.02] * 20 + [-0.01] * 10
+        >>> out = sortino_ratio(stream, periods=252)
+        >>> out["n"], out["min_observations"]
+        (30, 30)
+        >>> round(out["sortino_per_period"], 6)
+        1.732051
+        >>> round(out["sortino"], 6)
+        27.495454
+        >>> short = sortino_ratio([0.02, -0.01] * 12)
+        >>> short["sortino"] is None and short["sortino_per_period"] is None
+        True
+        >>> all_up = sortino_ratio([0.01] * 40)
+        >>> all_up["downside_dev"], all_up["sortino_per_period"]
+        (0.0, inf)
+    """
+    periods = validate_int("periods", periods)
+    min_observations = validate_int("min_observations", min_observations)
+    _validate_finite("target", target)
+    rets = clean_1d(returns)
+    n_obs = int(rets.size)
+    target_per_period = float(target) / float(periods)
+    excess = rets - target_per_period
+    if n_obs == 0:
+        # empty stream: no mean, no deviation (and np.mean on an empty
+        # slice would warn) -- the None gate below carries the answer
+        downside_dev = float("nan")
+        mean_excess = float("nan")
+    else:
+        downside = np.minimum(excess, 0.0)
+        # full-sample denominator (n, not the downside count): zeroes
+        # from above-target observations stay in the mean
+        downside_dev = float(np.sqrt(np.mean(downside**2)))
+        mean_excess = float(np.mean(excess))
+    if n_obs < min_observations:
+        sortino: float | None = None
+        sortino_per_period: float | None = None
+    elif downside_dev == 0.0:
+        if mean_excess > 0.0:
+            sortino_per_period = float("inf")
+            sortino = float("inf")
+        else:
+            # zero deviation AND non-positive mean excess can only
+            # mean every excess return is exactly zero: no upside, no
+            # downside, no honest ratio
+            sortino_per_period = float("nan")
+            sortino = float("nan")
+    else:
+        sortino_per_period = mean_excess / downside_dev
+        sortino = sortino_per_period * float(np.sqrt(periods))
+    return {
+        "sortino": sortino,
+        "sortino_per_period": sortino_per_period,
+        "downside_dev": downside_dev,
+        "target": float(target),
+        "n": n_obs,
+        "min_observations": int(min_observations),
+    }
+
+
+# ----------------------------------------------------------------------------
 # drawdown / calmar
 # ----------------------------------------------------------------------------
 def max_drawdown(equity_curve: Any) -> dict[str, Any]:
@@ -239,7 +342,9 @@ def max_drawdown(equity_curve: Any) -> dict[str, Any]:
     }
 
 
-def calmar_ratio(returns: Any, periods: int = 252) -> dict[str, Any]:
+def calmar_ratio(
+    returns: Any, periods: int = 252, *, period_years: float | None = None
+) -> dict[str, Any]:
     """Calmar ratio: annualized geometric return over |max drawdown|.
 
     ``mdd <= 0`` always holds (drawdown is computed as ``eq/peak - 1``),
@@ -247,11 +352,26 @@ def calmar_ratio(returns: Any, periods: int = 252) -> dict[str, Any]:
     that never fell below a running peak earns an infinite Calmar for
     positive CAGR.  ``mdd >= 0`` is kept as a defensive guard only.
 
+    ``period_years`` overrides the active-period annualization with a
+    calendar span (use e.g. 1.38 for 71 active days over 502 calendar
+    days); ``mdd`` is unchanged (zeros are compounding-neutral).
+
+    Args:
+        returns: 1-D array-like of per-period returns (NaNs dropped).
+        periods: periods per year (252 for daily data); the
+            active-period annualization behind CAGR when
+            ``period_years`` is ``None``.
+        period_years: optional CALENDAR span in years that drives CAGR
+            instead of the active-period count (``None`` -- the
+            default -- keeps the exact historical behavior; the
+            drawdown leg never depends on it).
+
     Returns ``{calmar, cagr, mdd, n}``.
 
     Raises:
-        ValueError: if ``periods`` is not an integer >= 1; raised
-            before the data is touched.
+        ValueError: if ``periods`` is not an integer >= 1, or
+            ``period_years`` is given and not a finite number > 0;
+            raised before the data is touched.
 
     Example::
 
@@ -261,6 +381,10 @@ def calmar_ratio(returns: Any, periods: int = 252) -> dict[str, Any]:
         True
     """
     periods = validate_int("periods", periods)
+    if period_years is not None:
+        _validate_finite("period_years", period_years)
+        if float(period_years) <= 0.0:
+            raise ValueError(f"period_years must be > 0, got {period_years}")
     rets = clean_1d(returns)
     n_obs = int(rets.size)
     if n_obs < 2:
@@ -271,7 +395,10 @@ def calmar_ratio(returns: Any, periods: int = 252) -> dict[str, Any]:
             "n": n_obs,
         }
     eq = np.cumprod(1.0 + rets)
-    years = n_obs / float(periods)
+    if period_years is not None:
+        years = float(period_years)
+    else:
+        years = n_obs / float(periods)
     if eq[-1] <= 0:
         cagr = float("nan")
     else:
@@ -651,6 +778,98 @@ def win_rate(trades: Any, ci_level: float = 0.95) -> dict[str, Any]:
         "ci_low": float(lo),
         "ci_high": float(hi),
         "ci_level": float(ci_level),
+        "n": n_obs,
+    }
+
+
+def payoff_stats(trades: Any) -> dict[str, Any]:
+    """Hit rate and payoff asymmetry of a trade-PnL (R) stream.
+
+    ``hit_rate = n_winners / (n_winners + n_losers)``: BREAKEVEN
+    trades are EXCLUDED from the denominator -- this differs from
+    :func:`win_rate`, whose full-n convention counts zero-PnL trades
+    in the denominator; both are single-home and must never be glued.
+    Undefined values are NaN (numpy ``nan``, the house honest-missing
+    marker), never a fabricated 0, and the all-breakeven book never
+    raises ZeroDivisionError.
+
+    Reading discipline -- hit_rate is strategy-class-dependent; a high
+    hit rate does not mean high edge (a mean-reversion book can show
+    80% hit rate with a negative Sharpe).  42% at +3R/-1R is Sharpe
+    ~2.5, 42% at +1R/-1R is zero -- read ``hit_rate`` ONLY together
+    with ``avg_win_r`` / ``avg_loss_r`` / ``win_loss_ratio``, never as
+    a gate.  ``avg_loss_r`` is a POSITIVE magnitude (the mean absolute
+    loss), so ``win_loss_ratio`` above 1.0 means the average win
+    outruns the average loss.  A lossless book WITH winners reads
+    ``avg_loss_r = 0.0`` (mirroring :func:`profit_factor`'s
+    ``gross_loss = 0.0``) and ``win_loss_ratio = inf``; a book with no
+    PnL at all reads NaN on every average.
+
+    Returns ``{hit_rate, avg_win_r, avg_loss_r, win_loss_ratio,
+    n_winners, n_losers, n_breakeven, n}`` -- every key always present,
+    NaN where a value is undefined.
+
+    Example::
+
+        >>> out = payoff_stats([3.0, 3.0, -1.0, -1.0, 1.0])
+        >>> out["hit_rate"]
+        0.6
+        >>> out["n_winners"], out["n_losers"], out["n_breakeven"], out["n"]
+        (3, 2, 0, 5)
+        >>> round(out["avg_win_r"], 12)
+        2.333333333333
+        >>> out["avg_loss_r"]
+        1.0
+        >>> round(out["win_loss_ratio"], 12)
+        2.333333333333
+        >>> breakeven = payoff_stats([3.0, 0.0, -1.0])
+        >>> breakeven["hit_rate"]
+        0.5
+        >>> lossless = payoff_stats([2.0, 1.0])
+        >>> lossless["avg_loss_r"], lossless["win_loss_ratio"]
+        (0.0, inf)
+        >>> flat = payoff_stats([0.0, 0.0])
+        >>> math.isnan(flat["hit_rate"]), math.isnan(flat["win_loss_ratio"])
+        (True, True)
+    """
+    pnl = clean_1d(trades)
+    n_obs = int(pnl.size)
+    wins = pnl[pnl > 0]
+    losses = pnl[pnl < 0]
+    n_winners = int(wins.size)
+    n_losers = int(losses.size)
+    n_breakeven = int(np.count_nonzero(pnl == 0.0))
+    denom = n_winners + n_losers
+    # breakeven trades stay OUT of the denominator: an all-breakeven
+    # bot must not crash the report, so the ratio degrades to NaN
+    hit_rate = float(n_winners / denom) if denom > 0 else float("nan")
+    avg_win_r = float(np.mean(wins)) if n_winners > 0 else float("nan")
+    if n_losers > 0:
+        # POSITIVE magnitude: the mean of the (negative) losses,
+        # sign-flipped
+        avg_loss_r = float(abs(np.mean(losses)))
+    elif n_winners > 0:
+        # lossless book: the profit_factor gross_loss analogue, so the
+        # payoff ratio can read inf instead of a fake NaN
+        avg_loss_r = 0.0
+    else:
+        avg_loss_r = float("nan")
+    if math.isnan(avg_win_r) or math.isnan(avg_loss_r):
+        win_loss_ratio = float("nan")
+    elif avg_loss_r == 0.0:
+        # winners present with no average loss to speak of: unbounded
+        # payoff, guarded against ZeroDivisionError
+        win_loss_ratio = float("inf")
+    else:
+        win_loss_ratio = float(avg_win_r / avg_loss_r)
+    return {
+        "hit_rate": hit_rate,
+        "avg_win_r": avg_win_r,
+        "avg_loss_r": avg_loss_r,
+        "win_loss_ratio": win_loss_ratio,
+        "n_winners": n_winners,
+        "n_losers": n_losers,
+        "n_breakeven": n_breakeven,
         "n": n_obs,
     }
 

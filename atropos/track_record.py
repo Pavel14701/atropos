@@ -36,6 +36,10 @@ import numpy as np
 
 from atropos._utils import clean_1d
 
+# single-home metric reuse; the module-local arithmetic above exists
+# for the divergence z-test (Lo 2002 SE), not to avoid metric reuse
+from atropos.evaluation_metrics import calmar_ratio, sortino_ratio
+
 __all__ = [
     "DrawdownNotComputable",
     "drawdown_floor_check",
@@ -418,9 +422,13 @@ def live_verdict(
 
     Returns:
         Dict with ``verdict``, ``reason``, ``n_obs``,
-        ``live_sharpe``, ``expected_sharpe``, ``z``, ``se_live``,
+        ``live_sharpe``, ``live_sortino``, ``live_cagr``,
+        ``expected_sharpe``, ``z``, ``se_live``,
         ``se_expected``, ``mdd``, ``dd_breached``, ``kill_z``,
-        ``min_observations``, ``periods``.
+        ``min_observations``, ``periods``.  The two informational
+        metrics ``live_sortino`` / ``live_cagr`` ride on every verdict
+        path and are never read by the verdict / reason / drawdown
+        logic.
 
     Raises:
         ValueError: on invalid prereg parameters (``expected_sharpe``,
@@ -447,11 +455,34 @@ def live_verdict(
 
     rets = clean_1d(live_returns)
     n_obs = int(rets.size)
+    # informational metrics: computed once, carried on EVERY verdict
+    # path, and never read by the verdict / reason / dd_breached logic
+    # below.  ``live_cagr`` keeps the ACTIVE-period convention
+    # (annualized by ``periods`` active observations -- live_verdict
+    # has no date index), deliberately distinct from the pipeline's
+    # ``strategy_metrics`` block, whose CAGR/Calmar annualize with the
+    # CALENDAR span of the report index.  ``live_sortino`` is None
+    # below 30 observations (the metric's own gate; the verdict
+    # decision point ``min_observations`` defaults to 252, so on real
+    # tracks it is normally a number).
+    live_sortino = sortino_ratio(rets, periods=periods)["sortino"]
+    try:
+        live_cagr = calmar_ratio(rets, periods=periods)["cagr"]
+    except ValueError:
+        # a levered path whose equity goes non-positive mid-way has no
+        # multiplicative CAGR (max_drawdown refuses a non-positive
+        # curve): honest NaN for the read-out, while the verdict itself
+        # stays with the drawdown-barrier logic above.  ``periods`` is
+        # already validated, so ValueError here can only come from the
+        # equity construction -- the catch stays de facto narrow.
+        live_cagr = float("nan")
     result: dict[str, Any] = {
         "verdict": "INCONCLUSIVE",
         "reason": "empty_track_record",
         "n_obs": n_obs,
         "live_sharpe": float("nan"),
+        "live_sortino": live_sortino,
+        "live_cagr": live_cagr,
         "expected_sharpe": float(expected_sharpe),
         "z": float("nan"),
         "se_live": float("nan"),

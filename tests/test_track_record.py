@@ -324,3 +324,31 @@ def test_run_all_examples_asserts_all_four_fates() -> None:
     # the four canonical verdicts (LIVE_OK, divergence kill, DD kill,
     # too short) must hold
     run_all_examples()
+
+
+# -- informational metrics wave: live_sortino / live_cagr --------------------
+
+
+def test_live_verdict_informational_keys() -> None:
+    """live_sortino/live_cagr ride the verdict as read-outs.
+
+    They never touch the verdict token: on the existing kill fixture
+    the verdict stays LIVE_KILLED while live_sortino is None (n=3
+    < 30, the sortino gate) and on a 40-observation OK-track both are
+    numbers.  Mutation: verdict logic reading the new keys -> the
+    kill-path asserts fail -> caught.
+    """
+    recovering = [0.5, -4.0 / 3.0, -1.8]
+    verdict = live_verdict(
+        recovering, 1.5, n_backtest=2000, min_observations=8
+    )
+    assert verdict["verdict"] == "LIVE_KILLED"  # unchanged by the wave
+    assert verdict["live_sortino"] is None  # n=3 < 30
+    assert verdict["live_cagr"] is not None  # active-convention cagr
+
+    rng = np.random.default_rng(11)
+    steady = (0.004 + 0.01 * rng.standard_normal(40)).tolist()
+    ok = live_verdict(steady, 0.5, n_backtest=2000, min_observations=8)
+    assert ok["verdict"] in {"LIVE_OK", "LIVE_KILLED", "INCONCLUSIVE"}
+    assert ok["live_sortino"] is not None  # n=40 >= 30
+    assert ok["live_cagr"] is not None

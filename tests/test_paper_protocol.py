@@ -715,3 +715,80 @@ def test_error_paths() -> None:
     _expect_value_error(
         lambda: _run(base_paper, base_frozen, base_spec, min_n_trades=0)
     )
+
+
+# -- informational metrics wave: risk block, never a gate --------------------
+
+
+def test_paper_report_informational_block() -> None:
+    """sharpe/sortino per trade: three assembly sites, one key shape.
+
+    stage-6 (n=40) -> real numbers, paper side == per_trade_sharpe on
+    the matched (== all) paper pnls; scaffold (INSUFFICIENT_N at
+    n=12) -> all four keys present with None; sortino per-trade is a
+    number at n>=30.  Mutation: a key dropped from any site -> caught.
+    """
+    from atropos.backtest_metrics import (  # noqa: PLC0415 (test-local)
+        per_trade_sharpe,
+    )
+
+    frozen_rows = _rows(40)
+    paper_rows = [dict(row) for row in frozen_rows]
+    for row in paper_rows:
+        row["pnl_r"] = row["pnl_r"] - 0.005
+    paper = _paper_frame(paper_rows)
+    frozen = _frozen_dict({"c_zone": frozen_rows}, _spec())
+    verdict = _run(paper, frozen, _spec())
+    stats = verdict["statistical_report"]
+    required = {
+        "paper_sharpe_per_trade",
+        "frozen_sharpe_per_trade",
+        "paper_sortino_per_trade",
+        "frozen_sortino_per_trade",
+    }
+    assert required <= set(stats)
+    expected = per_trade_sharpe(
+        np.array([row["pnl_r"] for row in paper_rows], dtype=float)
+    )
+    assert stats["paper_sharpe_per_trade"] == pytest.approx(expected)
+    assert stats["paper_sortino_per_trade"] is not None  # n=40 >= 30
+
+    small = _rows(12)
+    verdict_small = _run(
+        _paper_frame(small),
+        _frozen_dict({"c_zone": [dict(row) for row in small]}, _spec()),
+        _spec(),
+    )
+    stats_small = verdict_small["statistical_report"]
+    assert required <= set(stats_small)  # scaffold carries the shape
+    assert stats_small["paper_sharpe_per_trade"] is None
+    assert stats_small["paper_sortino_per_trade"] is None
+
+
+def test_metrics_do_not_override_verdict() -> None:
+    """THE pin: a fantastic paper Sharpe cannot flip a kill verdict.
+
+    Both books look genuinely attractive (per-trade Sharpe ~2.35 on
+    the 6-bar cycle [1.0 x5, -0.01]) yet every paper trade drifts
+    -0.005R below its frozen twin (inside the parity tolerance; the
+    PAIRED diff is a constant, so significance is independent of the
+    books' dispersion): STATISTICAL_FAIL stands, with the metrics in
+    the report as read-outs.  Mutation: any 'if sharpe > 2:
+    SURVIVES' shortcut -> this fails -> caught.
+    """
+    frozen_rows = _rows(40)
+    fantasy = (1.0, 1.0, 1.0, 1.0, 1.0, -0.01)
+    for index, row in enumerate(frozen_rows):
+        row["pnl_r"] = fantasy[index % 6]
+    paper_rows = [dict(row) for row in frozen_rows]
+    for row in paper_rows:
+        row["pnl_r"] = row["pnl_r"] - 0.005
+    paper = _paper_frame(paper_rows)
+    frozen = _frozen_dict({"c_zone": frozen_rows}, _spec())
+    verdict = _run(paper, frozen, _spec())
+    stats = verdict["statistical_report"]
+    assert stats["paper_sharpe_per_trade"] > 2.0  # above any sane gate
+    assert stats["frozen_sharpe_per_trade"] > 2.0  # both books look good
+    assert verdict["overall_verdict"] == "STATISTICAL_FAIL"
+    assert verdict["verdict_class"] == "NEEDS_ANALYSIS"
+    assert verdict["killed_by_stage"] == 6
