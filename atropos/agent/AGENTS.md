@@ -5,6 +5,11 @@ layer (`%APPDATA%/atropos/agent` / `~/.config/atropos/agent`) and the
 project layer (`./.atropos/agent`) may replace, extend, or disable
 these files and skills. Diagnostics: `atropos agent-doctor`.
 
+Positioning: Atropos is a falsification toolkit for trading
+hypotheses — backtest kill protocol, feature decomposition, paper
+parity — with machine-checkable instrument routing. The kill protocol
+is the core of the backtest tier, not the whole product.
+
 ## Hypothesis workflow (5 steps)
 
 1. **Graveyard check.** Before anything: search `hypotheses/graveyard/`
@@ -54,9 +59,9 @@ from atropos.track_record import live_verdict
 # production stage for a deployed SURVIVES; LIVE_OK ≠ confirmation.
 ```
 
-## Skills (12)
+## Skills (15)
 
-Core: `01-preregister`, `02-run-pipeline` (the 14-verdict table),
+Core: `01-preregister`, `02-run-pipeline` (verdicts: see the ensemble_pipeline docstring),
 `03-read-graveyard`, `04-run-ml-kill-protocol` (the ML chain:
 features→target, walk-forward, gates). Stage 1-7 protocols:
 `11-premise-check`, `12-null-control`, `13-signal-test`,
@@ -64,8 +69,11 @@ features→target, walk-forward, gates). Stage 1-7 protocols:
 `16-walkforward-calendar`. After a SURVIVES: `17-backtest-pipeline`
 (simulate → state machine → ranking → admission → metrics; the
 tradability test), then `18-read-portfolio-results` (the multi-slot
-book: exposure, event equity, the three portfolio gates). The stage
-order is fixed: 1 → 2 → 3 → 4 → 5 → 6, each stage cheaper than the
+book: exposure, event equity, the three portfolio gates).
+Deployment layer: `19-instrument-routing` (family -> instruments via
+PLAN_REGISTRY), `20-paper-parity` (forward parity against the frozen
+spec), `21-units-and-identities` (units law, half-normal identity).
+The stage order is fixed: 1 → 2 → 3 → 4 → 5 → 6, each stage cheaper than the
 next. List: `atropos agent-context --list-skills`; text:
 `--skill=NAME`.
 

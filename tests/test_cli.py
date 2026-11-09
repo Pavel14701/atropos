@@ -22,7 +22,7 @@ from atropos.cli import (
     main,
 )
 
-PACKAGE_TWELVE = [
+PACKAGE_FIFTEEN = [
     "01-preregister",
     "02-run-pipeline",
     "03-read-graveyard",
@@ -35,6 +35,9 @@ PACKAGE_TWELVE = [
     "16-walkforward-calendar",
     "17-backtest-pipeline",
     "18-read-portfolio-results",
+    "19-instrument-routing",
+    "20-paper-parity",
+    "21-units-and-identities",
 ]
 
 
@@ -76,14 +79,14 @@ def test_main_without_command_exits_with_usage() -> None:
 def test_list_skills_pinned_layer(
     workdir: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """--list-skills prints the twelve packaged skills, exit 0."""
+    """--list-skills prints the fifteen packaged skills, exit 0."""
     _, user_dir = workdir
     code, out, err = _run(
         ["agent-context", "--list-skills"], user_dir, capsys
     )
     assert code == 0
     assert err == ""
-    assert out.splitlines() == PACKAGE_TWELVE
+    assert out.splitlines() == PACKAGE_FIFTEEN
 
 
 def test_content_is_default_action(
@@ -112,8 +115,8 @@ def test_show_sources_defaults(
     assert "package  " in out
     assert "AGENTS.md: default" in out
     assert "CLAUDE.md: default" in out
-    assert "skills: 12 active, 0 disabled/empty" in out
-    for name in PACKAGE_TWELVE:
+    assert "skills: 15 active, 0 disabled/empty" in out
+    for name in PACKAGE_FIFTEEN:
         assert name in out
 
 
@@ -143,7 +146,7 @@ def test_skills_only_prints_every_active_skill(
     _, user_dir = workdir
     code, out, _ = _run(["agent-context", "--skills-only"], user_dir, capsys)
     assert code == 0
-    for name in PACKAGE_TWELVE:
+    for name in PACKAGE_FIFTEEN:
         assert f"===== skill: {name} =====" in out
 
 
@@ -212,7 +215,7 @@ def test_skill_override_operations(
     _write(skills_dir / ".disabled", "13-signal-test\n")
     code, out, _ = _run(["agent-context", "--show-sources"], user_dir, capsys)
     assert code == 0
-    assert "skills: 12 active, 1 disabled/empty" in out
+    assert "skills: 15 active, 1 disabled/empty" in out
     assert f"{'01-preregister':<26} replaced" in out
     assert f"{'new-thing':<26} added" in out
     assert f"{'13-signal-test':<26} disabled" in out
@@ -525,9 +528,9 @@ def test_full_verification_scenario(
     tmp_path, user_dir = workdir
     project = tmp_path / ".atropos" / "agent"
 
-    # 1. defaults: twelve skills, both files from the package
+    # 1. defaults: fifteen skills, both files from the package
     code, out, _ = _run(["agent-context", "--list-skills"], user_dir, capsys)
-    assert out.splitlines() == PACKAGE_TWELVE
+    assert out.splitlines() == PACKAGE_FIFTEEN
 
     # 2. project replacement changes the effective AGENTS.md
     _write(project / "AGENTS.md", "# VERIFICATION REPLACEMENT")

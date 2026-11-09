@@ -1,7 +1,7 @@
 """Atropos agent context: packaged default layer + override resolution.
 
 This package ships the default agent context (``AGENTS.md``,
-``CLAUDE.md`` and twelve methodology skills) and resolves it against
+``CLAUDE.md`` and fifteen methodology skills) and resolves it against
 the user layer (``%APPDATA%/atropos/agent`` or ``~/.config/atropos/agent``)
 and the project layer (``./.atropos/agent``).  The resolution engine
 and its layer semantics live in :mod:`atropos.agent._resolution`.

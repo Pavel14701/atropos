@@ -6,7 +6,7 @@
 name = "atropos-agent-context"
 version = "0.1.0"          # must match the VERSION file
 schema = 1
-description = "Default agent context: user workflow + 12 skills"
+description = "Default agent context: user workflow + 15 skills"
 
 [[files]]
 path = "AGENTS.md"
@@ -107,4 +107,25 @@ name = "18-read-portfolio-results"
 path = "skills/18-read-portfolio-results.md"
 description = "Read portfolio-level results from the backtest pipeline"
 when_to_use = "after running run_portfolio or run_portfolio_replay"
+version = "0.1.0"
+
+[[skills]]
+name = "19-instrument-routing"
+path = "skills/19-instrument-routing.md"
+description = "Route a strategy family to its correct instruments via PLAN_REGISTRY; declare strategy_family for enforce mode"
+when_to_use = "Before any pipeline or battery run on a new leg/strategy"
+version = "0.1.0"
+
+[[skills]]
+name = "20-paper-parity"
+path = "skills/20-paper-parity.md"
+description = "Judge a deployed paper leg with run_paper_protocol - forward parity against the frozen spec, six verdicts, frozen success criteria"
+when_to_use = "When a paper run has closed trades and the question is implementation parity"
+version = "0.1.0"
+
+[[skills]]
+name = "21-units-and-identities"
+path = "skills/21-units-and-identities.md"
+description = "The units law (1R = 1% of equity), the half-normal identity, additive-vs-multiplicative, metrics never gate"
+when_to_use = "Before quoting any performance number or interpreting a metrics block"
 version = "0.1.0"
