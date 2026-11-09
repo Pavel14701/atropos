@@ -155,6 +155,13 @@ from atropos.evaluation_metrics import (
     sortino_ratio,
 )
 from atropos.incremental_regression import curve_summary, specification_curve
+from atropos.instrument_map import (
+    InstrumentPlan,
+    StrategyFamily,
+    audit_report,
+    route,
+    validate_family,
+)
 from atropos.monte_carlo import max_drawdown_distribution, sharpe_distribution
 from atropos.null_control_suite import (
     calendar_control,
@@ -1771,6 +1778,7 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
     hypothesis_config: dict[str, Any] | None = None,
     *,
     prereg_hash: str | None = None,
+    strategy_family: str | None = None,
 ) -> dict[str, Any]:
     """Chain the adversarial stages; kill on the first FAIL.
 
@@ -1805,13 +1813,23 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
             drift away from the spec it was preregistered under;
             ``None`` (the default) leaves the key ``None`` and the
             run unanchored.
+        strategy_family: keyword-only instrument-routing override (a
+            :func:`atropos.instrument_map.validate_family` literal).
+            Resolution order: the explicit kwarg WINS over
+            ``hypothesis_config["strategy_family"]``; if BOTH are set
+            and differ, ValueError; if only one is set it is
+            validated (an unknown name raises); if NEITHER is set the
+            run stays in audit mode (family ``None``, nothing
+            enforced).  A family set through ``hypothesis_config``
+            also flows into the merged ``config`` echoed by the
+            report.
 
     Returns:
         One dict: ``{hypothesis, n_obs, date_range, overall_verdict,
         verdict_class, informative, interpretation, next_step,
         what_would_change, failed_test, active_days, strategy_metrics,
         killed_by_stage, kill_reason, stages (list of per-stage dicts),
-        config, runtime_seconds, prereg_hash}``.
+        config, runtime_seconds, prereg_hash, instrument_audit}``.
 
         ``overall_verdict`` tokens - kills: ``DEGENERATE_FEED``
         (stage-0 pre-flight: a degenerate feed column), ``ARTIFACT``,
@@ -1865,11 +1883,37 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
         hit_rate/n_trades/profit_factor are trade-stream metrics and
         live in trade-stream contexts (payoff_stats / profit_factor).
 
+        ``instrument_audit`` records the instrument-routing contract
+        (see :mod:`atropos.instrument_map`) and is built on EVERY
+        verdict path, stage-0 kills included:
+        ``{"family": <family|None>, "mode": "audit"|"enforce",
+        "violations": [...], "units_mismatch": None}``.  Family
+        ``None`` (the default) is AUDIT mode: the run behaves exactly
+        as without routing and nothing is enforced.  A resolved family
+        is ENFORCE mode: a plan forbidden entry whose concrete
+        ``stage`` is inside the stages the run would reach (series
+        mode 1-7, panel-only mode 7) raises ValueError BEFORE any
+        data work (up-front contract check), and the per-stage gates
+        re-check the same contract before each stage executes;
+        ``violations`` repeats the post-hoc
+        :func:`atropos.instrument_map.audit_report` findings for the
+        stages that DID run (normally empty - enforce prevents them,
+        and SKIPPED placeholders are excluded).  The
+        ``units_mismatch`` key is reserved and always ``None`` this
+        wave: no return-stream unit inference heuristics are
+        implemented; the key exists so the schema is stable when
+        detection lands.
+
     Raises:
         ValueError: if ``data`` lacks a usable ``returns`` stream,
             the panel inputs violate the aligner's label contract,
             the aligned feed has fewer than 300 usable observations,
-            or ``config["target"]`` is not ``"ts"`` / ``"xs"``.
+            ``config["target"]`` is not ``"ts"`` / ``"xs"``,
+            ``strategy_family`` conflicts with
+            ``hypothesis_config["strategy_family"]`` or names an
+            unknown family, or - enforce mode - the family plan
+            forbids a stage (concrete stage number) the run would
+            reach, checked up front before any data work.
     """
     t0 = time.time()
     cfg = _merge_config(hypothesis_config)
@@ -1878,6 +1922,35 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
         raise ValueError(
             f"config['target'] must be 'ts' or 'xs', got {target!r}"
         )
+    # instrument routing (opt-in, atropos.instrument_map): the explicit
+    # kwarg overrides the config; both set and differing is a loud
+    # conflict; neither set leaves the run in audit mode (family None,
+    # nothing enforced, report unchanged except the audit key)
+    config_family = (
+        hypothesis_config.get("strategy_family")
+        if hypothesis_config is not None
+        else None
+    )
+    if (
+        strategy_family is not None
+        and config_family is not None
+        and strategy_family != config_family
+    ):
+        raise ValueError(
+            f"strategy_family kwarg={strategy_family} conflicts "
+            f"with config={config_family}; pass one or align"
+        )
+    resolved_family = (
+        strategy_family if strategy_family is not None else config_family
+    )
+    family: StrategyFamily | None = (
+        validate_family(resolved_family)
+        if resolved_family is not None
+        else None
+    )
+    plan: InstrumentPlan | None = (
+        route(family) if family is not None else None
+    )
     hypothesis = str(data.get("hypothesis", ""))
     # stage-0 DEGENERATE_FEED pre-flight (B1): BEFORE _align_inputs.
     # The aligner drops NaN rows and raises its generic <300-obs
@@ -1895,6 +1968,27 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
             degenerate_which = "signal"
         elif _is_degenerate(returns_arr):
             degenerate_which = "returns"
+    # enforce-mode UP-FRONT contract check: a family whose plan
+    # forbids a stage the run WOULD reach (series mode reaches stages
+    # 1-7; panel-only mode only stage 7) is refused BEFORE any data
+    # work - the family contract is a prerequisite of the run, not a
+    # post-run annotation, so it fires ahead even of the aligner's
+    # data-volume floor.  Declaration-level bans (stage None) never
+    # gate here.  The per-stage ``_gate`` calls below stay as the
+    # pinned per-stage enforcement points (defense-in-depth; they
+    # cannot fire while stage reachability is purely mode-dependent).
+    if family is not None and plan is not None:
+        if returns_input is None or signal_input is None:
+            reachable_stages: set[int] = {7}
+        else:
+            reachable_stages = set(range(1, 8))
+        for forbidden_entry in plan["forbidden"]:
+            gate_stage = forbidden_entry.get("stage")
+            if gate_stage is not None and gate_stage in reachable_stages:
+                raise ValueError(
+                    f"stage {gate_stage} forbidden for family "
+                    f"{family}: {forbidden_entry.get('reason', '')}"
+                )
     if degenerate_which is not None:
         # the stages cannot run: nothing below the pre-flight touches
         # the feed, alignment included
@@ -1936,6 +2030,24 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
     )
 
     stages: list[dict[str, Any]] = []
+
+    def _gate(stage_no: int) -> None:
+        """Enforce-mode instrument gate before ONE stage executes.
+
+        Audit mode (family ``None``) is a no-op.  In enforce mode a
+        plan forbidden entry whose concrete ``stage`` equals this
+        stage's canonical integer (1-7) raises BEFORE the stage runs;
+        ``stage: None`` entries are declaration-level and never gate
+        at runtime.
+        """
+        if plan is None or family is None:
+            return
+        for forbidden in plan["forbidden"]:
+            if forbidden.get("stage") == stage_no:
+                raise ValueError(
+                    f"stage {stage_no} forbidden for family {family}: "
+                    f"{forbidden.get('reason', '')}"
+                )
 
     def _finish(  # noqa: PLR0912, PLR0915
         killed_stage: int | None,
@@ -2210,6 +2322,35 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
             }
             for skipped in range(next_stage, 8)
         )
+        # instrument-routing block on EVERY verdict path (stage-0
+        # kills included).  Audit mode (family None) records the mode
+        # and nothing else; enforce mode repeats the post-hoc
+        # audit_report findings for the stages that DID run - enforce
+        # prevents forbidden stages from executing and the SKIPPED
+        # placeholders are filtered out, so violations is normally
+        # empty.  units_mismatch is reserved (always None this wave):
+        # no return-stream unit inference heuristics exist yet; the
+        # key keeps the schema stable for when detection lands.
+        instrument_audit: dict[str, Any]
+        if family is not None and plan is not None:
+            ran_stages = [
+                stage_entry
+                for stage_entry in stages
+                if stage_entry.get("status") != "SKIPPED"
+            ]
+            instrument_audit = {
+                "family": family,
+                "mode": "enforce",
+                "violations": audit_report({"stages": ran_stages}, family),
+                "units_mismatch": None,
+            }
+        else:
+            instrument_audit = {
+                "family": None,
+                "mode": "audit",
+                "violations": [],
+                "units_mismatch": None,
+            }
         date_range = (
             (str(report_index.min()), str(report_index.max()))
             if len(report_index) > 0
@@ -2240,6 +2381,7 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
             "config": _json_safe_config(cfg),
             "runtime_seconds": round(time.time() - t0, 2),
             "prereg_hash": prereg_hash,
+            "instrument_audit": instrument_audit,
         }
 
     if degenerate_which is not None:
@@ -2268,6 +2410,7 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
             }
             for skipped in range(1, 7)
         )
+        _gate(7)
         s7 = _stage_7_cross_sectional(al, cfg)
         stages.append(s7)
         if s7["status"] == "FAIL":
@@ -2275,24 +2418,28 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
         return _finish(None, panel_only=True)
 
     # stage 1 -------------------------------------------------------------
+    _gate(1)
     s1 = _stage_1_null_controls(al, cfg)
     stages.append(s1)
     if s1["status"] == "FAIL":
         return _finish(1)
 
     # stage 2 -------------------------------------------------------------
+    _gate(2)
     s2 = _stage_2_specification_curve(al, cfg)
     stages.append(s2)
     if s2["status"] == "FAIL":
         return _finish(2)
 
     # stage 3 -------------------------------------------------------------
+    _gate(3)
     s3 = _stage_3_robustness_battery(al, cfg)
     stages.append(s3)
     if s3["status"] == "FAIL":
         return _finish(3)
 
     # stage 4 -------------------------------------------------------------
+    _gate(4)
     s4 = _stage_4_walkforward(al, cfg)
     stages.append(s4)
     if s4["status"] == "INCONCLUSIVE":
@@ -2330,6 +2477,7 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
     battery_threshold = float(
         _stage_by_id(stages, 3)["results"]["threshold_used"]
     )
+    _gate(5)
     s5 = _stage_5_monte_carlo(al, cfg, battery_threshold)
     stages.append(s5)
     if s5["status"] == "FAIL":
@@ -2339,6 +2487,7 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
     mdd_p50 = float(stage_five_results["mdd_distribution"]["mdd_p50"])
 
     # stage 6 -------------------------------------------------------------
+    _gate(6)
     s6 = _stage_6_predictive_eval(al, cfg, strat_returns, mdd_p50)
     stages.append(s6)
     if s6["status"] == "FAIL":
@@ -2346,6 +2495,7 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
 
     # stage 7 (optional: panel data present) --------------------------------
     if has_panel:
+        _gate(7)
         s7 = _stage_7_cross_sectional(al, cfg)
         stages.append(s7)
         if s7["status"] == "FAIL":

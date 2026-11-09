@@ -792,3 +792,91 @@ def test_metrics_do_not_override_verdict() -> None:
     assert verdict["overall_verdict"] == "STATISTICAL_FAIL"
     assert verdict["verdict_class"] == "NEEDS_ANALYSIS"
     assert verdict["killed_by_stage"] == 6
+
+
+# -- instrument routing (family + tools_used declaration) --------------------
+
+
+def test_operational_taxonomy_includes_instrument_violation() -> None:
+    """instrument_violation is the THIRD operational issue.
+
+    The parity taxonomy stays untouched (11); the operational order
+    grows to three.  B2 semantics: family violations are about WHAT
+    executed, parity issues about HOW.
+    """
+    from atropos.paper_protocol import (  # noqa: PLC0415
+        _OPERATIONAL_ISSUE_ORDER,
+    )
+
+    assert _OPERATIONAL_ISSUE_ORDER == (
+        "latency_breach",
+        "exit_direction_violation",
+        "instrument_violation",
+    )
+
+
+def test_paper_instrument_violation_enforce() -> None:
+    """tools_used ∩ forbidden ≠ ∅ -> OPERATIONAL_FAIL at stage 4.
+
+    The parity stages never run (NOT_RUN scaffold); the operational
+    report carries the instrument_violation issue.  Mutation: the
+    tools_used intersection check removed -> verdict flips ->
+    caught.
+    """
+    rows = _rows(5)
+    paper = _paper_frame(rows)
+    spec = _spec()
+    spec["c_zone"]["family"] = "rule_based_tactical"
+    spec["c_zone"]["tools_used"] = [
+        "trade_battery",
+        "ml_stage_4",
+    ]
+    frozen = _frozen_dict({"c_zone": [dict(row) for row in rows]}, spec)
+    verdict = _run(paper, frozen, spec)
+    assert verdict["overall_verdict"] == "OPERATIONAL_FAIL"
+    assert verdict["verdict_class"] == "FAIL"
+    assert verdict["killed_by_stage"] == 4
+    op = verdict["operational_report"]
+    names = {issue["name"] for issue in op["issues"]}
+    assert "instrument_violation" in names
+    assert op["stage_verdict"] == "OPERATIONAL_FAIL"
+
+
+def test_paper_instrument_clean_declaration_passes() -> None:
+    """A correct declaration (no forbidden tools) does not fire."""
+    rows = _rows(5)
+    paper = _paper_frame(rows)
+    spec = _spec()
+    spec["c_zone"]["family"] = "rule_based_tactical"
+    spec["c_zone"]["tools_used"] = ["trade_battery", "stages_1_3"]
+    frozen = _frozen_dict({"c_zone": [dict(row) for row in rows]}, spec)
+    verdict = _run(paper, frozen, spec)
+    op = verdict["operational_report"]
+    names = {issue["name"] for issue in op["issues"]}
+    assert "instrument_violation" not in names
+
+
+def test_paper_instrument_audit_mode_no_declaration() -> None:
+    """No family/tools_used in the spec -> nothing fires (audit).
+
+    The honest half-declared case (only one of the two) also stays
+    audit-mode with a note.
+    """
+    rows = _rows(5)
+    paper = _paper_frame(rows)
+    frozen = _frozen_dict({"c_zone": [dict(row) for row in rows]}, _spec())
+    verdict = _run(paper, frozen, _spec())
+    op = verdict["operational_report"]
+    names = {issue["name"] for issue in op["issues"]}
+    assert "instrument_violation" not in names
+
+    half = _spec()
+    half["c_zone"]["family"] = "rule_based_tactical"  # tools_used absent
+    verdict_half = _run(
+        paper,
+        _frozen_dict({"c_zone": [dict(row) for row in rows]}, half),
+        half,
+    )
+    op_half = verdict_half["operational_report"]
+    names_half = {issue["name"] for issue in op_half["issues"]}
+    assert "instrument_violation" not in names_half

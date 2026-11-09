@@ -57,6 +57,13 @@ stage 6.  Class-specific sections (``funding``,
 ``pnl_decomposition``) are opt-in via ``frozen_spec``: absence means
 the related check is skipped and recorded, never inferred.
 
+Instrument routing (``frozen_spec`` ``family`` / ``tools_used``)
+completes the three-tier falsification toolkit (backtest / feature /
+paper + routing): a declaration that contradicts the family's
+forbidden instruments kills the run operationally before any stage
+(``instrument_violation``); a half-declared contract is recorded as
+an audit note and never inferred.
+
 The function:
 
 * :func:`run_paper_protocol` -- validate the paper log and the frozen
@@ -83,6 +90,7 @@ import pandas as pd
 from atropos._utils import validate_int, validate_number
 from atropos.backtest_metrics import per_trade_sharpe
 from atropos.evaluation_metrics import sortino_ratio
+from atropos.instrument_map import route, validate_family
 
 __all__ = ["LegVerdict", "PaperVerdict", "run_paper_protocol"]
 
@@ -119,6 +127,7 @@ class LegVerdict(TypedDict):
     sizing_rule: dict[str, Any]
     funding_alignment: dict[str, Any] | None
     pnl_decomposition: dict[str, Any] | None
+    instrument_audit: dict[str, Any] | None
     dd_comparison: dict[str, Any]
     facts: dict[str, Any]
     label: str
@@ -140,6 +149,10 @@ class _LegStageResult(TypedDict):
     sizing_rule: dict[str, Any]
     funding_alignment: dict[str, Any] | None
     pnl_decomposition: dict[str, Any] | None
+    # instrument-routing contract (atropos.instrument_map): UNLIKE the
+    # side-channels below this IS copied into the public LegVerdict;
+    # None when the frozen spec declares no family at all
+    instrument_audit: dict[str, Any] | None
     # private side-channel, NEVER copied into the public LegVerdict:
     # the stage-6 matched R arrays are retained here so the portfolio
     # merge can pool them into one series per side (the merge site has
@@ -199,7 +212,16 @@ _PARITY_ISSUE_ORDER = (
     "unmatched_entry",
     "sizing_activation_stale",
 )
-_OPERATIONAL_ISSUE_ORDER = ("latency_breach", "exit_direction_violation")
+# instrument_violation is a FAMILY-CONTRACT violation (the frozen
+# spec's declared tools_used intersects the strategy family's
+# forbidden instruments), not a paper-vs-frozen divergence - a
+# different class from the parity issues, which is why it lives in
+# the operational taxonomy and never in _PARITY_ISSUE_ORDER.
+_OPERATIONAL_ISSUE_ORDER = (
+    "latency_breach",
+    "exit_direction_violation",
+    "instrument_violation",
+)
 _SEVERITY_CASCADE = (
     "PARITY_FAIL",
     "OPERATIONAL_FAIL",
@@ -208,6 +230,16 @@ _SEVERITY_CASCADE = (
 )
 _SIZE_ABS_TOLERANCE = 1e-9
 _SIZING_NOTE = "live sizing remains a policy decision outside this protocol"
+# case-specific interpretation for the instrument-contract fail-fast:
+# the generic OPERATIONAL_FAIL template claims "parity clean", which
+# would be a compliance overclaim when parity NEVER RAN (the
+# instrument kill fires before stage 1)
+_INSTRUMENT_KILL_INTERP = (
+    "instrument contract violated on label={label}: the declared "
+    "tools_used intersects the family's forbidden instruments "
+    "[{issue_summary}] - no stage ran (killed_by_stage=4 semantics, "
+    "the operational stage)"
+)
 # the facts note is COMPUTED from the live taxonomy, never literal: a
 # taxonomy growth (sizing_activation_stale landed as the 12th named
 # issue) re-renders it instead of rotting
@@ -638,13 +670,21 @@ def _validate_frozen_spec(leg: str, spec: dict[str, Any]) -> None:
     Required keys: ``exit_rules``, ``exit_type_normalization``,
     ``fee``, ``universe``, ``sizing_rule``, ``bar_delta_min`` and
     ``paper_window``.  Optional: ``funding`` (carry),
-    ``pnl_decomposition`` (options) and ``composite_activation_n``
-    (int >= 1; drives the stage-3 sizing-activation pre-check).
+    ``pnl_decomposition`` (options), ``composite_activation_n``
+    (int >= 1; drives the stage-3 sizing-activation pre-check),
+    ``family`` (a :class:`atropos.instrument_map.StrategyFamily`
+    literal; the leg's instrument-routing family) and ``tools_used``
+    (non-empty list of non-empty strs; the DECLARED measurement
+    tools).  ``tools_used`` is a declaration, not a measurement:
+    enforcement validates the declaration against the family, never
+    against actual execution.
 
     Raises:
         ValueError: on missing keys, wrong shapes, unknown
-            ``round_trip`` literals, ambiguous alias claims and
-            out-of-domain numbers; every message names the leg.
+            ``round_trip`` literals, ambiguous alias claims,
+            out-of-domain numbers, an unknown ``family`` literal and
+            a malformed ``tools_used`` list; every message names the
+            leg.
     """
     prefix = f"frozen_spec[{leg!r}]"
     if not isinstance(spec, dict):
@@ -687,6 +727,25 @@ def _validate_frozen_spec(leg: str, spec: dict[str, Any]) -> None:
         _validate_funding_section(prefix, spec["funding"])
     if "pnl_decomposition" in spec:
         _validate_decomposition_section(prefix, spec["pnl_decomposition"])
+    if "family" in spec:
+        try:
+            validate_family(spec["family"])
+        except ValueError as error:
+            raise ValueError(f"{prefix}: {error}") from error
+    if "tools_used" in spec:
+        tools_used = spec["tools_used"]
+        if (
+            not isinstance(tools_used, list)
+            or not tools_used
+            or not all(
+                isinstance(tool, str) and bool(tool.strip())
+                for tool in tools_used
+            )
+        ):
+            raise ValueError(
+                f"{prefix}['tools_used'] must be a non-empty list of "
+                f"non-empty strs, got {tools_used!r}"
+            )
 
 
 def _validate_leg_frames(
@@ -1589,6 +1648,100 @@ def _leg_kill_reason(
     return "not killed: all six stages clean with operational evidence"
 
 
+def _instrument_contract(
+    spec: dict[str, Any],
+) -> tuple[
+    dict[str, Any] | None,
+    tuple[dict[str, Any], dict[str, Any]] | None,
+]:
+    """Resolve the leg's instrument-routing contract from the spec.
+
+    The frozen spec may declare ``family`` (a
+    :class:`atropos.instrument_map.StrategyFamily` literal, validated
+    at spec-validation time) and ``tools_used`` (the DECLARED
+    measurement tools).  ``tools_used`` is a declaration, not a
+    measurement: enforcement validates the declaration against the
+    family's forbidden instruments, never against actual execution.
+
+    Returns:
+        ``(instrument_audit, kill)``.  ``kill`` is ``None`` unless
+        BOTH keys are declared AND the declaration intersects the
+        family's forbidden tool set - the leg must then die as an
+        ``OPERATIONAL_FAIL`` before any stage runs (kill carries the
+        NOT-RUN parity scaffold and the violated operational report;
+        ``killed_by_stage=4`` semantics, the operational stage).
+        ``instrument_audit`` is ``None`` when the spec declares no
+        family at all; the enforce or audit dict otherwise (audit
+        mode = exactly one of the two keys declared: nothing can be
+        validated, nothing fails, the honest note is reported).
+
+    Note:
+        The family literal is validated earlier, at spec-validation
+        time (:func:`validate_family` via
+        ``_validate_frozen_spec``); this helper trusts the validated
+        spec and raises nothing itself.
+    """
+    raw_family = spec.get("family")
+    raw_tools = spec.get("tools_used")
+    if raw_family is None and raw_tools is None:
+        return None, None
+    if raw_family is None or raw_tools is None:
+        # audit mode: exactly one of the two halves is declared, so
+        # the declaration cannot be validated and nothing fails
+        audit: dict[str, Any] = {
+            "family": (str(raw_family) if raw_family is not None else None),
+            "mode": "audit",
+            "violations": [],
+            "units_mismatch": None,
+            "note": (
+                "audit only: enforcement needs BOTH family and "
+                "tools_used declared in the frozen spec; one of the "
+                "two is missing, so the declaration is recorded, not "
+                "validated (checks_skipped-style honest skip)"
+            ),
+        }
+        return audit, None
+    plan = route(raw_family)
+    reasons = {
+        str(entry.get("tool")): str(entry.get("reason", ""))
+        for entry in plan["forbidden"]
+    }
+    violating = sorted({str(tool) for tool in raw_tools} & set(reasons))
+    audit = {
+        "family": str(raw_family),
+        "mode": "enforce",
+        "violations": [
+            {"tool": tool, "reason": reasons[tool]} for tool in violating
+        ],
+        "units_mismatch": None,
+    }
+    if not violating:
+        return audit, None
+    parity_not_run: dict[str, Any] = {
+        "stage_verdict": "NOT_RUN",
+        "n_matched": 0,
+        "issues": [],
+        "checks_skipped": [],
+    }
+    operational_violated: dict[str, Any] = {
+        "stage_verdict": "OPERATIONAL_FAIL",
+        "issues": [
+            {
+                "name": "instrument_violation",
+                "n_affected": len(violating),
+                "examples": violating[:3],
+            }
+        ],
+        "checks_run": [],
+        "checks_skipped": [
+            "latency (not run: instrument_violation killed the leg first)",
+            "exit_direction (not run: instrument_violation killed the "
+            "leg first)",
+        ],
+    }
+    return audit, (parity_not_run, operational_violated)
+
+
 def _run_leg_stages(  # noqa: PLR0911 (one return per stage gate, house style)
     leg: str,
     paper_leg: pd.DataFrame,
@@ -1614,7 +1767,11 @@ def _run_leg_stages(  # noqa: PLR0911 (one return per stage gate, house style)
     drawdown comparison is computed BEFORE the gates: it is reported
     on every verdict (the pinned test asserts a populated
     ``dd_comparison`` even on ``PARITY_FAIL``) and can only affect the
-    verdict inside stage 6.
+    verdict inside stage 6.  The instrument-routing contract
+    (``_instrument_contract``) is resolved before stage 1: a
+    family/tools_used declaration that contradicts the family's
+    forbidden instruments kills the leg as ``OPERATIONAL_FAIL``
+    (``killed_by_stage=4`` semantics) before ANY stage runs.
     """
     # facts computed for EVERY verdict, kills included
     alias_map = _exit_alias_map(spec)
@@ -1673,6 +1830,11 @@ def _run_leg_stages(  # noqa: PLR0911 (one return per stage gate, house style)
             ),
             "status": "checked",
         }
+    # instrument-routing contract (opt-in via frozen_spec keys
+    # "family" / "tools_used"): resolved for EVERY verdict; the
+    # fail-fast return below fires before stage 1 when the declared
+    # tools contradict the family
+    instrument_audit, instrument_kill = _instrument_contract(spec)
 
     def statistical_scaffold(n_matched: int) -> dict[str, Any]:
         """Report shape for runs where stage 6 never executed.
@@ -1749,7 +1911,20 @@ def _run_leg_stages(  # noqa: PLR0911 (one return per stage gate, house style)
                 if pnl_decomposition is not None
                 else None
             ),
+            "instrument_audit": instrument_audit,
         }
+
+    # --- instrument-routing fail-fast (before ANY stage) ----------------
+    if instrument_kill is not None:
+        parity_not_run, operational_violated = instrument_kill
+        return finish(
+            "OPERATIONAL_FAIL",
+            parity_not_run,
+            operational_violated,
+            statistical_scaffold(0),
+            stage=4,  # operational-stage kill semantics (fail-fast)
+            n_matched=0,
+        )
 
     # --- stage 1: feed granularity (n-agnostic) -------------------------
     if not feed_granularity["match"]:
@@ -1954,6 +2129,52 @@ def _portfolio_cascade(
     return "SURVIVES_TO_LIVE", f"no leg killed: {detail}"
 
 
+def _merge_optin_sections(
+    results: dict[str, _LegStageResult],
+) -> tuple[
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+]:
+    """Merge the three opt-in per-leg sections (one convention).
+
+    ``funding_alignment`` / ``pnl_decomposition`` /
+    ``instrument_audit`` all follow the ``funding_alignment``
+    convention: for a single leg the top-level section dict IS the
+    leg's dict (``None`` when the leg did not declare the section);
+    multi-leg, per-leg families make one top-level dict ill-defined,
+    so the declared values travel keyed by leg name (``None`` when no
+    leg declared the section).
+    """
+    if len(results) == 1:
+        only = next(iter(results.values()))
+        return (
+            only["funding_alignment"],
+            only["pnl_decomposition"],
+            only["instrument_audit"],
+        )
+    funding_by_leg = {
+        leg_name: result["funding_alignment"]
+        for leg_name, result in results.items()
+        if result["funding_alignment"] is not None
+    }
+    decomposition_by_leg = {
+        leg_name: result["pnl_decomposition"]
+        for leg_name, result in results.items()
+        if result["pnl_decomposition"] is not None
+    }
+    audit_by_leg = {
+        leg_name: result["instrument_audit"]
+        for leg_name, result in results.items()
+        if result["instrument_audit"] is not None
+    }
+    return (
+        funding_by_leg or None,
+        decomposition_by_leg or None,
+        (audit_by_leg or None),
+    )
+
+
 def _aggregate_stage_results(
     results: dict[str, _LegStageResult],
     token: VerdictToken,
@@ -1981,10 +2202,18 @@ def _aggregate_stage_results(
         result["statistical_report"] for result in result_values
     ]
     parity_tokens = [str(entry["stage_verdict"]) for entry in parity_reports]
+    if "PARITY_FAIL" in parity_tokens:
+        parity_verdict = "PARITY_FAIL"
+    elif any(token == "PARITY_PASS" for token in parity_tokens):
+        # at least one leg RAN parity and passed; a NOT_RUN leg (the
+        # instrument-contract fail-fast) must not drag the merge down
+        parity_verdict = "PARITY_PASS"
+    else:
+        # every leg was instrument-killed before stage 1: parity never
+        # ran, and claiming PARITY_PASS would be a compliance overclaim
+        parity_verdict = "NOT_RUN"
     merged_parity = {
-        "stage_verdict": (
-            "PARITY_FAIL" if "PARITY_FAIL" in parity_tokens else "PARITY_PASS"
-        ),
+        "stage_verdict": parity_verdict,
         "n_matched": sum(int(entry["n_matched"]) for entry in parity_reports),
         "issues": _merge_issue_lists(
             [entry["issues"] for entry in parity_reports],
@@ -2117,23 +2346,9 @@ def _aggregate_stage_results(
         "frozen": str(sizing_values[0]["frozen"]),
         "match": all(bool(entry["match"]) for entry in sizing_values),
     }
-    funding_by_leg = {
-        leg_name: result["funding_alignment"]
-        for leg_name, result in results.items()
-        if result["funding_alignment"] is not None
-    }
-    decomposition_by_leg = {
-        leg_name: result["pnl_decomposition"]
-        for leg_name, result in results.items()
-        if result["pnl_decomposition"] is not None
-    }
-    if len(result_values) == 1:
-        # single leg: the top-level section dict IS the leg's dict
-        merged_funding = result_values[0]["funding_alignment"]
-        merged_decomposition = result_values[0]["pnl_decomposition"]
-    else:
-        merged_funding = funding_by_leg or None
-        merged_decomposition = decomposition_by_leg or None
+    merged_funding, merged_decomposition, merged_instrument_audit = (
+        _merge_optin_sections(results)
+    )
     kill_stages = [
         int(result["killed_by_stage"])
         for result in result_values
@@ -2161,6 +2376,7 @@ def _aggregate_stage_results(
         "sizing_rule": merged_sizing,
         "funding_alignment": merged_funding,
         "pnl_decomposition": merged_decomposition,
+        "instrument_audit": merged_instrument_audit,
     }
 
 
@@ -2271,6 +2487,13 @@ def _build_leg_verdict(
         next_tpl,
         wwc_tpl,
     ) = _VERDICT_META[token]
+    if (
+        token == "OPERATIONAL_FAIL"
+        and result["parity_report"]["stage_verdict"] == "NOT_RUN"
+    ):
+        # instrument-contract fail-fast: parity never ran, so the
+        # generic "parity clean" template would overclaim
+        interpretation_tpl = _INSTRUMENT_KILL_INTERP
     fills = _meta_fills(result, label, min_n_trades, dd_breach_ratio)
     return {
         "overall_verdict": token,
@@ -2292,6 +2515,7 @@ def _build_leg_verdict(
         "sizing_rule": result["sizing_rule"],
         "funding_alignment": result["funding_alignment"],
         "pnl_decomposition": result["pnl_decomposition"],
+        "instrument_audit": result["instrument_audit"],
         "dd_comparison": result["dd_comparison"],
         "facts": {
             "notes": _FACTS_NOTES,
@@ -2496,6 +2720,9 @@ def run_paper_protocol(
 
     Class-specific sections (``funding``, ``pnl_decomposition``) are
     opt-in via ``frozen_spec``: absence = skipped, not inferred.
+    ``tools_used`` is a declaration, not a measurement; enforcement
+    validates the declaration against the family, not against actual
+    execution.
 
     Args:
         paper_log: journal of the paper engine.  Required columns
@@ -2526,11 +2753,21 @@ def run_paper_protocol(
             own span).  Optional: ``funding``
             ({settlement_interval_hours, rate_tolerance_bps}; carry
             only), ``pnl_decomposition`` ({enabled, components,
-            tolerance_per_component_r}; options only) and
+            tolerance_per_component_r}; options only),
             ``composite_activation_n`` (int >= 1; with the paper
             log's ``n_ob_rows`` / ``sizing_mode_active`` attrs
             drives the ``sizing_activation_stale`` runtime-state
-            check).
+            check), ``family`` (a
+            :func:`atropos.instrument_map.validate_family` literal;
+            the leg's instrument-routing family) and ``tools_used``
+            (non-empty list[str]; the DECLARED measurement tools).
+            Both family and tools_used declared: a declaration that
+            intersects the family's forbidden instruments fails the
+            leg as ``OPERATIONAL_FAIL`` (issue
+            ``instrument_violation``, ``killed_by_stage=4``) before
+            any stage runs; exactly one declared: the leg report
+            carries an audit-mode ``instrument_audit`` note and
+            nothing fails.
         legs: legs to process (each must exist in ``frozen_outcomes``
             and ``frozen_spec``); None processes every ``paper_log``
             leg in sorted order.
@@ -2550,7 +2787,10 @@ def run_paper_protocol(
         ``interpretation`` / ``next_step`` / ``what_would_change`` are
         filled strings quoting this run's facts (n_paper_trades,
         n_frozen_matched and n_<issue> per firing issue), never the
-        bare templates.
+        bare templates.  Each leg verdict carries ``instrument_audit``
+        (None when its frozen spec declares no family; the
+        enforce/audit dict otherwise) and the aggregate verdict
+        mirrors the per-leg merge convention of ``funding_alignment``.
 
     Raises:
         ValueError: on an empty ``paper_log`` or per-leg frames,
@@ -2563,9 +2803,10 @@ def run_paper_protocol(
             "portfolio"), unknown ``round_trip`` literals, exit_type
             tokens absent from ``exit_type_normalization``, missing
             ``funding_rate`` / ``pnl_*`` columns when their spec
-            sections demand them, non-positive tolerances,
-            ``dd_breach_ratio <= 0``, ``n_bootstrap < 1`` and
-            non-integer / below-minimum integer parameters.
+            sections demand them, an unknown ``frozen_spec`` family
+            literal, a malformed ``tools_used`` list, non-positive
+            tolerances, ``dd_breach_ratio <= 0``, ``n_bootstrap < 1``
+            and non-integer / below-minimum integer parameters.
 
     Example::
 
