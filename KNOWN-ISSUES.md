@@ -699,3 +699,20 @@ strategies.  The compiler returns when a real-data paper run reaches
 SURVIVES_TO_LIVE — trigger, not vibe.
 
 Trigger to close: N/A — permanent law.
+
+## 18. REPACKAGING is a routing verdict — known premia are the raw material
+
+Status: shipped (2026-11-10); semantic amendment of the verdict's
+next-step/what-would-change (verdict_class unchanged: NEEDS_ANALYSIS).
+
+Content: the momentum/trend premium is the most robust documented
+premium of the last century and dominates the crypto cross-section;
+deployed quant books are overwhelmingly repackagings of it; a
+REPACKAGING verdict therefore routes to the
+packaging-vs-direct-replication comparison (same universe, same
+bars, same cost model: net EV, turnover cost per unit of premium,
+capacity, residual correlation, drawdown profile) instead of implying
+dead-end analysis.  The guard: a repackaging that cannot beat the
+direct implementation net of costs is COST_DEATH.
+
+Trigger to close: N/A — permanent interpretation.

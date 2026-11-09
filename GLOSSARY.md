@@ -10,7 +10,9 @@ frozen, the adversarial pipeline runs (rule chain: 7 stages,
 `atropos.ensemble_pipeline.run_full_pipeline`; ML chain:
 `run_ml_kill_protocol`, four gates over purged walk-forward), and the
 hypothesis leaves with exactly one verdict. Example: prereg committed
-Monday → 7 stages Tuesday → `REPACKAGING` at stage 1 → tombstone.
+Monday → 7 stages Tuesday → `REPACKAGING` at stage 1 → routing to
+the packaging-vs-direct comparison (§18); the tombstone records the
+borrowed edge.
 
 **Preregistration (prereg)** — a hypothesis document frozen *before* the
 data is touched: prediction, construction, nulls, numeric kill criteria,
@@ -184,14 +186,21 @@ class)
   null is rejected with power.
 
 **REPACKAGING**
-- **Means:** the signal's edge is a known factor in disguise — already
-  known.
+- **Means:** the signal's edge matches a known factor — a ROUTING
+  verdict, not a death: the candidate is a view of a known premium.
 - **Why fired:** stage 1/2 known-features controls absorb the signal —
-  it adds nothing beyond the known factor.
-- **Next step:** identify the parent factor; intentional repackaging is
-  a valid exposure, claimed novelty is a misrepresentation.
-- **What would change:** evidence of information orthogonal to the
-  parent factor.
+  it adds nothing beyond the known factor.  Momentum and trend are the
+  most robust premia of the last century — a repackaging is a view of
+  that premium.
+- **Next step:** REPACKAGING routes to the
+  packaging-vs-direct-replication comparison: run the DIRECT factor
+  implementation (e.g. plain time-series momentum) on the same
+  universe and bars through the same cost model.  The packaging must
+  beat the direct implementation net of costs, or offer capacity /
+  diversification / risk-profile edge.
+- **What would change:** a repackaging that cannot is COST_DEATH;
+  orthogonal information beyond the factor upgrades it to a genuine
+  re-discovery.
 
 **The survives family, one by one** (PASS-class; the distinctions are
 evidence scope, not correctness):

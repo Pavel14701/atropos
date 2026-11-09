@@ -2208,3 +2208,41 @@ def test_run_full_pipeline_docstring_warning() -> None:
     assert "informational" in doc
     assert "do not affect the verdict" in doc
     assert "not an edge" in doc
+
+
+def test_repackaging_is_a_routing_verdict() -> None:
+    """The 2026-11-10 semantic amendment: REPACKAGING routes.
+
+    The signal matching a known factor is a view of a KNOWN PREMIUM
+    (momentum/trend — the most robust premium of the last century,
+    dominant in the crypto cross-section).  The verdict stays
+    NEEDS_ANALYSIS and informative, but the next_step routes to the
+    packaging-vs-direct-replication comparison and what_would_change
+    draws the COST_DEATH boundary.  Mutation: reverting the templates
+    to the old 'orthogonal-information' wording -> caught.
+    """
+    meta = ensemble_pipeline._VERDICT_META["REPACKAGING"]
+    verdict_class, informative, interpretation, next_step, wwc = meta
+    assert verdict_class == "NEEDS_ANALYSIS"  # never a death
+    assert informative is True
+    assert "ROUTING verdict" in interpretation
+    assert "known factor" in interpretation
+    # the routing frame: compare against the DIRECT implementation
+    assert "DIRECT factor implementation" in next_step
+    assert "net of costs" in next_step
+    # the boundary: cannot beat it -> COST_DEATH, not REPACKAGING
+    assert "COST_DEATH" in wwc
+
+
+def test_repackaging_meta_fills_still_format() -> None:
+    """The amended templates must format against the run-fact fills.
+
+    A template referencing a fill key the REPACKAGING fill set does
+    not carry crashes every REPACKAGING report — this pin formats
+    the templates the same way _finish does.
+    """
+    fills = {"n_obs": 431}
+    meta = ensemble_pipeline._VERDICT_META["REPACKAGING"]
+    interpretation, next_step, wwc = meta[2], meta[3], meta[4]
+    for template in (interpretation, next_step, wwc):
+        template.format(**fills)

@@ -310,7 +310,8 @@ whoever owns the pie keeps the t.
 - factor C: raw 6.1 → 0.9.
 
 **Protocol.** The raw t never appears on its own. Stage 4 is mandatory; the
-control set is fixed a priori. `t < 2` after controls = REPACKAGING.
+control set is fixed a priori. `t < 2` after controls = REPACKAGING
+(routing: packaging-vs-direct comparison, §18).
 
 ### Law 3. The 20bp cost line
 
@@ -403,7 +404,7 @@ whose doctrine name differs.
 |---|---|---|
 | NULL-DEATH | The real statistic is indistinguishable from the distribution of shuffled data. | t = 3.2 with placebo 95th percentile = 4.1 |
 | COST-DEATH | Gross edge below the cost line of ~20bp per round trip. | edge of 12bp at daily turnover |
-| INCREMENTAL-DEATH | After known controls the new signal's t falls below 2: repackaging. | raw 5.5 → 0.1 after momentum+IV |
+| INCREMENTAL-DEATH | After known controls the new signal's t falls below 2: repackaging — a ROUTING verdict, not a death (the signal is a view of a known premium; compare the packaging against the direct factor implementation). | raw 5.5 → 0.1 after momentum+IV |
 | PREMISE-DEATH | A structural premise of the hypothesis does not exist in the target market. | the short leg is unavailable |
 | RISK-DEATH | The effect is just a premium for a known risk; it disappears once the exposure is controlled. | the premium vanished after controlling for beta and crash days |
 | DATA-BLOCKED | The hypothesis cannot be tested: no data, or history too short or dirty. | an option chain is needed, only spot exists |
@@ -509,7 +510,8 @@ Canonical forks:
   built.
 - **If the null is not beaten** → NULL-DEATH, stop. The pipeline is fixed first,
   not the hypothesis.
-- **If incremental t < 2** → REPACKAGING (INCREMENTAL-DEATH), stop.
+- **If incremental t < 2** → REPACKAGING (INCREMENTAL-DEATH): stop
+  iterating as-is; route to the packaging-vs-direct comparison (§18).
 - **If robustness < 5/7** → ROBUSTNESS-DEATH, stop.
 - **If WF shrink > 2×** → OVERFIT-DEATH, stop.
 - **If calendar t drops below 2** → INCREMENTAL-DEATH (calendar variant), stop.

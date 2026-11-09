@@ -39,10 +39,12 @@ can mask a degenerate column with a generic size error):
 * pre-flight: ``signal`` or ``returns`` is empty /
   all-NaN / constant (zero peak-to-peak)          -> ``DEGENERATE_FEED``
 * stage 1, momentum / known-features control fails -> ``REPACKAGING``
+  (a routing verdict: the signal is a view of a known premium -
+  compare the packaging against the direct factor implementation)
 * stage 1, other controls fail                     -> ``ARTIFACT``
 * stage 2 curve death                              -> ``REPACKAGING``
-  (a curve SURVIVES call backed by fewer than 5 testable
-  specs is INCONCLUSIVE - a WARN, not a pass)
+  (same routing verdict; a curve SURVIVES call backed by fewer
+  than 5 testable specs is INCONCLUSIVE - a WARN, not a pass)
 * stage 3 battery OVERALL ``DEAD`` (the baseline rule
   itself is catastrophic or never trades - no active
   days)                                           -> ``DEAD``
@@ -408,13 +410,23 @@ _VERDICT_META: dict[str, tuple[str, bool, str, str, str]] = {
         "NEEDS_ANALYSIS",
         True,
         (
-            "the signal's edge matches a known factor (stage-2 spec "
-            "curve, n_obs={n_obs}); not novel, but not dead"
+            "the signal's edge matches a known factor (incremental "
+            "controls, n_obs={n_obs}); the known premia — momentum "
+            "above all — are the raw material of deployed strategies, "
+            "so this is a ROUTING verdict, not a death"
         ),
-        "identify the parent factor; orthogonal-information check",
         (
-            "evidence the signal carries information orthogonal to the "
-            "parent factor"
+            "run the DIRECT factor implementation (e.g. plain "
+            "time-series momentum) on the same universe and bars "
+            "through the same cost model; the packaging earns "
+            "existence by beating it net of costs, or by capacity / "
+            "diversification / residual-profile edge"
+        ),
+        (
+            "a repackaging that cannot beat the direct factor "
+            "implementation net of costs is COST_DEATH, not "
+            "REPACKAGING; orthogonal information beyond the factor "
+            "upgrades it to a genuine re-discovery"
         ),
     ),
     "ROBUSTNESS_DEATH": (

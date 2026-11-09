@@ -52,7 +52,7 @@ a first run most often returns, not the enumeration.
 |---------|-----------|---------------|-----------------|
 | `SURVIVES` | all stages PASS | "not killed yet" — **not confirmation**, but the absence of a kill | record a SURVIVED tombstone; use it as justification; monitor on new snapshots |
 | `SURVIVES_WITH_WARNINGS` | all stages PASS, WARNs present | survived with caveats (undecided controls, turnover, deflated Sharpe) | write the WARNs into the tombstone; decide whether the caveats are compatible with the decision |
-| `REPACKAGING` | stage 1 (momentum/known-features) or 2 | the signal adds nothing beyond known momentum/features — repackaging | do not revisit without a new mechanism; a new construction = a new hypothesis |
+| `REPACKAGING` | stage 1 (momentum/known-features) or 2 | the signal's edge matches a known factor — a ROUTING verdict, not a death: a view of a known premium | run the DIRECT factor implementation on the same universe, bars and cost model, then compare (net of costs, capacity, residual profile); cannot beat it → `COST_DEATH`, not REPACKAGING (see example 4) |
 | `ARTIFACT` | stage 1 (the other controls) | the effect is an artifact of alignment / placebo / sub-period concentration / calendar | check the data mechanics; resurrection only via the tombstone conditions |
 | `DEAD` | stage 3 | the rule is untradeable or a catastrophic robustness-battery failure (7 tests) | the rule is unimplementable as-is; a different rule = a new hypothesis |
 | `NO_OOS_EDGE` | stage 4 or 6 | no out-of-sample edge (walk-forward / purged CV) | do not return on the same data; a new snapshot only per the tombstone conditions |
@@ -342,6 +342,20 @@ when the stage-1 factor controls fail (`momentum_control` /
 ("no reasonable specification holds |t| >= 2" → repackaging of known
 information). Telling them apart is simple: `killed_by_stage` is 1 or 2;
 `stages[0]["repackaging"]` holds the bool flag for the first case.
+
+How to read it: REPACKAGING is a **routing verdict, not a death**. The
+signal's edge matching a known factor means the candidate is a view of
+a known premium — and momentum/trend, the most robust premia of the
+last century, dominate the crypto cross-section. The verdict routes to
+the packaging-vs-direct-replication comparison: run the DIRECT factor
+implementation (e.g. plain time-series momentum) on the same universe
+and bars through the same cost model, then compare per unit of
+premium — costs (turnover), capacity, residual correlation, drawdown
+profile. The packaging earns its existence only by beating the direct
+implementation net of costs, or by a capacity / diversification /
+residual-profile edge. A repackaging that cannot beat the direct
+implementation is `COST_DEATH`, not REPACKAGING; orthogonal
+information beyond the factor upgrades it to a genuine re-discovery.
 
 ## The conservative philosophy in one paragraph
 

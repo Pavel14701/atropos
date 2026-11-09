@@ -59,7 +59,7 @@ print(report["overall_verdict"], report.get("kill_reason"))
 |---|---|---|
 | `SURVIVES` | all stages passed, no warnings | tombstone `SURVIVED`. PASS ≠ confirmation: survived = a conditional candidate. For a deployed strategy include `track_record.live_verdict` |
 | `SURVIVES_WITH_WARNINGS` | passed, but with warnings | tombstone `SURVIVED` with the warning list from `stages` |
-| `REPACKAGING` | the signal is a proxy of a known feature (stages 1-2) | tombstone `KILLED`: the effect is real but borrowed; the family closes, successors start with prior <= 20% and a single run |
+| `REPACKAGING` | the signal is a proxy of a known feature (stages 1-2) | ROUTING verdict (§18): the effect is real but borrowed — compare the packaging against the direct factor implementation net of costs; a repackaging that cannot is COST_DEATH. The family closes as-is; successors start with prior <= 20% and a single run |
 | `ARTIFACT` | artifact: subperiod concentration / placebo / calendar (stage 1) | tombstone `KILLED`, record the artifact mechanics |
 | `DEAD` | absence of edge PROVEN on this feed: battery baseline catastrophically dead (mean <= 0 with power / no active days), or `CS_NO_EDGE` at config target `xs` | tombstone `KILLED`; stop pursuing on this feed — DEAD is not transferable across feeds |
 | `ROBUSTNESS_DEATH` | robustness battery (stage 3): a specific structural test FAILED while the baseline held | tombstone `KILLED`; name the failed test and the mechanism it implies (smoothing inversion / thirds sign-flip / LOO non-persistence) |
@@ -74,6 +74,18 @@ print(report["overall_verdict"], report.get("kill_reason"))
 `INCONCLUSIVE` at a stage (too little data, degenerate inputs) is an
 honest outcome: the overall result is `INCONCLUSIVE`, reopening is
 allowed only on a new data snapshot.
+
+## Reading REPACKAGING
+
+`REPACKAGING` routes, it does not bury: the edge matching a known
+factor means the candidate is a view of a known premium (momentum /
+trend — the most robust premia of the last century). Run the DIRECT
+factor implementation (e.g. plain time-series momentum) on the same
+universe, bars and cost model; the packaging earns existence by
+beating it net of costs, or by capacity / diversification /
+residual-profile edge. Cannot beat it → `COST_DEATH`, not
+REPACKAGING. Carry-shaped book? Run skill 21's half-normal check
+first.
 
 ## NEVER
 
