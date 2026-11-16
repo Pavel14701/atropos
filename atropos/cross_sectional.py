@@ -21,11 +21,17 @@ only assets with BOTH a finite signal and a finite forward return are
 used, and dates with fewer than ``min_assets`` valid assets are
 dropped.  Every function returns the house contract
 ``{"stat", "p_value", "verdict": "PASS" | "FAIL" | "INCONCLUSIVE",
-...extras}``.  Fully degenerate inputs (empty intersection, no
-qualifying date) FAIL gracefully rather than raise; a THIN sample -
-fewer than ``min_dates`` effective dates, or a non-finite t-statistic
-caused by zero dispersion - is reported as ``"INCONCLUSIVE"`` instead
-of lending a spurious PASS.
+...extras}``.  An EMPTY sample (empty intersection, no date clearing
+``min_assets``, no testable date at all) is reported as
+``"INCONCLUSIVE"`` with a ``note`` naming the emptiness rather than
+as a vacuous FAIL; a THIN sample - non-empty but fewer than
+``min_dates`` effective dates, or a non-finite t-statistic caused by
+zero dispersion - is likewise ``"INCONCLUSIVE"`` instead of lending a
+spurious PASS.  The orchestrator additionally pre-checks
+``min_assets`` at the PANEL level: fewer common assets than
+``min_assets`` short-circuits to all-INCONCLUSIVE sub-reports plus a
+top-level ``note`` ("panel has N assets < min_assets=M — untestable
+payload").
 
 Run ``python -m atropos.cross_sectional`` for a seeded synthetic demo:
 a planted cross-sectional edge must PASS, pure noise must FAIL.
@@ -263,17 +269,76 @@ def _t_pvalue(tstat: float, n_obs: int) -> float:
 # ----------------------------------------------------------------------------
 # private runners on pre-aligned data (the orchestrator aligns ONCE)
 # ----------------------------------------------------------------------------
+def _derive_pair_mask(
+    sig_matrix: np.ndarray, ret_matrix: np.ndarray
+) -> np.ndarray:
+    """Finite-pair validity mask of two aligned matrices.
+
+    The default ``pair_mask`` of the private ``_run_aligned_*``
+    runners when a caller (an inspection one-liner, an untestable
+    payload short-circuit) passes the raw matrices without a
+    pre-computed mask: assets with BOTH a finite signal and a finite
+    forward return, exactly the mask :func:`_align_panels` builds.
+
+    Args:
+        sig_matrix: aligned signal values, rows = dates.
+        ret_matrix: aligned forward returns, same shape.
+
+    Returns:
+        The ``(n_dates, n_assets)`` boolean finite-pair mask.
+    """
+    return np.isfinite(np.asarray(sig_matrix, dtype=float)) & np.isfinite(
+        np.asarray(ret_matrix, dtype=float)
+    )
+
+
+def _resolve_runner_inputs(
+    sig_matrix: np.ndarray,
+    ret_matrix: np.ndarray,
+    pair_mask: np.ndarray | None,
+    valid_positions: list[int] | None,
+) -> tuple[np.ndarray, list[int]]:
+    """Fill in omitted runner inputs from the raw matrices.
+
+    The ``_run_aligned_*`` runners accept a pre-computed mask and
+    position list from the orchestrator (aligned ONCE, shared three
+    times); a direct call that omits them gets the derived defaults:
+    the finite-pair mask (:func:`_derive_pair_mask`) and every row
+    with at least one valid pair as usable.
+
+    Args:
+        sig_matrix: aligned signal values, rows = dates.
+        ret_matrix: aligned forward returns, same shape.
+        pair_mask: caller-supplied mask, or ``None`` to derive it.
+        valid_positions: caller-supplied row positions, or ``None``
+            to derive them from the mask.
+
+    Returns:
+        ``(pair_mask, valid_positions)`` - the caller's values when
+        given, the derived defaults otherwise.
+    """
+    if pair_mask is None:
+        pair_mask = _derive_pair_mask(sig_matrix, ret_matrix)
+    if valid_positions is None:
+        valid_positions = [
+            date_pos
+            for date_pos in range(pair_mask.shape[0])
+            if int(pair_mask[date_pos].sum()) > 0
+        ]
+    return pair_mask, valid_positions
+
+
 def _run_aligned_ic(
     sig_matrix: np.ndarray,
     ret_matrix: np.ndarray,
-    pair_mask: np.ndarray,
-    valid_positions: list[int],
+    pair_mask: np.ndarray | None = None,
+    valid_positions: list[int] | None = None,
     *,
-    method: str,
-    min_dates: int,
-    tstat_cutoff: float,
-    positive_share_min: float,
-    return_series: bool,
+    method: str = "spearman",
+    min_dates: int = 20,
+    tstat_cutoff: float = 2.0,
+    positive_share_min: float = 0.5,
+    return_series: bool = False,
 ) -> dict[str, Any]:
     """IC statistics on pre-aligned matrices (see ``cross_sectional_ic``).
 
@@ -281,13 +346,16 @@ def _run_aligned_ic(
         sig_matrix: aligned signal values, rows = dates.
         ret_matrix: aligned forward returns, same shape.
         pair_mask: boolean per-date mask of valid (finite-pair)
-            assets.
+            assets; ``None`` (the default) derives it from the two
+            matrices via :func:`_derive_pair_mask`.
         valid_positions: row positions passing the ``min_assets``
-            filter.
+            filter; ``None`` (the default) treats every row with at
+            least one valid pair as usable.
         method: ``"spearman"`` (rank IC) or ``"pearson"`` (raw).
         min_dates: minimum number of effective (finite-IC) dates for
-            a decisive verdict; a smaller non-empty sample is
-            INCONCLUSIVE.
+            a decisive verdict; a smaller NON-EMPTY sample is
+            INCONCLUSIVE, an empty one is INCONCLUSIVE with a
+            ``note``.
         tstat_cutoff: minimum t-statistic for PASS.
         positive_share_min: minimum share of positive-IC dates for
             PASS.
@@ -295,8 +363,14 @@ def _run_aligned_ic(
             ``"ic_series"``.
 
     Returns:
-        The ``cross_sectional_ic`` result contract.
+        The ``cross_sectional_ic`` result contract; an empty sample
+        (no finite per-date IC) keeps the all-nan stats shape and
+        carries verdict ``"INCONCLUSIVE"`` with a ``note`` naming the
+        emptiness (no testable date is "could not test", not a kill).
     """
+    pair_mask, valid_positions = _resolve_runner_inputs(
+        sig_matrix, ret_matrix, pair_mask, valid_positions
+    )
     ic_values: list[float] = []
     for date_pos in valid_positions:
         date_mask = pair_mask[date_pos]
@@ -314,7 +388,7 @@ def _run_aligned_ic(
     result: dict[str, Any] = {
         "stat": float("nan"),
         "p_value": 1.0,
-        "verdict": "FAIL",
+        "verdict": "INCONCLUSIVE",
         "mean_ic": float("nan"),
         "ic_std": float("nan"),
         "ic_tstat": float("nan"),
@@ -326,6 +400,12 @@ def _run_aligned_ic(
     if return_series:
         result["ic_series"] = [float(value) for value in ic_arr]
     if n_dates == 0:
+        # empty sample: every date fell below min_assets or had a
+        # constant cross-section (NaN IC) - undecidable, not a kill
+        result["note"] = (
+            "no testable dates: no finite per-date IC (dates below "
+            "min_assets are dropped; constant cross-sections give NaN)"
+        )
         return result
     mean_ic = float(np.mean(ic_arr))
     ic_std = float(np.std(ic_arr, ddof=1)) if n_dates > 1 else float("nan")
@@ -361,16 +441,46 @@ def _run_aligned_ic(
     return result
 
 
+def _long_short_weights(
+    date_mask: np.ndarray,
+    top_sel: np.ndarray,
+    bottom_sel: np.ndarray,
+    column_count: int,
+) -> np.ndarray:
+    """Equal-weight long-top / short-bottom book over all columns.
+
+    Each leg sums to 1 in absolute value (weight ``1/n_leg`` per
+    asset); assets without a valid weight that date stay at 0, so the
+    book vector spans the FULL panel width and turnover against the
+    previous book compares like with like.
+
+    Args:
+        date_mask: boolean mask of the date's valid assets.
+        top_sel: boolean mask of the top-quantile assets (within the
+            valid ones).
+        bottom_sel: boolean mask of the bottom-quantile assets.
+        column_count: total panel column count (the book's width).
+
+    Returns:
+        The ``(n_assets,)`` weight vector of the long-short book.
+    """
+    weights = np.zeros(column_count, dtype=float)
+    col_ids = np.flatnonzero(date_mask)
+    weights[col_ids[top_sel]] = 1.0 / float(top_sel.sum())
+    weights[col_ids[bottom_sel]] = -1.0 / float(bottom_sel.sum())
+    return weights
+
+
 def _run_aligned_spread(
     sig_matrix: np.ndarray,
     ret_matrix: np.ndarray,
-    pair_mask: np.ndarray,
-    valid_positions: list[int],
+    pair_mask: np.ndarray | None = None,
+    valid_positions: list[int] | None = None,
     *,
-    n_quantiles: int,
-    cost_bps: float,
-    min_dates: int,
-    tstat_cutoff: float,
+    n_quantiles: int = 5,
+    cost_bps: float = 10.0,
+    min_dates: int = 20,
+    tstat_cutoff: float = 2.0,
 ) -> dict[str, Any]:
     """Spread statistics on pre-aligned data (see ``quantile_spread``).
 
@@ -383,20 +493,30 @@ def _run_aligned_spread(
         sig_matrix: aligned signal values, rows = dates.
         ret_matrix: aligned forward returns, same shape.
         pair_mask: boolean per-date mask of valid (finite-pair)
-            assets.
+            assets; ``None`` (the default) derives it from the two
+            matrices via :func:`_derive_pair_mask`.
         valid_positions: row positions passing the ``min_assets``
-            filter.
+            filter; ``None`` (the default) treats every row with at
+            least one valid pair as usable.
         n_quantiles: number of quantile buckets (Q >= 2).
         cost_bps: one-way transaction cost per unit of turnover, in
             basis points.
         min_dates: minimum number of return observations for a
-            decisive verdict; a smaller non-empty sample is
-            INCONCLUSIVE.
+            decisive verdict; a smaller NON-EMPTY sample is
+            INCONCLUSIVE, an empty one is INCONCLUSIVE with a
+            ``note``.
         tstat_cutoff: minimum net t-statistic for PASS.
 
     Returns:
-        The ``quantile_spread`` result contract.
+        The ``quantile_spread`` result contract; an empty sample (no
+        traded date and no open book to mark) keeps the all-nan
+        stats shape and carries verdict ``"INCONCLUSIVE"`` with a
+        ``note`` naming the emptiness (no testable date is "could
+        not test", not a kill).
     """
+    pair_mask, valid_positions = _resolve_runner_inputs(
+        sig_matrix, ret_matrix, pair_mask, valid_positions
+    )
     row_count = int(sig_matrix.shape[0])
     column_count = int(sig_matrix.shape[1])
     traded_rows = np.zeros(row_count, dtype=bool)
@@ -421,10 +541,9 @@ def _run_aligned_spread(
                         - np.mean(ret_vals[bottom_sel])
                     )
                 )
-                weights = np.zeros(column_count, dtype=float)
-                col_ids = np.flatnonzero(date_mask)
-                weights[col_ids[top_sel]] = 1.0 / float(top_sel.sum())
-                weights[col_ids[bottom_sel]] = -1.0 / float(bottom_sel.sum())
+                weights = _long_short_weights(
+                    date_mask, top_sel, bottom_sel, column_count
+                )
                 turnover_list.append(
                     float(np.abs(weights - prev_weights).sum())
                 )
@@ -445,10 +564,12 @@ def _run_aligned_spread(
             turnover_list.append(0.0)
     n_dates = len(gross_list)
     if n_dates == 0:
+        # empty sample: no date formed both extreme legs and no book
+        # was ever open to mark to market - undecidable, not a kill
         return {
             "stat": float("nan"),
             "p_value": 1.0,
-            "verdict": "FAIL",
+            "verdict": "INCONCLUSIVE",
             "gross_mean": float("nan"),
             "net_mean": float("nan"),
             "cost_drag_mean": float("nan"),
@@ -460,6 +581,10 @@ def _run_aligned_spread(
             "n_assets_mean": float("nan"),
             "n_quantiles": int(n_quantiles),
             "cost_bps": float(cost_bps),
+            "note": (
+                "no testable dates: no date formed both extreme legs "
+                "and no book was open to mark"
+            ),
         }
     gross_arr = np.asarray(gross_list, dtype=float)
     turnover_arr = np.asarray(turnover_list, dtype=float)
@@ -508,12 +633,12 @@ def _run_aligned_spread(
 def _run_aligned_mono(
     sig_matrix: np.ndarray,
     ret_matrix: np.ndarray,
-    pair_mask: np.ndarray,
-    valid_positions: list[int],
+    pair_mask: np.ndarray | None = None,
+    valid_positions: list[int] | None = None,
     *,
-    n_quantiles: int,
-    min_dates: int,
-    mono_spearman_min: float,
+    n_quantiles: int = 5,
+    min_dates: int = 20,
+    mono_spearman_min: float = 0.5,
 ) -> dict[str, Any]:
     """Monotonicity statistics on pre-aligned data (see ``cs_monotonicity``).
 
@@ -521,19 +646,30 @@ def _run_aligned_mono(
         sig_matrix: aligned signal values, rows = dates.
         ret_matrix: aligned forward returns, same shape.
         pair_mask: boolean per-date mask of valid (finite-pair)
-            assets.
+            assets; ``None`` (the default) derives it from the two
+            matrices via :func:`_derive_pair_mask`.
         valid_positions: row positions passing the ``min_assets``
-            filter.
+            filter; ``None`` (the default) treats every row with at
+            least one valid pair as usable.
         n_quantiles: number of quantile buckets (Q >= 2).
         min_dates: minimum number of contributing dates for a
-            decisive verdict; a smaller non-empty sample is
-            INCONCLUSIVE.
+            decisive verdict; a smaller NON-EMPTY sample is
+            INCONCLUSIVE, an empty one is INCONCLUSIVE with a
+            ``note``.
         mono_spearman_min: minimum bucket-order Spearman correlation
             for PASS.
 
     Returns:
-        The ``cs_monotonicity`` result contract.
+        The ``cs_monotonicity`` result contract; an empty sample (no
+        date formed both extreme quantile legs) keeps the stats
+        shape (NaN Spearman, all-NaN bucket means) and carries
+        verdict ``"INCONCLUSIVE"`` with a ``note`` naming the
+        emptiness (no testable date is "could not test", not a
+        kill).
     """
+    pair_mask, valid_positions = _resolve_runner_inputs(
+        sig_matrix, ret_matrix, pair_mask, valid_positions
+    )
     sums = np.zeros(n_quantiles, dtype=float)
     counts = np.zeros(n_quantiles, dtype=float)
     dates_used = 0
@@ -563,14 +699,16 @@ def _run_aligned_mono(
         rho = float(rank_corr.statistic)
         p_value = float(rank_corr.pvalue)
     if dates_used == 0:
-        verdict = "FAIL"
+        # empty sample: no date formed both extreme quantile legs -
+        # undecidable, not a kill
+        verdict = "INCONCLUSIVE"
     elif dates_used < min_dates:
         verdict = "INCONCLUSIVE"
     elif not np.isfinite(rho):
         verdict = "FAIL"
     else:
         verdict = "PASS" if rho >= mono_spearman_min else "FAIL"
-    return {
+    mono_result: dict[str, Any] = {
         "stat": rho,
         "p_value": p_value,
         "verdict": verdict,
@@ -579,6 +717,12 @@ def _run_aligned_mono(
         "n_dates": dates_used,
         "n_quantiles": int(n_quantiles),
     }
+    if dates_used == 0:
+        mono_result["note"] = (
+            "no testable dates: no date formed both extreme quantile "
+            "legs (e.g. a fully tied cross-section empties them)"
+        )
+    return mono_result
 
 
 # ----------------------------------------------------------------------------
@@ -636,8 +780,10 @@ def cross_sectional_ic(
         iff ``mean_ic > 0`` AND ``ic_tstat >= tstat_cutoff`` AND
         ``positive_share >= positive_share_min``; ``"INCONCLUSIVE"``
         when ``n_dates < min_dates`` or the t-statistic is not
-        finite (zero dispersion); a fully empty panel FAILs
-        gracefully.
+        finite (zero dispersion); an EMPTY sample (``n_dates == 0``,
+        no testable date) is likewise ``"INCONCLUSIVE"`` - the
+        all-nan stats shape plus a ``note`` naming the emptiness,
+        never a vacuous FAIL.
 
     Raises:
         ValueError: on a non-DataFrame input, non-unique labels,
@@ -758,7 +904,10 @@ def quantile_spread(
         Verdict is ``"PASS"`` iff ``net_tstat >= tstat_cutoff`` AND
         ``net_sharpe > 0``; ``"INCONCLUSIVE"`` when
         ``n_dates < min_dates`` or the t-statistic is not finite
-        (zero dispersion); a fully empty panel FAILs gracefully.
+        (zero dispersion); an EMPTY sample (``n_dates == 0``, no
+        traded date and no open book) is likewise
+        ``"INCONCLUSIVE"`` - the all-nan stats shape plus a ``note``
+        naming the emptiness, never a vacuous FAIL.
 
     Raises:
         ValueError: on a non-DataFrame input, non-unique labels,
@@ -836,8 +985,10 @@ def cs_monotonicity(
         n_quantiles}``.  ``quantile_means[k-1]`` is the pooled mean
         forward return of bucket ``k``.  Verdict is ``"PASS"`` iff
         ``spearman >= mono_spearman_min``; ``"INCONCLUSIVE"`` when
-        ``1 <= n_dates < min_dates``; flat means, empty buckets and
-        fully degenerate panels yield NaN Spearman and FAIL.
+        ``1 <= n_dates < min_dates`` and also when the sample is
+        EMPTY (``n_dates == 0``, no testable date - all-nan stats
+        plus a ``note``, never a vacuous FAIL); flat means and empty
+        buckets on a NON-EMPTY sample yield NaN Spearman and FAIL.
 
     Raises:
         ValueError: on a non-DataFrame input, non-unique labels,
@@ -907,10 +1058,19 @@ def run_cross_sectional_tests(
         min_assets: dates with fewer valid assets are dropped.  The
             default of 5 with ``n_quantiles = 5`` leaves ONE asset
             per bucket; prefer ``min_assets >= 2 * n_quantiles``
-            (the ~40-asset demo panel comfortably allows it).
+            (the ~40-asset demo panel comfortably allows it).  A
+            PANEL-LEVEL pre-check applies the same floor to the
+            common asset count: fewer common assets than
+            ``min_assets`` means no date can ever qualify, so the
+            orchestrator short-circuits to all-INCONCLUSIVE
+            sub-reports plus a top-level ``note``
+            ("panel has N assets < min_assets=M — untestable
+            payload") instead of running vacuous sub-tests.
         min_dates: minimum number of effective dates per sub-test for
-            decisive verdicts; thinner non-empty samples make the
-            sub-tests INCONCLUSIVE.
+            decisive verdicts; thinner NON-EMPTY samples make the
+            sub-tests INCONCLUSIVE, and an EMPTY sample (no testable
+            date) is INCONCLUSIVE with a ``note`` - emptiness is
+            never a FAIL.
         tstat_cutoff: minimum t-statistic for the IC and spread
             tests; must be > 0.
         positive_share_min: minimum share of positive-IC dates for
@@ -921,7 +1081,9 @@ def run_cross_sectional_tests(
     Returns:
         ``{"ic", "spread", "monotonicity"}`` sub-reports (the dicts of
         the three individual tests) plus ``{"overall_verdict",
-        "n_dates", "n_assets_mean", "cost_bps"}``.  ``n_dates`` is
+        "n_dates", "n_assets_mean", "cost_bps"}``; an untestable
+        payload additionally carries a top-level ``note`` naming the
+        ``min_assets`` shortfall.  ``n_dates`` is
         taken from the IC report (its effective finite-IC dates); the
         spread can have a DIFFERENT number of effective dates - its
         ``n_dates`` counts return observations (traded dates plus
@@ -931,7 +1093,9 @@ def run_cross_sectional_tests(
         verdict is ``"PASS"`` iff all three sub-verdicts PASS,
         ``"FAIL"`` as soon as any sub-verdict FAILs, and
         ``"INCONCLUSIVE"`` otherwise (no kill, but not enough
-        evidence to crown the hypothesis).
+        evidence to crown the hypothesis); empty sub-samples report
+        INCONCLUSIVE, so an untestable payload can never aggregate
+        into a FAIL.
 
     Raises:
         ValueError: on invalid inputs (non-DataFrame panels,
@@ -969,6 +1133,33 @@ def run_cross_sectional_tests(
     )
     sig_matrix = signal_frame.to_numpy(dtype=float)
     ret_matrix = returns_frame.to_numpy(dtype=float)
+    n_panel_assets = int(sig_matrix.shape[1])
+    if n_panel_assets < min_assets:
+        # min_assets PANEL-level pre-check: with fewer common assets
+        # than min_assets no date can EVER qualify, so the sub-tests
+        # would only publish vacuous numbers.  Short-circuit to the
+        # documented empty-sample rows (verdict INCONCLUSIVE, all-nan
+        # stats - the report-contract shape is kept so callers can
+        # index the sub-reports) and name the payload-level cause on
+        # the top-level note; emptiness is "could not test", never a
+        # FAIL.
+        return {
+            "ic": _run_aligned_ic(sig_matrix, ret_matrix, pair_mask, []),
+            "spread": _run_aligned_spread(
+                sig_matrix, ret_matrix, pair_mask, []
+            ),
+            "monotonicity": _run_aligned_mono(
+                sig_matrix, ret_matrix, pair_mask, []
+            ),
+            "overall_verdict": "INCONCLUSIVE",
+            "n_dates": 0,
+            "n_assets_mean": float("nan"),
+            "cost_bps": float(cost_bps),
+            "note": (
+                f"panel has {n_panel_assets} assets < "
+                f"min_assets={min_assets} — untestable payload"
+            ),
+        }
     ic_report = _run_aligned_ic(
         sig_matrix,
         ret_matrix,

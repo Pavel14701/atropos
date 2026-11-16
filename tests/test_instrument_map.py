@@ -246,3 +246,136 @@ def test_pipeline_audit_flags_post_hoc_on_completed_run() -> None:
     violations = audit_report(report, "rule_based_tactical")
     assert violations, "stage 4 ran -> must be flagged post-hoc"
     assert violations[0]["tool"] == "ml_stage_4"
+
+
+# -- Wave-1 F1: the units contract -------------------------------------------
+
+
+def _units_payload(
+    units: str | None = None, risk_pct: float | None = None
+) -> dict[str, Any]:
+    """A DATED mini payload (calendar span computable) with units keys.
+
+    Plain-list feeds give a RangeIndex -> period_years None ->
+    multiplicative metrics None by the fail-honest calendar law; the
+    units pins need real dates.
+    """
+    import pandas as pd  # noqa: PLC0415
+
+    base = _mini_data()
+    base["returns"] = pd.Series(
+        base["returns"],
+        index=pd.date_range("2026-01-01", periods=340, freq="h"),
+    )
+    base["signal"] = pd.Series(base["signal"], index=base["returns"].index)
+    if units is not None:
+        base["units"] = units
+    if risk_pct is not None:
+        base["risk_pct"] = risk_pct
+    return base
+
+
+def _units_panel(units: str) -> dict[str, Any]:
+    """A panel-only payload for family + units checks.
+
+    rule_based_tactical on a SERIES payload raises at the enforce
+    gate (stage 4 reachable and forbidden); panel-only reachable set
+    is {7}, so the family resolves and the units cross-check runs.
+    """
+    import numpy as np  # noqa: PLC0415
+    import pandas as pd  # noqa: PLC0415
+
+    idx = pd.date_range("2026-01-01", periods=200, freq="D")
+    rng = np.random.default_rng(5)
+    data = rng.standard_normal((200, 8))
+    frame = pd.DataFrame(data, index=idx)
+    sign_frame = pd.DataFrame(np.sign(data), index=idx, columns=frame.columns)
+    return {
+        "panel_returns": frame,
+        "panel_signal": sign_frame.shift(1),
+        "units": units,
+    }
+
+
+def test_units_mismatch_flags_family_vs_declaration() -> None:
+    """Declared units contradicting the family plan -> mismatch.
+
+    M1 pin: the instrument_audit carries the mismatch string (first
+    consumer of PLAN_REGISTRY units).
+    """
+    from atropos.ensemble_pipeline import (  # noqa: PLC0415
+        run_full_pipeline,
+    )
+
+    report = run_full_pipeline(
+        _units_panel("fractional"),
+        {"strategy_family": "rule_based_tactical"},  # plan: R_multiple
+    )
+    audit = report["instrument_audit"]
+    assert audit["mode"] == "enforce"
+    assert audit["units_mismatch"] is not None
+    assert "R_multiple" in audit["units_mismatch"]
+    assert "fractional" in audit["units_mismatch"]
+
+
+def test_units_consistent_family_passes_clean() -> None:
+    """Declared units matching the family plan -> mismatch None."""
+    from atropos.ensemble_pipeline import (  # noqa: PLC0415
+        run_full_pipeline,
+    )
+
+    report = run_full_pipeline(
+        _units_panel("R_multiple"),
+        {"strategy_family": "rule_based_tactical"},
+    )
+    assert report["instrument_audit"]["units_mismatch"] is None
+
+
+def test_r_multiple_disables_compounding_without_risk_pct() -> None:
+    """R-multiple stream without risk_pct: compounding off.
+
+    M2 pin: cagr/calmar/max_dd are None (no x100 ghost),
+    sharpe/sortino stay, the units_note explains.
+    """
+    from atropos.ensemble_pipeline import (  # noqa: PLC0415
+        run_full_pipeline,
+    )
+
+    report = run_full_pipeline(_units_payload(units="R_multiple"))
+    block = report["strategy_metrics"]
+    assert block["cagr"] is None
+    assert block["calmar"] is None
+    assert block["max_dd"] is None
+    assert block["sharpe"] is not None  # scale-invariant, stays
+    assert "units_note" in block
+    assert "risk_pct" in block["units_note"]
+
+
+def test_r_multiple_with_risk_pct_scales() -> None:
+    """risk_pct=0.01 on an R-multiple stream scales the metrics.
+
+    Scaled multiplicative metrics (not None, not x100).
+    """
+    from atropos.ensemble_pipeline import (  # noqa: PLC0415
+        run_full_pipeline,
+    )
+
+    report = run_full_pipeline(
+        _units_payload(units="R_multiple", risk_pct=0.01)
+    )
+    block = report["strategy_metrics"]
+    assert block["cagr"] is not None
+    assert block["max_dd"] is not None
+
+
+def test_risk_pct_on_fractional_is_loud() -> None:
+    """risk_pct on a fractional stream is a loud ValueError.
+
+    A contract violation is never silently ignored.
+    """
+    from atropos.ensemble_pipeline import (  # noqa: PLC0415
+        run_full_pipeline,
+    )
+
+    with pytest.raises(ValueError, match="risk_pct"):
+        run_full_pipeline(_units_payload(units="fractional", risk_pct=0.01))

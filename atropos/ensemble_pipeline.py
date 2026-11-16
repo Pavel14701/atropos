@@ -103,10 +103,21 @@ Input ``data`` keys: ``returns`` (per-period forward returns the signal is
 supposed to predict), ``signal`` (same index), optional ``features``
 (DataFrame of known controls), optional ``mom7`` / ``mom30`` (observed 7d/30d
 momentum factors; fallback: trailing sums of past returns), optional
-``hypothesis`` (description string).  Panel mode: ``panel_signal`` /
-``panel_returns`` DataFrames (rows = dates, columns = assets) enable stage 7;
-they may be supplied alone (stages 1-6 are then SKIPPED: panel-only mode,
-verdict ``SURVIVES_CS_ONLY``) or together with the series inputs.
+``hypothesis`` (description string), optional ``units``
+(``"R_multiple"`` | ``"fractional"``) and ``risk_pct`` (see the units law).
+Panel mode: ``panel_signal`` / ``panel_returns`` DataFrames (rows = dates,
+columns = assets) enable stage 7; they may be supplied alone (stages 1-6 are
+then SKIPPED: panel-only mode, verdict ``SURVIVES_CS_ONLY``) or together with
+the series inputs.
+
+Units law: return streams are FRACTIONAL per-period returns unless
+``data["units"]`` declares ``"R_multiple"`` (or a resolved family plan's
+``units`` says so); the informational ``strategy_metrics`` block then
+disables its multiplicative metrics (CAGR / Calmar / max drawdown) - or
+scales them by ``data["risk_pct"]`` when given - and a declared unit that
+contradicts the family plan is recorded as the audit string
+``instrument_audit["units_mismatch"]``.  Informational only (§16): never
+a gate.
 
 Run ``python -m atropos.ensemble_pipeline`` for the thirteen synthetic
 verification cases: a genuine edge must SURVIVE; a SLOW genuine edge
@@ -1673,10 +1684,68 @@ def _json_safe_value(value: Any) -> Any:
     return value
 
 
+def _validate_units_contract(units: str, risk_pct: float | None) -> None:
+    """Loud ladder checks for the units contract (Wave-1 F1).
+
+    One home for the trio of refusals both the resolver (in
+    :func:`run_full_pipeline`) and the metrics block apply: an
+    unknown units literal; a ``risk_pct`` that is neither ``None``
+    nor finite and > 0; and a ``risk_pct`` riding a fractional
+    stream (scaling is an R-multiple concept - a contract violation
+    is never silently ignored).
+
+    Args:
+        units: the stream's unit (``"R_multiple"`` or
+            ``"fractional"``).
+        risk_pct: the declared fraction of capital risked per R
+            multiple, or ``None`` when no scaling was declared.
+
+    Raises:
+        ValueError: naming the offending value, ladder style.
+    """
+    if units not in ("R_multiple", "fractional"):
+        raise ValueError(
+            f"units must be 'R_multiple' or 'fractional', got {units!r}"
+        )
+    if risk_pct is not None and not (
+        bool(np.isfinite(risk_pct)) and risk_pct > 0.0
+    ):
+        raise ValueError(f"risk_pct must be finite and > 0, got {risk_pct}")
+    if risk_pct is not None and units != "R_multiple":
+        raise ValueError(
+            "risk_pct scaling is defined only for R_multiple streams"
+        )
+
+
+def _r_multiple_units_note(risk_pct: float | None) -> str:
+    """The ``units_note`` text for one R-multiple stream.
+
+    Args:
+        risk_pct: the declared per-R fraction of capital, or ``None``
+            when the stream is unscaled.
+
+    Returns:
+        The disabled-metrics note (``risk_pct`` absent) or the
+        scaled-metrics note naming the value used.
+    """
+    if risk_pct is None:
+        return (
+            "R_multiple stream: multiplicative metrics disabled; "
+            "pass risk_pct to scale (R x risk_pct)"
+        )
+    return (
+        f"R_multiple stream scaled by risk_pct={risk_pct:g} "
+        "for the multiplicative metrics (R x risk_pct)"
+    )
+
+
 def _strategy_metrics_block(
     active_returns: np.ndarray,
     report_index: pd.Index,
     periods: int = 252,
+    *,
+    units: str = "fractional",
+    risk_pct: float | None = None,
 ) -> dict[str, Any]:
     """Informational return-metrics block for the report (never a gate).
 
@@ -1702,10 +1771,52 @@ def _strategy_metrics_block(
     of the CAGR / drawdown arithmetic, so the block delegates to it
     once instead of re-deriving the curve.
 
+    Units contract (Wave-1 F1): ``units="R_multiple"`` declares the
+    stream to be risk multiples, NOT fractions of capital, so
+    compounding ``1 + R`` would fabricate a ghost equity curve.  With
+    ``risk_pct=None`` the whole multiplicative family (``cagr`` /
+    ``calmar`` / ``max_dd``) is therefore disabled to ``None`` and the
+    block adds a ``"units_note"`` key explaining why; with
+    ``risk_pct`` given the block scales internally
+    (``scaled = returns * risk_pct``, one R multiple = ``risk_pct``
+    fraction of capital) and the note names the value used.
+    ``sharpe`` / ``sortino`` / ``n_obs`` / ``period_years`` are
+    scale-invariant and never change with units.
+
     The Sharpe CI is a minimum-cost noisy directional interval, not a
     significance test: below 50 active observations it is not computed
     at all (an early kill must not pay for an unreadable CI).
+
+    Args:
+        active_returns: the hoisted feed returns (series mode: the
+            aligned ``returns`` column; panel-only mode: the
+            flattened returns panel).
+        report_index: index the report dates read from (the calendar
+            span source for ``period_years``).
+        periods: periods per year (252 for daily data).
+        units: ``"fractional"`` (the default: per-period fractions of
+            capital) or ``"R_multiple"`` (risk multiples; see the
+            units contract above).  Anything else raises.
+        risk_pct: fraction of capital risked per R multiple
+            (e.g. ``0.01`` = 1%); required to be ``None`` or a finite
+            value > 0.  Scaling is defined ONLY for R-multiple
+            streams: a non-None ``risk_pct`` with
+            ``units="fractional"`` raises (a contract violation is
+            loud, never silently ignored).
+
+    Returns:
+        The metrics dict (``cagr`` / ``sharpe`` / ``sharpe_ci_low`` /
+        ``sharpe_ci_high`` / ``sortino`` / ``max_dd`` / ``calmar`` /
+        ``n_obs`` / ``period_years``); R-multiple streams carry the
+        extra ``"units_note"`` key.  Purely informational (§16).
+
+    Raises:
+        ValueError: on an unknown ``units`` literal, a non-None
+            ``risk_pct`` that is not finite and > 0, or a non-None
+            ``risk_pct`` on a fractional stream
+            (:func:`_validate_units_contract`).
     """
+    _validate_units_contract(units, risk_pct)
     metrics_returns = active_returns[
         np.isfinite(active_returns) & (active_returns != 0.0)
     ]
@@ -1715,10 +1826,13 @@ def _strategy_metrics_block(
         period_years = (
             float((report_index.max() - report_index.min()).days) / 365.25
         )
+    units_note: str | None = (
+        _r_multiple_units_note(risk_pct) if units == "R_multiple" else None
+    )
     if n_obs == 0:
         # early-kill honesty: no active periods, no metrics -- the
         # block reports the emptiness instead of fabricated numbers
-        return {
+        empty_block: dict[str, Any] = {
             "cagr": None,
             "sharpe": None,
             "sharpe_ci_low": None,
@@ -1729,6 +1843,9 @@ def _strategy_metrics_block(
             "n_obs": 0,
             "period_years": None,
         }
+        if units_note is not None:
+            empty_block["units_note"] = units_note
+        return empty_block
     if n_obs < 50:
         # point estimate only: the bootstrap CI is unreadable here and
         # an early kill must not pay for it (n_boot=1 skips the
@@ -1747,7 +1864,28 @@ def _strategy_metrics_block(
     sortino_value: float | None = sortino_ratio(
         metrics_returns, periods=periods
     )["sortino"]
-    eq = equity_from_returns(metrics_returns)
+    if units == "R_multiple" and risk_pct is None:
+        # R multiples are not fractions of capital: equity(1 + R)
+        # would compound risk units into a x100-ish ghost curve, so
+        # the multiplicative family is disabled (sharpe / sortino are
+        # scale-invariant and stay); the units_note says how to scale
+        return {
+            "cagr": None,
+            "sharpe": float(sharpe_out["sr"]),
+            "sharpe_ci_low": sharpe_ci_low,
+            "sharpe_ci_high": sharpe_ci_high,
+            "sortino": sortino_value,
+            "max_dd": None,
+            "calmar": None,
+            "n_obs": n_obs,
+            "period_years": period_years,
+            "units_note": units_note,
+        }
+    if units == "R_multiple" and risk_pct is not None:
+        compounding_returns = metrics_returns * float(risk_pct)
+    else:
+        compounding_returns = metrics_returns
+    eq = equity_from_returns(compounding_returns)
     cagr_value: float | None = None
     calmar_value: float | None = None
     mdd_value: float | None
@@ -1759,7 +1897,7 @@ def _strategy_metrics_block(
         mdd_value = None
     elif period_years is not None and n_obs >= 2:
         calmar_out = calmar_ratio(
-            metrics_returns, periods=periods, period_years=period_years
+            compounding_returns, periods=periods, period_years=period_years
         )
         cagr_value = float(calmar_out["cagr"])
         calmar_value = float(calmar_out["calmar"])
@@ -1768,7 +1906,7 @@ def _strategy_metrics_block(
         # no usable calendar span (or a single observation): the
         # drawdown itself is still a span-free fact
         mdd_value = float(max_drawdown(eq)["mdd"])
-    return {
+    metrics_block: dict[str, Any] = {
         "cagr": cagr_value,
         "sharpe": float(sharpe_out["sr"]),
         "sharpe_ci_low": sharpe_ci_low,
@@ -1779,6 +1917,9 @@ def _strategy_metrics_block(
         "n_obs": n_obs,
         "period_years": period_years,
     }
+    if units_note is not None:
+        metrics_block["units_note"] = units_note
+    return metrics_block
 
 
 # PLR0911 waived: one return per pipeline-stage verdict (stages 1-7, the
@@ -1806,7 +1947,17 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
             degenerate ``signal`` or ``returns`` feed (empty /
             all-NaN / zero peak-to-peak) stops the run at the
             stage-0 pre-flight as ``DEGENERATE_FEED`` - before the
-            aligner can mask it with a size error.
+            aligner can mask it with a size error.  Units contract:
+            optional ``units`` (``"R_multiple"`` | ``"fractional"``;
+            anything else raises) declares the return stream's unit,
+            optional ``risk_pct`` (finite and > 0) the fraction of
+            capital risked per R multiple; with a family resolved,
+            ``units`` contradicting the family plan's ``units`` is
+            recorded (not raised) as ``instrument_audit
+            ["units_mismatch"]``, and a family-only run ADOPTS the
+            plan's unit for the metrics block.  ``risk_pct`` is
+            meaningful only on R-multiple streams (declared or
+            adopted): on a fractional stream it raises ValueError.
         hypothesis_config: optional overrides over
             :data:`DEFAULT_CONFIG` (nested dicts are merged
             key-wise).  Notable keys: ``cost.cost_bps`` (one-way cost
@@ -1891,7 +2042,11 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
         active convention, matching ``active_days``); ``period_years``
         is the CALENDAR span of the full window; CAGR/Calmar use the
         calendar span (71 active days over 502 calendar days is 1.38
-        years, not 0.28). The block is per-period only:
+        years, not 0.28). On R-multiple streams (``data["units"]`` or
+        an adopted family plan) the multiplicative metrics are
+        disabled - or scaled by ``data["risk_pct"]`` when given -
+        with a ``units_note`` saying so; Sharpe/Sortino are
+        scale-invariant and unchanged. The block is per-period only:
         hit_rate/n_trades/profit_factor are trade-stream metrics and
         live in trade-stream contexts (payoff_stats / profit_factor).
 
@@ -1899,7 +2054,7 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
         (see :mod:`atropos.instrument_map`) and is built on EVERY
         verdict path, stage-0 kills included:
         ``{"family": <family|None>, "mode": "audit"|"enforce",
-        "violations": [...], "units_mismatch": None}``.  Family
+        "violations": [...], "units_mismatch": <None|str>}``.  Family
         ``None`` (the default) is AUDIT mode: the run behaves exactly
         as without routing and nothing is enforced.  A resolved family
         is ENFORCE mode: a plan forbidden entry whose concrete
@@ -1910,11 +2065,16 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
         ``violations`` repeats the post-hoc
         :func:`atropos.instrument_map.audit_report` findings for the
         stages that DID run (normally empty - enforce prevents them,
-        and SKIPPED placeholders are excluded).  The
-        ``units_mismatch`` key is reserved and always ``None`` this
-        wave: no return-stream unit inference heuristics are
-        implemented; the key exists so the schema is stable when
-        detection lands.
+        and SKIPPED placeholders are excluded).  ``units_mismatch``
+        (Wave-1 F1) is the declared-vs-plan units cross-check:
+        ``None`` when ``data["units"]`` is absent, no family plan is
+        resolved, the plan's unit is ``"mixed"``, or the two agree;
+        the string ``"declared <declared> vs family <family> plan
+        <plan_units>"`` when ``data["units"]`` and the family plan's
+        ``units`` (PLAN_REGISTRY) both name a unit and they differ.
+        Informational only (§16): a mismatch is recorded, never a
+        gate - and a family-only run silently ADOPTS the plan's unit
+        for ``strategy_metrics`` (no mismatch is invented).
 
     Raises:
         ValueError: if ``data`` lacks a usable ``returns`` stream,
@@ -1923,9 +2083,13 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
             ``config["target"]`` is not ``"ts"`` / ``"xs"``,
             ``strategy_family`` conflicts with
             ``hypothesis_config["strategy_family"]`` or names an
-            unknown family, or - enforce mode - the family plan
+            unknown family, - enforce mode - the family plan
             forbids a stage (concrete stage number) the run would
-            reach, checked up front before any data work.
+            reach, checked up front before any data work, or the
+            units contract is violated: ``data["units"]`` is neither
+            ``"R_multiple"`` nor ``"fractional"``,
+            ``data["risk_pct"]`` is not ``None`` / finite / > 0, or
+            ``risk_pct`` rides a fractional stream.
     """
     t0 = time.time()
     cfg = _merge_config(hypothesis_config)
@@ -1963,6 +2127,43 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
     plan: InstrumentPlan | None = (
         route(family) if family is not None else None
     )
+    # units contract (Wave-1 F1): the payload may DECLARE its return
+    # stream's unit and a resolved family plan DECLARES its own (the
+    # first consumer of PLAN_REGISTRY units).  The two declarations
+    # are cross-checked INFORMATIONALLY (§16): a contradiction is
+    # recorded on instrument_audit["units_mismatch"] as a string and
+    # never gates; the plan's unit is adopted for the metrics block
+    # when the payload is silent, and family-less runs stay
+    # fractional (the historical behavior).
+    declared_units: str | None = data.get("units")
+    if declared_units is not None:
+        # literal ladder check; the risk_pct value/stream pair is
+        # checked once the effective stream unit is known, below
+        _validate_units_contract(declared_units, None)
+    risk_pct_value: float | None = data.get("risk_pct")
+    plan_units: str | None = plan["units"] if plan is not None else None
+    units_mismatch: str | None = None
+    if (
+        declared_units is not None
+        and plan_units in ("R_multiple", "fractional")
+        and declared_units != plan_units
+    ):
+        units_mismatch = (
+            f"declared {declared_units} vs family {family} plan {plan_units}"
+        )
+    block_units: str = (
+        declared_units
+        if declared_units is not None
+        else (
+            plan_units
+            if plan_units in ("R_multiple", "fractional")
+            else "fractional"
+        )
+    )
+    # the value + stream-pair checks share the block's single ladder
+    # home (a bad risk_pct, or one riding a fractional stream, is a
+    # loud ValueError - never silently ignored)
+    _validate_units_contract(block_units, risk_pct_value)
     hypothesis = str(data.get("hypothesis", ""))
     # stage-0 DEGENERATE_FEED pre-flight (B1): BEFORE _align_inputs.
     # The aligner drops NaN rows and raises its generic <300-obs
@@ -2340,9 +2541,10 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
         # audit_report findings for the stages that DID run - enforce
         # prevents forbidden stages from executing and the SKIPPED
         # placeholders are filtered out, so violations is normally
-        # empty.  units_mismatch is reserved (always None this wave):
-        # no return-stream unit inference heuristics exist yet; the
-        # key keeps the schema stable for when detection lands.
+        # empty.  units_mismatch (Wave-1 F1) records the units
+        # cross-check declared-vs-family-plan: None when consistent
+        # or either side absent, a "declared X vs family Y plan Z"
+        # string on a contradiction - informational (§16), no gating.
         instrument_audit: dict[str, Any]
         if family is not None and plan is not None:
             ran_stages = [
@@ -2354,14 +2556,14 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
                 "family": family,
                 "mode": "enforce",
                 "violations": audit_report({"stages": ran_stages}, family),
-                "units_mismatch": None,
+                "units_mismatch": units_mismatch,
             }
         else:
             instrument_audit = {
                 "family": None,
                 "mode": "audit",
                 "violations": [],
-                "units_mismatch": None,
+                "units_mismatch": units_mismatch,
             }
         date_range = (
             (str(report_index.min()), str(report_index.max()))
@@ -2370,9 +2572,15 @@ def run_full_pipeline(  # noqa: PLR0911, PLR0912, PLR0915
         )
         # informational metrics layer: reads only the hoisted facts, so
         # it is present on EVERY verdict path (early kills included);
-        # it never gates -- a high Sharpe does not override any verdict
+        # it never gates -- a high Sharpe does not override any verdict.
+        # The units thread (Wave-1 F1): the payload declaration or the
+        # adopted family-plan unit reaches the block here, with the
+        # optional risk_pct scaling
         strategy_metrics = _strategy_metrics_block(
-            active_returns, report_index
+            active_returns,
+            report_index,
+            units=block_units,
+            risk_pct=risk_pct_value,
         )
         return {
             "hypothesis": hypothesis,

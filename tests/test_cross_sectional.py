@@ -11,6 +11,8 @@ and pure noise must die in the aggregate runner.
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -286,6 +288,12 @@ def test_run_cross_sectional_tests_planted_passes_noise_fails() -> None:
 
 
 def test_degenerate_panels_fail_gracefully() -> None:
+    """Wave-1 F2 law: emptiness is INCONCLUSIVE, never a vacuous FAIL.
+
+    Empty panels carry no evidence in either direction; publishing a
+    FAIL from n_dates == 0 produced the 2026-11-10 zoo's vacuous
+    panel kills.
+    """
     empty_signal = pd.DataFrame()
     empty_returns = pd.DataFrame()
     for report in (
@@ -293,10 +301,10 @@ def test_degenerate_panels_fail_gracefully() -> None:
         quantile_spread(empty_signal, empty_returns),
         cs_monotonicity(empty_signal, empty_returns),
     ):
-        assert report["verdict"] == "FAIL"
+        assert report["verdict"] == "INCONCLUSIVE"
         assert report["n_dates"] == 0
     combined = run_cross_sectional_tests(empty_signal, empty_returns)
-    assert combined["overall_verdict"] == "FAIL"
+    assert combined["overall_verdict"] == "INCONCLUSIVE"
 
 
 def test_p_value_uses_student_t_not_normal() -> None:
@@ -487,3 +495,69 @@ def test_demo_run_all_examples_smoke(
     assert "ic           :" in out
     assert "quantile_spread:" in out
     assert "monotonicity :" in out
+
+
+# -- Wave-1 F2: empty samples are INCONCLUSIVE, never vacuous FAILs --------
+
+
+def _tie_heavy_panel(n_dates: int = 60, n_assets: int = 3) -> dict[str, Any]:
+    """A degenerate panel: short and tie-heavy.
+
+    Fewer assets than min_assets AND a tie-heavy sign signal (top
+    quantile empty on every date -> zero testable dates).
+    """
+    idx = pd.date_range("2026-01-01", periods=n_dates, freq="D")
+    returns = pd.DataFrame(
+        {
+            f"sym{asset}": np.full(n_dates, 0.01 * (asset + 1))
+            for asset in range(n_assets)
+        },
+        index=idx,
+    )
+    signal = pd.DataFrame(
+        {f"sym{asset}": np.ones(n_dates) for asset in range(n_assets)},
+        index=idx,
+    )
+    return {"panel_returns": returns, "panel_signal": signal}
+
+
+def test_min_assets_shortfall_is_inconclusive_not_fail() -> None:
+    """A 3-asset panel (< min_assets=5) publishes INCONCLUSIVE.
+
+    Mutation M4: the min_assets pre-check removed -> the vacuous
+    FAIL comes back -> caught.
+    """
+    from atropos.cross_sectional import (  # noqa: PLC0415
+        run_cross_sectional_tests,
+    )
+
+    payload = _tie_heavy_panel()
+    out = run_cross_sectional_tests(
+        payload["panel_signal"], payload["panel_returns"], min_assets=5
+    )
+    assert out["overall_verdict"] == "INCONCLUSIVE"
+    assert "min_assets" in str(out.get("note", ""))
+
+
+def test_empty_sample_subtests_are_inconclusive() -> None:
+    """Empty sub-tests read INCONCLUSIVE, never vacuous FAILs.
+
+    n_dates == 0: the aggregate must not turn emptiness into a kill.
+    Mutation M3: the empty->FAIL default reverted -> the overall
+    verdict flips to FAIL -> caught.
+    """
+    from atropos.cross_sectional import (  # noqa: PLC0415
+        _run_aligned_ic,
+        _run_aligned_spread,
+    )
+
+    empty_r = pd.DataFrame(
+        np.nan,
+        index=pd.date_range("2026-01-01", periods=5, freq="D"),
+        columns=[f"s{col}" for col in range(6)],
+    )
+    empty_np = empty_r.to_numpy()
+    ic = _run_aligned_ic(empty_np, empty_np)
+    assert ic["verdict"] == "INCONCLUSIVE"
+    spread = _run_aligned_spread(empty_np, empty_np)
+    assert spread["verdict"] == "INCONCLUSIVE"
