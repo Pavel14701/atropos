@@ -40,6 +40,23 @@
   capital allocation).  Still not a "compiler": the compiler returns
   when a real-data paper run reaches SURVIVES_TO_LIVE — trigger, not
   vibe.
+- feat: ml_predictive wave — `atropos/feature_generators.py` (NEW,
+  local numpy/scipy, zero new dependencies): kalman_ou_spread
+  (time-varying-beta Kalman filter + OU half-life), garch_sigma_forecast
+  (GARCH(1,1) Gaussian MLE, box-bounded coordinates, converged flag),
+  hmm_regime (3-state Gaussian Baum-Welch, log-space forward-backward,
+  ascending-mean state labels). `compare_models_baseline`
+  (ml_training): logit vs hist_gbm in ONE shared CV pass ->
+  LINEAR_SUFFICIENT / NONLINEAR_SIGNAL (routing, not a kill).
+  `orthogonal_feature_gate` (feature_scan): CLOSED BY DEFAULT — only
+  analyzed-and-detected columns enter an ml_predictive model;
+  unanalyzed features can NEVER pass. Wave-2 pins: generator
+  known-answers, PREREG proxy-suspicion fixture, XOR/linear baseline
+  worlds, gate law, vol_targeted_garch sizing parity, preregistered
+  regime scan. PREREG_ML_PREDICTIVE_2026-11-16 frozen before runs
+  (garch expected-orthogonal, kalman suspected-proxy, hmm
+  regime-open; §18 boundary: a filtered book must beat direct net
+  of costs).
 - feat: machine-checkable instrument routing
   (`atropos/instrument_map.py`, `PLAN_REGISTRY`, six strategy
   families) — families map to allowed/forbidden battery tools and

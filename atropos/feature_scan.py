@@ -81,6 +81,7 @@ Run ``python -m atropos.feature_scan`` for a synthetic demo.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from itertools import product
 from typing import Any, TypedDict
 
@@ -129,6 +130,7 @@ __all__ = [
     "feature_importance",
     "interaction_scan",
     "missingness_scan",
+    "orthogonal_feature_gate",
     "regime_scan",
     "rule_fit",
     "threshold_scan",
@@ -3401,6 +3403,166 @@ def feature_analysis(
         recommended_actions=actions,
         notes=notes,
     )
+
+
+# ---------------------------------------------------------------------------
+# consumer-side gate (Wave-2 checkpoint C)
+# ---------------------------------------------------------------------------
+def orthogonal_feature_gate(
+    analysis_report: Mapping[str, Any],
+    features: pd.DataFrame,
+    *,
+    require_sign_consistent: bool = True,
+    label: str = "unnamed",
+) -> dict[str, Any]:
+    """Reduce a features frame to its orthogonally detected columns.
+
+    The LAW of this gate: it is CLOSED BY DEFAULT.  A column passes
+    if and only if (1) it is present in ``features``, (2) the
+    analysis report actually analyzed it -- it appears in the
+    orthogonal block's ``per_feature_detected`` -- (3) it reads
+    ``True`` there, and (4) when ``require_sign_consistent`` is set,
+    the report-wide sign flag holds.  A column of ``features`` the
+    report never analyzed can NEVER enter an ``ml_predictive``
+    model through this gate: it is rejected with ``"never analyzed
+    — run feature_analysis first"`` instead of sliding in untested.
+    Analysis first, model second -- never the model in place of the
+    analysis.
+
+    ``require_sign_consistent`` applies the SAMPLE-WIDE
+    thirds-stability flag (``orthogonal["facts"]["sign_consistent"]``
+    -- the sign stability of the strongest feature across sample
+    thirds, a property of the SAMPLE, not of any single column) to
+    ALL features at once: the conservative read.  A sample whose
+    headline sign flipped across thirds distrusts every detected
+    column equally; pass ``require_sign_consistent=False`` to judge
+    columns on their own detection alone.
+
+    Cluster members read ``"never analyzed"`` under this gate:
+    :func:`feature_analysis` judges only cluster REPRESENTATIVES,
+    so a member carries no ``per_feature_detected`` entry of its
+    own -- collapse to representatives (or re-run the analysis)
+    before gating a frame that still carries both.
+
+    ``analysis_report`` is what :func:`feature_analysis` returns --
+    a :class:`FeatureAnalysisReport` TypedDict, an ordinary dict at
+    runtime -- so a hand-built dict carrying the minimal orthogonal
+    block (``per_feature_detected`` plus ``facts``) behaves exactly
+    the same.  Columns the report detected but the frame no longer
+    carries are reported rejected (``"absent from the features
+    frame"``), so shrinking a frame between analysis and gating is
+    visible, not silent.
+
+    Args:
+        analysis_report: a :func:`feature_analysis` report (or any
+            dict of the same minimal shape); only its
+            ``"orthogonal"`` block is read.
+        features: the frame about to feed an ``ml_predictive``
+            model; its columns form the gate's universe, plus the
+            report's detected names (reported when absent from the
+            frame).
+        require_sign_consistent: apply the sample-wide sign flag to
+            every detected column (default True, the conservative
+            read).
+        label: free-text tag naming this gate call in error
+            messages (mirrors ``label`` through this module).
+
+    Returns:
+        ``{"passed": list[str], "rejected": dict[str, str]}``: the
+        passing columns in frame order, and for every other column
+        of the universe the exact reason string --
+
+        * ``"not detected"``
+        * ``"sign-inconsistent sample"``
+        * ``"absent from the features frame"``
+        * ``"never analyzed — run feature_analysis first"``
+
+    Raises:
+        ValueError: if the report carries no dict ``"orthogonal"``
+            block, or that block carries no dict
+            ``per_feature_detected`` -- a malformed report is a
+            caller error, not a closed gate.
+
+    Example::
+
+        A hand-built minimal analysis report (the shape living
+        under ``report["orthogonal"]``) against a features frame:
+
+        >>> analysis = {
+        ...     "orthogonal": {
+        ...         "per_feature_detected": {
+        ...             "alpha": True,
+        ...             "beta": False,
+        ...             "gamma": True,
+        ...         },
+        ...         "facts": {"sign_consistent": True},
+        ...     }
+        ... }
+        >>> features = pd.DataFrame(
+        ...     {"alpha": [1.0, 2.0], "beta": [3.0, 4.0], "delta": [5.0, 6.0]}
+        ... )
+        >>> gate = orthogonal_feature_gate(analysis, features)
+        >>> gate["passed"]
+        ['alpha']
+        >>> gate["rejected"]["beta"]
+        'not detected'
+        >>> gate["rejected"]["delta"]
+        'never analyzed — run feature_analysis first'
+        >>> gate["rejected"]["gamma"]
+        'absent from the features frame'
+
+        A sample whose strongest feature flipped sign across thirds
+        closes the gate for every detected column (the conservative
+        read), unless the flag is explicitly waived:
+
+        >>> features2 = pd.DataFrame({"gamma": [1.0, 2.0]})
+        >>> inconsistent = {
+        ...     "orthogonal": {
+        ...         "per_feature_detected": {"gamma": True},
+        ...         "facts": {"sign_consistent": False},
+        ...     }
+        ... }
+        >>> orthogonal_feature_gate(inconsistent, features2)["rejected"]
+        {'gamma': 'sign-inconsistent sample'}
+        >>> orthogonal_feature_gate(
+        ...     inconsistent, features2, require_sign_consistent=False
+        ... )["passed"]
+        ['gamma']
+    """
+    orth_block = analysis_report.get("orthogonal")
+    if not isinstance(orth_block, dict):
+        raise ValueError(
+            f"analysis_report[{label!r}] carries no dict 'orthogonal' "
+            "block — pass a feature_analysis() report"
+        )
+    detected = orth_block.get("per_feature_detected")
+    if not isinstance(detected, dict):
+        raise ValueError(
+            f"analysis_report[{label!r}]: the orthogonal block carries "
+            "no dict 'per_feature_detected' — pass a feature_analysis() "
+            "report"
+        )
+    facts = orth_block.get("facts")
+    sign_consistent = isinstance(facts, dict) and (
+        facts.get("sign_consistent") is True
+    )
+    universe = [str(name) for name in dict.fromkeys(features.columns)] + [
+        str(name) for name in detected if name not in features.columns
+    ]
+    passed: list[str] = []
+    rejected: dict[str, str] = {}
+    for name in universe:
+        if name not in features.columns:
+            rejected[name] = "absent from the features frame"
+        elif name not in detected:
+            rejected[name] = "never analyzed — run feature_analysis first"
+        elif detected[name] is not True:
+            rejected[name] = "not detected"
+        elif require_sign_consistent and not sign_consistent:
+            rejected[name] = "sign-inconsistent sample"
+        else:
+            passed.append(name)
+    return {"passed": passed, "rejected": rejected}
 
 
 # ---------------------------------------------------------------------------

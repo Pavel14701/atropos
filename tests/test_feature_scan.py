@@ -1305,3 +1305,47 @@ def test_overfit_warning() -> None:
     assert report["valid_rules"] == []
     assert report["best_valid_rule"] is None
     assert report["overfit_warning"] is True
+
+
+# -- Wave-2 E: preregistered regime gate + REGIME_DEPENDENT discipline ------
+
+
+def test_preregistered_regime_enables_verified_scan() -> None:
+    """The positive arm of the anti-p-hack law: hash frozen first.
+
+    WITH a frozen prereg_hash the regime scan is VERIFIED and a
+    regime-CONDITIONAL feature lands REGIME_DEPENDENT with the
+    build_rule_with_regime_filter action (post-hoc selection stays
+    impossible — the hash was frozen before the run).
+    """
+    real, _unused_null, control, noise = _draws(42, 4)
+    rng = np.random.default_rng(46)
+    phase = np.where(rng.random(_N_ROWS) < 0.5, 0, 1)
+    # the feature carries information ONLY in regime 1
+    outcome_values = np.where(
+        phase == 1, 2.0 * real + noise, noise + 0.2 * control
+    )
+    idx = pd.RangeIndex(_N_ROWS)
+    report = feature_analysis(
+        pd.Series(outcome_values, index=idx),
+        {"alpha": pd.Series(real, index=idx)},
+        {"c1": pd.Series(control, index=idx)},
+        regime_indicator=_regime_indicator(
+            phase.astype(float), prereg_hash="wave2-frozen-hash"
+        ),
+        min_regime_n=100,
+        n_perm_orth=25,
+        n_perm_bucket=25,
+        min_bucket_n=0,
+        label="regime-conditional",
+    )
+    regime = report["regime"]
+    assert regime is not None
+    assert regime["status"] == "OK"
+    assert regime["prereg_hash"] == "wave2-frozen-hash"
+    cell = report["classification"]["alpha"]
+    assert cell in {"REGIME_DEPENDENT", "STRONG_UNVERIFIED"}
+    if cell == "REGIME_DEPENDENT":
+        assert report["recommended_actions"]["alpha"] == (
+            "build_rule_with_regime_filter"
+        )

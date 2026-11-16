@@ -118,6 +118,7 @@ __all__ = [
     "DEFAULT_TRAINING_CONFIG",
     "MODEL_REGISTRY",
     "assign_folds",
+    "compare_models_baseline",
     "decluster_count",
     "deflated_sharpe_value",
     "ev_of_taken",
@@ -2532,6 +2533,203 @@ def run_ml_kill_protocol(
         "n_min_events": cfg["n_min_events"],
         "prereg_hash": cfg["prereg_hash"],
         "config": _echo_config(cfg),
+    }
+
+
+# ---------------------------------------------------------------------------
+# linear-vs-flexible routing wrapper (Wave-2 checkpoint B)
+# ---------------------------------------------------------------------------
+def compare_models_baseline(
+    features: pd.DataFrame,
+    target: np.ndarray,
+    exec_returns: np.ndarray,
+    times_us: np.ndarray,
+    *,
+    linear_model: str = "logit",
+    flexible_model: str = "hist_gbm",
+    config: dict[str, Any] | None = None,
+    battery_controls: list[str] | None = None,
+) -> dict[str, Any]:
+    """Does a flexible model beat the linear baseline on OOS EV?
+
+    A stateless wrapper around :func:`run_ml_kill_protocol` that runs
+    one linear model and one flexible model through the SAME
+    walk-forward CV pass (identical folds, purge and embargo, so the
+    two taken books face identical out-of-sample rows) and reduces
+    the outcome to a routing verdict:
+
+    * ``NONLINEAR_SIGNAL`` -- the flexible model's merged-OOS
+      taken-book EV is STRICTLY greater than the linear model's;
+    * ``LINEAR_SUFFICIENT`` -- everything else, including an exact
+      tie: a tie means the nonlinearity added nothing.
+
+    This is a ROUTING verdict, not a kill.  It never deads a model
+    and never gates the underlying run (the per-model kill verdicts
+    stay untouched inside ``models_report["models"][name]``); it
+    answers the packaging-vs-direct comparison (FRAMEWORK §18): a
+    filtered or model-based book must beat the linear baseline NET
+    OF COSTS before its extra structure is worth carrying, so
+    ``LINEAR_SUFFICIENT`` is an honest result, not a failed run --
+    routing there keeps the simpler, more auditable book.  The
+    verdict compares EVs only and is not a significance test (the
+    engine's incremental gate inside ``models_report`` owns that
+    question, against the linear battery).  An arm whose taken book
+    is empty reports EV ``None`` and cannot strictly beat anything,
+    so it routes ``LINEAR_SUFFICIENT``; only when NEITHER arm
+    produced an EV is there nothing to route on, and that raises.
+
+    Args:
+        features: DataFrame of float feature columns, chronological
+            rows (the engine contract of
+            :func:`run_ml_kill_protocol`).
+        target: 0/1 integer labels of the run's direction.
+        exec_returns: executable per-event returns (costs already
+            netted by the caller).
+        times_us: int64 microsecond stamps, monotonically
+            non-decreasing, one per row.
+        linear_model: registry name of the linear arm
+            (default ``"logit"``).
+        flexible_model: registry name of the flexible arm
+            (default ``"hist_gbm"``).
+        config: overrides over :data:`DEFAULT_TRAINING_CONFIG`,
+            merged key-wise at every level by the engine -- EXCEPT
+            ``"models"``, which this wrapper owns: a caller config
+            that carries its own ``"models"`` must list exactly the
+            two arm names (any order), else the call refuses to
+            guess which entry is which arm.  ``n_min_events`` is the
+            usual knob for small samples (the default 500 is a
+            production walk-forward size).
+        battery_controls: optional feature columns feeding the
+            linear battery of the engine's incremental gate.
+
+    Returns:
+        One dict: ``linear`` / ``flexible`` (the engine's per-model
+        report dicts -- ``ev``, ``n_events``, ``deflated_sharpe``,
+        ``verdict``, ``kills``, ``taken_exec``, ...), the flat
+        aliases ``ev_linear`` / ``ev_flexible`` /
+        ``ev_edge_flexible_minus_linear`` (``None`` when either arm
+        took no OOS trades), the routing ``verdict``
+        (``"LINEAR_SUFFICIENT"`` / ``"NONLINEAR_SIGNAL"``) and
+        ``models_report`` -- the full underlying
+        :func:`run_ml_kill_protocol` report of the shared pass.
+
+    Raises:
+        ValueError: if a caller config carries a ``"models"`` that
+            is not exactly the two arm names, or if neither arm
+            produced an OOS EV (both taken books empty -- check
+            ``n_min_events``); otherwise the engine's own contract
+            errors propagate unchanged.
+
+    Example::
+
+        A planted LINEAR world -- the executable return is a linear
+        function of the features plus noise, so the histogram
+        booster has nothing beyond what the logistic baseline
+        already sees.  ``n_min_events`` (and friends) are overridden
+        down from the production defaults so the toy sample counts
+        as powered and the example stays fast:
+
+        >>> rng = np.random.default_rng(0)
+        >>> stamps = np.arange(600, dtype=np.int64) * 3_600_000_000
+        >>> hidden = rng.standard_normal((600, 3))
+        >>> feats = pd.DataFrame(
+        ...     {"f1": hidden[:, 0], "f2": hidden[:, 1], "f3": hidden[:, 2]}
+        ... )
+        >>> exec_ret = (
+        ...     0.006 * hidden[:, 0]
+        ...     + 0.002 * hidden[:, 1]
+        ...     + 0.0025 * rng.standard_normal(600)
+        ... )
+        >>> labels = (exec_ret > 0.004).astype(np.int64)
+        >>> out = compare_models_baseline(
+        ...     feats,
+        ...     labels,
+        ...     exec_ret,
+        ...     stamps,
+        ...     config={
+        ...         "n_min_events": 50,
+        ...         "k_blocks": 3,
+        ...         "purge_h": 1,
+        ...         "embargo_h": 2,
+        ...         "bootstrap_b": 50,
+        ...         "prereg_hash": "d4b5c6e7",
+        ...     },
+        ... )
+        >>> out["verdict"]
+        'LINEAR_SUFFICIENT'
+        >>> round(out["ev_linear"], 4)
+        0.0089
+        >>> round(out["ev_flexible"], 4)
+        0.0066
+        >>> round(out["ev_edge_flexible_minus_linear"], 4)
+        -0.0023
+        >>> sorted(out["models_report"]["models"])
+        ['hist_gbm', 'logit']
+
+        A caller config that carries its own ``"models"`` must name
+        exactly the two arms -- anything else refuses to guess:
+
+        >>> compare_models_baseline(
+        ...     feats,
+        ...     labels,
+        ...     exec_ret,
+        ...     stamps,
+        ...     config={"models": ["logit", "rf"]},
+        ... )
+        Traceback (most recent call last):
+            ...
+        ValueError: config['models'] must be exactly ['logit', 'hist_gbm']
+    """
+    overrides: dict[str, Any] = dict(config) if config else {}
+    caller_models = overrides.get("models")
+    if caller_models is None:
+        run_models = [linear_model, flexible_model]
+    else:
+        if isinstance(caller_models, str):
+            names = [caller_models]
+        else:
+            names = list(caller_models)
+        if (
+            len(names) != 2
+            or linear_model not in names
+            or flexible_model not in names
+        ):
+            raise ValueError(
+                "config['models'] must be exactly "
+                f"[{linear_model!r}, {flexible_model!r}]"
+            )
+        run_models = names
+    report = run_ml_kill_protocol(
+        features,
+        target,
+        exec_returns,
+        times_us,
+        config={**overrides, "models": run_models},
+        battery_controls=battery_controls,
+    )
+    linear_entry = report["models"][linear_model]
+    flexible_entry = report["models"][flexible_model]
+    ev_linear = linear_entry["ev"]
+    ev_flexible = flexible_entry["ev"]
+    if ev_linear is None and ev_flexible is None:
+        raise ValueError(
+            "neither model produced an OOS EV — check n_min_events"
+        )
+    both_present = ev_linear is not None and ev_flexible is not None
+    return {
+        "linear": linear_entry,
+        "flexible": flexible_entry,
+        "ev_linear": ev_linear,
+        "ev_flexible": ev_flexible,
+        "ev_edge_flexible_minus_linear": (
+            float(ev_flexible - ev_linear) if both_present else None
+        ),
+        "verdict": (
+            "NONLINEAR_SIGNAL"
+            if both_present and ev_flexible > ev_linear
+            else "LINEAR_SUFFICIENT"
+        ),
+        "models_report": report,
     }
 
 

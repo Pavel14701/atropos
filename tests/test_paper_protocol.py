@@ -880,3 +880,61 @@ def test_paper_instrument_audit_mode_no_declaration() -> None:
     op_half = verdict_half["operational_report"]
     names_half = {issue["name"] for issue in op_half["issues"]}
     assert "instrument_violation" not in names_half
+
+
+# -- Wave-2 D: vol-targeted GARCH sizing through the parity layer -----------
+
+
+def _vol_rows(count: int, scale: float = 0.02) -> list[dict[str, Any]]:
+    """Trades sized scale / sigma (sigma alternating 1.0 / 2.0)."""
+    sigmas = [1.0 if position % 2 == 0 else 2.0 for position in range(count)]
+    rows = []
+    base = pd.Timestamp(_BASE, tz="UTC")
+    for position in range(count):
+        entry = base + pd.Timedelta(minutes=30 * position)
+        rows.append(
+            {
+                "coin": "BTC",
+                "entry_ts": entry,
+                "exit_ts": entry + pd.Timedelta(minutes=15 * 8),
+                "exit_type": "mtm",
+                "pnl_r": 0.5,
+                "size": scale / sigmas[position],
+                "sizing_rule": "vol_targeted_garch",
+            }
+        )
+    return rows
+
+
+def test_vol_targeted_garch_sizing_parity_clean() -> None:
+    """Both sides size k / garch_sigma -> parity clean.
+
+    Per-trade sizes agree to 1e-9 and the sizing_rule token matches
+    (D's parity pass).
+    """
+    rows = _vol_rows(6)
+    paper = _paper_frame(rows, sizing_rule="vol_targeted_garch")
+    spec = _spec()
+    spec["c_zone"]["sizing_rule"] = "vol_targeted_garch"
+    frozen = _frozen_dict({"c_zone": [dict(row) for row in rows]}, spec)
+    verdict = _run(paper, frozen, spec)
+    names = _issue_names(verdict)
+    assert "sizing_mismatch" not in names
+    assert "sizing_rule_mismatch" not in names
+
+
+def test_vol_targeted_vs_fixed_sizing_mismatch() -> None:
+    """Paper fixed-size vs frozen vol-targeted -> mismatch.
+
+    Per-trade sizing_mismatch fires (the failure mode D guards).
+    """
+    rows = _vol_rows(6)
+    paper_rows = [dict(row) for row in rows]
+    for row in paper_rows:
+        row["size"] = 1.0  # fixed sizing on the paper side
+    paper = _paper_frame(paper_rows, sizing_rule="vol_targeted_garch")
+    spec = _spec()
+    spec["c_zone"]["sizing_rule"] = "vol_targeted_garch"
+    frozen = _frozen_dict({"c_zone": [dict(row) for row in rows]}, spec)
+    verdict = _run(paper, frozen, spec)
+    assert "sizing_mismatch" in _issue_names(verdict)
