@@ -828,6 +828,8 @@ def main(
         19-instrument-routing
         20-paper-parity
         21-units-and-identities
+        22-carry-testing
+        23-factor-attribution
         0
     """
     parser = _build_parser()

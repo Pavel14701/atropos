@@ -127,7 +127,8 @@ PLAN_REGISTRY: dict[StrategyFamily, InstrumentPlan] = {
         ],
         "units": "fractional",
         "identity": (
-            "CS_NO_EDGE + factor exposure attribution; factor premia ≠ alpha"
+            "CS_NO_EDGE + factor exposure attribution"
+            " (atropos.factor_attribution); factor premia ≠ alpha"
         ),
     },
     "carry": {
@@ -142,7 +143,9 @@ PLAN_REGISTRY: dict[StrategyFamily, InstrumentPlan] = {
             },
         ],
         "units": "fractional",
-        "identity": "risk envelope + funding alignment",
+        "identity": (
+            "risk envelope + funding alignment (atropos.carry_instruments)"
+        ),
     },
     "options": {
         "family": "options",

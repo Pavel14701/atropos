@@ -41,7 +41,7 @@ from atropos.agent._resolution import (
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-PACKAGE_FIFTEEN = [
+PACKAGE_SEVENTEEN = [
     "01-preregister",
     "02-run-pipeline",
     "03-read-graveyard",
@@ -57,6 +57,8 @@ PACKAGE_FIFTEEN = [
     "19-instrument-routing",
     "20-paper-parity",
     "21-units-and-identities",
+    "22-carry-testing",
+    "23-factor-attribution",
 ]
 
 
@@ -545,14 +547,14 @@ def test_package_paths_exist() -> None:
     assert SKILLS_DIR.is_dir()
     assert (AGENT_DIR / "VERSION").exists()
     assert (AGENT_DIR / "MANIFEST.toml").exists()
-    assert len(list(SKILLS_DIR.glob("*.md"))) == 15
+    assert len(list(SKILLS_DIR.glob("*.md"))) == 17
 
 
 def test_public_api_with_pinned_layers(tmp_path: Path) -> None:
     """list_skills/read_agent_context/read_skill on pinned layers."""
     nowhere = tmp_path / "nowhere"
     assert list_skills(user_dir=nowhere, project_dir=nowhere) == (
-        PACKAGE_FIFTEEN
+        PACKAGE_SEVENTEEN
     )
     context = read_agent_context(user_dir=nowhere, project_dir=nowhere)
     assert context is not None
@@ -590,7 +592,7 @@ def test_public_api_respects_project_overrides(tmp_path: Path) -> None:
     _write(project_dir / "skills" / ".disabled", "11-premise-check\n")
     nowhere = tmp_path / "nowhere"
     assert list_skills(user_dir=nowhere, project_dir=project_dir) == [
-        name for name in PACKAGE_FIFTEEN if name != "11-premise-check"
+        name for name in PACKAGE_SEVENTEEN if name != "11-premise-check"
     ]
     context = read_agent_context(user_dir=nowhere, project_dir=project_dir)
     assert context is not None

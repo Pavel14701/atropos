@@ -59,7 +59,7 @@ from atropos.track_record import live_verdict
 # production stage for a deployed SURVIVES; LIVE_OK ≠ confirmation.
 ```
 
-## Skills (15)
+## Skills (17)
 
 Core: `01-preregister`, `02-run-pipeline` (verdicts: see the ensemble_pipeline docstring),
 `03-read-graveyard`, `04-run-ml-kill-protocol` (the ML chain:
@@ -72,7 +72,9 @@ tradability test), then `18-read-portfolio-results` (the multi-slot
 book: exposure, event equity, the three portfolio gates).
 Deployment layer: `19-instrument-routing` (family -> instruments via
 PLAN_REGISTRY), `20-paper-parity` (forward parity against the frozen
-spec), `21-units-and-identities` (units law, half-normal identity).
+spec), `21-units-and-identities` (units law, half-normal identity),
+`22-carry-testing` (judge carry with funding alignment + flip costs),
+`23-factor-attribution` (MKT/BAB-proxy exposure vs alpha routing).
 The stage order is fixed: 1 → 2 → 3 → 4 → 5 → 6, each stage cheaper than the
 next. List: `atropos agent-context --list-skills`; text:
 `--skill=NAME`.

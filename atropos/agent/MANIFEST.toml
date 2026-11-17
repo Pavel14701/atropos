@@ -6,7 +6,7 @@
 name = "atropos-agent-context"
 version = "0.1.0"          # must match the VERSION file
 schema = 1
-description = "Default agent context: user workflow + 15 skills"
+description = "Default agent context: user workflow + 17 skills"
 
 [[files]]
 path = "AGENTS.md"
@@ -128,4 +128,18 @@ name = "21-units-and-identities"
 path = "skills/21-units-and-identities.md"
 description = "The units law (1R = 1% of equity), the half-normal identity, additive-vs-multiplicative, metrics never gate"
 when_to_use = "Before quoting any performance number or interpreting a metrics block"
+version = "0.1.0"
+
+[[skills]]
+name = "22-carry-testing"
+path = "skills/22-carry-testing.md"
+description = "Judge a funding-carry book with its native instruments (funding alignment + risk envelope + flip-cost economics)"
+when_to_use = "When a funding-carry family is proposed, revived, or up for a verdict"
+version = "0.1.0"
+
+[[skills]]
+name = "23-factor-attribution"
+path = "skills/23-factor-attribution.md"
+description = "Attribute P&L to factor proxies (MKT / BAB-proxy) with atropos.factor_attribution - FACTOR_EXPOSURE vs ALPHA_CANDIDATE routing"
+when_to_use = "When a factor book hits CS_NO_EDGE or a book's P&L needs decomposition into known premia"
 version = "0.1.0"

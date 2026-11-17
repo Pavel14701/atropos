@@ -914,25 +914,27 @@ through argparse (exit code 2); command failures return non-zero from
 </span><span id="L-828"><a href="#L-828"><span class="linenos">828</span></a><span class="sd">        19-instrument-routing</span>
 </span><span id="L-829"><a href="#L-829"><span class="linenos">829</span></a><span class="sd">        20-paper-parity</span>
 </span><span id="L-830"><a href="#L-830"><span class="linenos">830</span></a><span class="sd">        21-units-and-identities</span>
-</span><span id="L-831"><a href="#L-831"><span class="linenos">831</span></a><span class="sd">        0</span>
-</span><span id="L-832"><a href="#L-832"><span class="linenos">832</span></a><span class="sd">    """</span>
-</span><span id="L-833"><a href="#L-833"><span class="linenos">833</span></a>    <span class="n">parser</span> <span class="o">=</span> <span class="n">_build_parser</span><span class="p">()</span>
-</span><span id="L-834"><a href="#L-834"><span class="linenos">834</span></a>    <span class="n">args</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_args</span><span class="p">(</span><span class="n">argv</span><span class="p">)</span>
-</span><span id="L-835"><a href="#L-835"><span class="linenos">835</span></a>    <span class="n">_force_utf8_stdout</span><span class="p">()</span>
-</span><span id="L-836"><a href="#L-836"><span class="linenos">836</span></a>    <span class="n">command</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">command</span><span class="p">)</span>
-</span><span id="L-837"><a href="#L-837"><span class="linenos">837</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"agent-context"</span><span class="p">:</span>
-</span><span id="L-838"><a href="#L-838"><span class="linenos">838</span></a>        <span class="k">return</span> <span class="n">_cmd_agent_context</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">user_dir</span><span class="p">,</span> <span class="n">project_dir</span><span class="p">)</span>
-</span><span id="L-839"><a href="#L-839"><span class="linenos">839</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"agent-setup"</span><span class="p">:</span>
-</span><span id="L-840"><a href="#L-840"><span class="linenos">840</span></a>        <span class="k">return</span> <span class="n">_cmd_agent_setup</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">user_dir</span><span class="p">,</span> <span class="n">project_dir</span><span class="p">)</span>
-</span><span id="L-841"><a href="#L-841"><span class="linenos">841</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"init"</span><span class="p">:</span>
-</span><span id="L-842"><a href="#L-842"><span class="linenos">842</span></a>        <span class="k">return</span> <span class="n">_cmd_init</span><span class="p">(</span><span class="n">args</span><span class="p">)</span>
-</span><span id="L-843"><a href="#L-843"><span class="linenos">843</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"demo"</span><span class="p">:</span>
-</span><span id="L-844"><a href="#L-844"><span class="linenos">844</span></a>        <span class="k">return</span> <span class="n">_cmd_demo</span><span class="p">(</span><span class="n">args</span><span class="p">)</span>
-</span><span id="L-845"><a href="#L-845"><span class="linenos">845</span></a>    <span class="k">return</span> <span class="n">_cmd_agent_doctor</span><span class="p">(</span><span class="n">user_dir</span><span class="p">,</span> <span class="n">project_dir</span><span class="p">)</span>
-</span><span id="L-846"><a href="#L-846"><span class="linenos">846</span></a>
-</span><span id="L-847"><a href="#L-847"><span class="linenos">847</span></a>
-</span><span id="L-848"><a href="#L-848"><span class="linenos">848</span></a><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">"__main__"</span><span class="p">:</span>  <span class="c1"># pragma: no cover</span>
-</span><span id="L-849"><a href="#L-849"><span class="linenos">849</span></a>    <span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span><span class="n">main</span><span class="p">())</span>
+</span><span id="L-831"><a href="#L-831"><span class="linenos">831</span></a><span class="sd">        22-carry-testing</span>
+</span><span id="L-832"><a href="#L-832"><span class="linenos">832</span></a><span class="sd">        23-factor-attribution</span>
+</span><span id="L-833"><a href="#L-833"><span class="linenos">833</span></a><span class="sd">        0</span>
+</span><span id="L-834"><a href="#L-834"><span class="linenos">834</span></a><span class="sd">    """</span>
+</span><span id="L-835"><a href="#L-835"><span class="linenos">835</span></a>    <span class="n">parser</span> <span class="o">=</span> <span class="n">_build_parser</span><span class="p">()</span>
+</span><span id="L-836"><a href="#L-836"><span class="linenos">836</span></a>    <span class="n">args</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_args</span><span class="p">(</span><span class="n">argv</span><span class="p">)</span>
+</span><span id="L-837"><a href="#L-837"><span class="linenos">837</span></a>    <span class="n">_force_utf8_stdout</span><span class="p">()</span>
+</span><span id="L-838"><a href="#L-838"><span class="linenos">838</span></a>    <span class="n">command</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">command</span><span class="p">)</span>
+</span><span id="L-839"><a href="#L-839"><span class="linenos">839</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"agent-context"</span><span class="p">:</span>
+</span><span id="L-840"><a href="#L-840"><span class="linenos">840</span></a>        <span class="k">return</span> <span class="n">_cmd_agent_context</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">user_dir</span><span class="p">,</span> <span class="n">project_dir</span><span class="p">)</span>
+</span><span id="L-841"><a href="#L-841"><span class="linenos">841</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"agent-setup"</span><span class="p">:</span>
+</span><span id="L-842"><a href="#L-842"><span class="linenos">842</span></a>        <span class="k">return</span> <span class="n">_cmd_agent_setup</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">user_dir</span><span class="p">,</span> <span class="n">project_dir</span><span class="p">)</span>
+</span><span id="L-843"><a href="#L-843"><span class="linenos">843</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"init"</span><span class="p">:</span>
+</span><span id="L-844"><a href="#L-844"><span class="linenos">844</span></a>        <span class="k">return</span> <span class="n">_cmd_init</span><span class="p">(</span><span class="n">args</span><span class="p">)</span>
+</span><span id="L-845"><a href="#L-845"><span class="linenos">845</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"demo"</span><span class="p">:</span>
+</span><span id="L-846"><a href="#L-846"><span class="linenos">846</span></a>        <span class="k">return</span> <span class="n">_cmd_demo</span><span class="p">(</span><span class="n">args</span><span class="p">)</span>
+</span><span id="L-847"><a href="#L-847"><span class="linenos">847</span></a>    <span class="k">return</span> <span class="n">_cmd_agent_doctor</span><span class="p">(</span><span class="n">user_dir</span><span class="p">,</span> <span class="n">project_dir</span><span class="p">)</span>
+</span><span id="L-848"><a href="#L-848"><span class="linenos">848</span></a>
+</span><span id="L-849"><a href="#L-849"><span class="linenos">849</span></a>
+</span><span id="L-850"><a href="#L-850"><span class="linenos">850</span></a><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">"__main__"</span><span class="p">:</span>  <span class="c1"># pragma: no cover</span>
+</span><span id="L-851"><a href="#L-851"><span class="linenos">851</span></a>    <span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span><span class="n">main</span><span class="p">())</span>
 </span></pre></div>
 
 
@@ -986,21 +988,23 @@ through argparse (exit code 2); command failures return non-zero from
 </span><span id="main-829"><a href="#main-829"><span class="linenos">829</span></a><span class="sd">        19-instrument-routing</span>
 </span><span id="main-830"><a href="#main-830"><span class="linenos">830</span></a><span class="sd">        20-paper-parity</span>
 </span><span id="main-831"><a href="#main-831"><span class="linenos">831</span></a><span class="sd">        21-units-and-identities</span>
-</span><span id="main-832"><a href="#main-832"><span class="linenos">832</span></a><span class="sd">        0</span>
-</span><span id="main-833"><a href="#main-833"><span class="linenos">833</span></a><span class="sd">    """</span>
-</span><span id="main-834"><a href="#main-834"><span class="linenos">834</span></a>    <span class="n">parser</span> <span class="o">=</span> <span class="n">_build_parser</span><span class="p">()</span>
-</span><span id="main-835"><a href="#main-835"><span class="linenos">835</span></a>    <span class="n">args</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_args</span><span class="p">(</span><span class="n">argv</span><span class="p">)</span>
-</span><span id="main-836"><a href="#main-836"><span class="linenos">836</span></a>    <span class="n">_force_utf8_stdout</span><span class="p">()</span>
-</span><span id="main-837"><a href="#main-837"><span class="linenos">837</span></a>    <span class="n">command</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">command</span><span class="p">)</span>
-</span><span id="main-838"><a href="#main-838"><span class="linenos">838</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"agent-context"</span><span class="p">:</span>
-</span><span id="main-839"><a href="#main-839"><span class="linenos">839</span></a>        <span class="k">return</span> <span class="n">_cmd_agent_context</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">user_dir</span><span class="p">,</span> <span class="n">project_dir</span><span class="p">)</span>
-</span><span id="main-840"><a href="#main-840"><span class="linenos">840</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"agent-setup"</span><span class="p">:</span>
-</span><span id="main-841"><a href="#main-841"><span class="linenos">841</span></a>        <span class="k">return</span> <span class="n">_cmd_agent_setup</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">user_dir</span><span class="p">,</span> <span class="n">project_dir</span><span class="p">)</span>
-</span><span id="main-842"><a href="#main-842"><span class="linenos">842</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"init"</span><span class="p">:</span>
-</span><span id="main-843"><a href="#main-843"><span class="linenos">843</span></a>        <span class="k">return</span> <span class="n">_cmd_init</span><span class="p">(</span><span class="n">args</span><span class="p">)</span>
-</span><span id="main-844"><a href="#main-844"><span class="linenos">844</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"demo"</span><span class="p">:</span>
-</span><span id="main-845"><a href="#main-845"><span class="linenos">845</span></a>        <span class="k">return</span> <span class="n">_cmd_demo</span><span class="p">(</span><span class="n">args</span><span class="p">)</span>
-</span><span id="main-846"><a href="#main-846"><span class="linenos">846</span></a>    <span class="k">return</span> <span class="n">_cmd_agent_doctor</span><span class="p">(</span><span class="n">user_dir</span><span class="p">,</span> <span class="n">project_dir</span><span class="p">)</span>
+</span><span id="main-832"><a href="#main-832"><span class="linenos">832</span></a><span class="sd">        22-carry-testing</span>
+</span><span id="main-833"><a href="#main-833"><span class="linenos">833</span></a><span class="sd">        23-factor-attribution</span>
+</span><span id="main-834"><a href="#main-834"><span class="linenos">834</span></a><span class="sd">        0</span>
+</span><span id="main-835"><a href="#main-835"><span class="linenos">835</span></a><span class="sd">    """</span>
+</span><span id="main-836"><a href="#main-836"><span class="linenos">836</span></a>    <span class="n">parser</span> <span class="o">=</span> <span class="n">_build_parser</span><span class="p">()</span>
+</span><span id="main-837"><a href="#main-837"><span class="linenos">837</span></a>    <span class="n">args</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_args</span><span class="p">(</span><span class="n">argv</span><span class="p">)</span>
+</span><span id="main-838"><a href="#main-838"><span class="linenos">838</span></a>    <span class="n">_force_utf8_stdout</span><span class="p">()</span>
+</span><span id="main-839"><a href="#main-839"><span class="linenos">839</span></a>    <span class="n">command</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">command</span><span class="p">)</span>
+</span><span id="main-840"><a href="#main-840"><span class="linenos">840</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"agent-context"</span><span class="p">:</span>
+</span><span id="main-841"><a href="#main-841"><span class="linenos">841</span></a>        <span class="k">return</span> <span class="n">_cmd_agent_context</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">user_dir</span><span class="p">,</span> <span class="n">project_dir</span><span class="p">)</span>
+</span><span id="main-842"><a href="#main-842"><span class="linenos">842</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"agent-setup"</span><span class="p">:</span>
+</span><span id="main-843"><a href="#main-843"><span class="linenos">843</span></a>        <span class="k">return</span> <span class="n">_cmd_agent_setup</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">user_dir</span><span class="p">,</span> <span class="n">project_dir</span><span class="p">)</span>
+</span><span id="main-844"><a href="#main-844"><span class="linenos">844</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"init"</span><span class="p">:</span>
+</span><span id="main-845"><a href="#main-845"><span class="linenos">845</span></a>        <span class="k">return</span> <span class="n">_cmd_init</span><span class="p">(</span><span class="n">args</span><span class="p">)</span>
+</span><span id="main-846"><a href="#main-846"><span class="linenos">846</span></a>    <span class="k">if</span> <span class="n">command</span> <span class="o">==</span> <span class="s2">"demo"</span><span class="p">:</span>
+</span><span id="main-847"><a href="#main-847"><span class="linenos">847</span></a>        <span class="k">return</span> <span class="n">_cmd_demo</span><span class="p">(</span><span class="n">args</span><span class="p">)</span>
+</span><span id="main-848"><a href="#main-848"><span class="linenos">848</span></a>    <span class="k">return</span> <span class="n">_cmd_agent_doctor</span><span class="p">(</span><span class="n">user_dir</span><span class="p">,</span> <span class="n">project_dir</span><span class="p">)</span>
 </span></pre></div>
 
 
@@ -1036,6 +1040,8 @@ crash on non-ASCII skill text).</p>
 19-instrument-routing
 20-paper-parity
 21-units-and-identities
+22-carry-testing
+23-factor-attribution
 0
 </code></pre>
 </div>
