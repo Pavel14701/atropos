@@ -112,9 +112,11 @@ jobs:
           uv run --with pdoc==16.0.0 python -m pdoc \
             atropos atropos._utils atropos.adapters atropos.agent \
             atropos.backtesting atropos.bootstrap_ci atropos.book \
-            atropos.cli atropos.cost_model atropos.cross_sectional \
-            atropos.data_contract atropos.ensemble_pipeline \
-            atropos.evaluation_metrics atropos.feature_generators \n            atropos.feature_scan \
+            atropos.carry_instruments atropos.cli atropos.cost_model \
+            atropos.cross_sectional atropos.data_contract \
+            atropos.ensemble_pipeline \
+            atropos.evaluation_metrics atropos.factor_attribution \
+            atropos.feature_generators atropos.feature_scan \
             atropos.incremental_regression atropos.instrument_map \
             atropos.kill_chain \
             atropos.legs atropos.ml_ensemble atropos.ml_training \
